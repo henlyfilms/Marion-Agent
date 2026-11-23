@@ -4,6 +4,8 @@ import { Hono } from 'hono';
 import { csrf } from 'hono/csrf';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { desktopAccessHeader, hasDesktopAccess } from './lib/desktop-access.js';
 import type { Server } from 'node:http';
 import { appEnv, env } from './env.js';
 import { api } from './routes.js';
@@ -24,16 +26,20 @@ initSubagents();
 initRooms();
 
 const app = new Hono();
+app.use('*', async (c, next) => {
+  if (!hasDesktopAccess(c.req.header(desktopAccessHeader))) return c.text('Forbidden', 403);
+  await next();
+});
 // Cookie auth: reject cross-origin form/text POSTs (JSON requests already need a CORS preflight, which we never allow).
 app.use('/api/*', csrf({ origin: env.trustedOrigins }));
-app.get('/api/health', (c) => c.json({ ok: true, model: env.localModelName, provider: 'local' }));
+app.get('/api/health', (c) => c.json({ ok: true, model: env.localModelName, provider: 'local', desktopInstance: process.env.MARION_DESKTOP_INSTANCE }));
 app.route('/api/checkins', checkinsApi);
 app.route('/api/rooms', roomsApi);
 app.route('/api', api);
 app.route('/api', configApi);
 
 // Serve the built web app in production.
-const webDist = path.resolve(new URL('.', import.meta.url).pathname, '../../web/dist');
+const webDist = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 if (fs.existsSync(webDist)) {
   app.use('/*', serveStatic({ root: path.relative(process.cwd(), webDist) }));
   app.get('*', (c) => c.html(fs.readFileSync(path.join(webDist, 'index.html'), 'utf8')));

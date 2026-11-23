@@ -1,0 +1,7 @@
+{
+  "name": "marion-agent-desktop",
+  "productName": "Marion Agent",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs"
+}

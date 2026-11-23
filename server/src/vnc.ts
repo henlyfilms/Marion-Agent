@@ -2,6 +2,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { db } from './db.js';
 import { env } from './env.js';
+import { desktopAccessHeader, hasDesktopAccess } from './lib/desktop-access.js';
 import { userFromCookieHeader } from './lib/auth.js';
 import { desktop } from './desktop.js';
 import { screenFor } from './computer.js';
@@ -122,6 +123,11 @@ export function attachVncRelay(server: Server) {
     const url = new URL(req.url ?? '/', 'http://x');
     const m = url.pathname.match(/^\/api\/bots\/([^/]+)\/screen$/);
     if (!m) return; // not ours
+    if (!hasDesktopAccess(req.headers[desktopAccessHeader])) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     // Browsers always send Origin on WebSocket upgrades; refuse other sites riding the session cookie.
     const origin = req.headers.origin;
     if (origin && !env.trustedOrigins.includes(origin) && !sameHost(origin, req.headers.host)) {

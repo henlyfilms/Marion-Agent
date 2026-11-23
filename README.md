@@ -2,6 +2,22 @@
 
 Marion Agent gives each bot a private, persistent Linux desktop. From the web app you can watch or take control of a desktop, organize bots, and download files from their Libraries.
 
+## Install on Mac
+
+Download the packaged **Marion Agent for Mac** ZIP for your chip, unzip it, and drag **Marion Agent.app** into **Applications**. Launch it from Finder and choose **Options → Keep in Dock** from the Dock icon. Press **⌘R** to reload. The app includes its own window, server, and Node runtime.
+
+Choose Apple silicon for an Apple M-series chip, or Intel if **About This Mac** lists an Intel processor. The app is ad-hoc signed. If macOS blocks the first launch, check **System Settings → Privacy & Security → Open Anyway**. These builds were packaged in Linux and still need a first launch on a Mac.
+
+Use the **Marion Agent → Open App Data Folder** menu to find the app’s `.env`, SQLite database, and local settings. An existing source checkout has a separate data directory. To reuse its database, quit both instances, back up the old database, and set `DB_PATH` in the app’s `.env` to the absolute path you want to use.
+
+Run Ollama or another compatible model server on the Mac for agent chat. Local voice needs the speech server described below. Bot desktops need Docker and the workspace image. After installing Docker, build that image once with:
+
+```sh
+docker build -t marion-agent-desktop:local "/Applications/Marion Agent.app/Contents/Resources/marion/desktop"
+```
+
+To build the Mac packages from source yourself, install the repo’s npm dependencies, then run `python3 scripts/package-macos.py --arch arm64 --output /tmp/marion-release --cache /tmp/marion-downloads`. Use `--arch x64` for Intel. This uses the platform signer or an explicitly supplied cross-platform signer.
+
 ## Run on Windows
 
 Install [Node.js 24 LTS](https://nodejs.org/) and [Docker Desktop with the WSL 2 backend](https://docs.docker.com/desktop/setup/install/windows-install/). Open Docker Desktop and enable Linux containers. Docker Desktop has [eligibility rules for free use](https://docs.docker.com/subscription/desktop-license/).
@@ -24,7 +40,7 @@ Each desktop uses a separate Docker container, network, and workspace volume. Br
 
 ## Install the app or use the launcher
 
-After completing the build above, macOS users can double-click **Marion Agent.app** and keep it in the Dock. Keep the launcher in the extracted folder alongside `scripts`, `server`, and `web`. This serves a local app and opens your default browser. On Windows, double-click **Launch Marion Agent.cmd**. Leave its window running while you use Marion Agent.
+After completing the source build on Windows, double-click **Launch Marion Agent.cmd**. Leave its window running while you use Marion Agent.
 
 For a standalone app window, start the server and install Marion Agent from the browser's app menu in Chrome or Edge, or select **File → Add to Dock** in Safari on macOS Sonoma or later. The installed window needs the local server to be running. Press **Ctrl+R** or **⌘R** to reload it. After updating source files, run `npm run build` first. Restart the server for backend changes.
 
