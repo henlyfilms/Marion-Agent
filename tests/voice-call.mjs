@@ -3,13 +3,13 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
-const S = process.argv[2]; const BOT = process.argv[3]; const BASE = 'http://localhost:8787';
+const S = process.argv[2]; const BOT = process.argv[3]; const BASE = 'http://127.0.0.1:8787';
 const t0 = Date.now(); const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s]`, ...a);
-const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: [
+const browser = await chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE || undefined, headless: true, args: [
   '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${S}/ask-fixed.wav`, '--autoplay-policy=no-user-gesture-required'] });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['microphone'] });
 await ctx.addInitScript((bot) => {
-  localStorage.setItem('teammates.selectedBot', bot); localStorage.setItem('teammates.detailsOpen', '1');
+  localStorage.setItem('marion-agent.selectedBot', bot); localStorage.setItem('marion-agent.detailsOpen', '1');
   window.__audio = { starts: 0, seconds: 0 };
   const orig = AudioBufferSourceNode.prototype.start;
   AudioBufferSourceNode.prototype.start = function (...a) { window.__audio.starts++; window.__audio.seconds += this.buffer?.duration ?? 0; return orig.apply(this, a); };

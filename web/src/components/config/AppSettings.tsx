@@ -101,7 +101,6 @@ function GeneralSection() {
 
 // ---------------------------------------------------------------------------
 
-const screenLabel = (id: string) => (id === 'default' ? 'Main screen' : `Screen ${Number(id.replace('screen-', '')) - 98 || id}`);
 
 function ComputerSection() {
   const computer = useStore((s) => s.computer);
@@ -125,15 +124,15 @@ function ComputerSection() {
 
   return (
     <>
-      <PageHead title="Computer" sub="Your Bots share one cloud computer. Each Bot works on its own screen." />
+      <PageHead title="Computers" sub="Each Bot has its own Linux desktop and workspace." />
       <section className="cfg-section">
         <div className="cfg-card">
           <div className="cfg-row">
             <span className={`computer-status-dot is-${running ? 'on' : transitioning ? 'busy' : 'off'}`} aria-hidden />
             <div className="cfg-row__text">
-              <div className="cfg-row__title">Bots’ computer · {computerStatusText(computer ?? null)}</div>
+              <div className="cfg-row__title">Bot desktops · {computerStatusText(computer ?? null)}</div>
               <div className="cfg-row__sub">
-                {details ? `Goes to sleep after ${details.hibernation.idleMinutes} idle minutes when nobody is watching. Starts again on its own once a Bot has work.` : 'Checking…'}
+                {details ? `Desktops stop after ${details.hibernation.idleMinutes} idle minutes when nobody is watching. A Bot’s desktop starts again when it has work.` : 'Checking…'}
               </div>
             </div>
             {running || status === 'suspending' ? (
@@ -148,10 +147,10 @@ function ComputerSection() {
       </section>
 
       <section className="cfg-section">
-        <div className="cfg-section__label">Screens in use</div>
+        <div className="cfg-section__label">Desktop workspaces</div>
         <div className="cfg-card">
           {!details ? <div className="cfg-empty cfg-empty--flat">Loading…</div> : details.screens.length === 0 ? (
-            <div className="cfg-empty cfg-empty--flat">No Bot has used the computer yet.</div>
+            <div className="cfg-empty cfg-empty--flat">No Bot has opened a desktop yet.</div>
           ) : details.screens.map((s) => {
             const bot = byId.get(s.botId);
             return (
@@ -159,22 +158,22 @@ function ComputerSection() {
                 {bot ? <BotAvatarFor bot={bot} size={28} /> : <span className="cfg-row__ph" />}
                 <div className="cfg-row__text">
                   <div className="cfg-row__title">{bot?.name ?? 'Removed Bot'}</div>
-                  <div className="cfg-row__sub">{screenLabel(s.screenId)} · used {relativeShort(s.lastUsedAt) === 'now' ? 'just now' : `${relativeShort(s.lastUsedAt)}${/^\d/.test(relativeShort(s.lastUsedAt)) ? ' ago' : ''}`}</div>
+                  <div className="cfg-row__sub">Last used {relativeShort(s.lastUsedAt) === 'now' ? 'just now' : `${relativeShort(s.lastUsedAt)}${/^\d/.test(relativeShort(s.lastUsedAt)) ? ' ago' : ''}`}</div>
                 </div>
                 <ConfirmButton
                   className="cfg-btn cfg-btn--secondary"
-                  confirmLabel="Reset screen"
+                  confirmLabel="Stop desktop"
                   disabled={!running}
-                  title={running ? 'Closes everything open on this screen' : 'Wake the computer first'}
+                  title={running ? 'Closes open apps and keeps workspace files' : 'Wake a desktop first'}
                   onConfirm={async () => { try { await configApi.resetScreen(s.botId); setNote(null); load(); } catch (e) { setNote((e as Error).message); } }}
                 >
-                  Reset
+                  Stop
                 </ConfirmButton>
               </div>
             );
           })}
         </div>
-        <div className="cfg-field__hint">Reset closes every window on that Bot’s screen, so it starts clean next time. Up to 4 Bots can have a screen at once.</div>
+        <div className="cfg-field__hint">Stopping a desktop closes its apps and keeps the bot’s browser profile and Library files.</div>
       </section>
     </>
   );

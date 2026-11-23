@@ -30,7 +30,6 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 );
 CREATE TABLE IF NOT EXISTS computers (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  orgo_id TEXT,
   status TEXT NOT NULL DEFAULT 'absent',
   error TEXT,
   updated_at INTEGER NOT NULL
@@ -143,6 +142,7 @@ function addColumn(table: string, col: string, ddl: string) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
 }
+addColumn('screens', 'running', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'voice', "TEXT NOT NULL DEFAULT 'luna'");
 addColumn('bots', 'voice_speed', 'REAL NOT NULL DEFAULT 1');
 addColumn('bots', 'voice_language', "TEXT NOT NULL DEFAULT 'auto'");

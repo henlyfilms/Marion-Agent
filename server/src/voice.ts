@@ -233,6 +233,11 @@ const fmtDuration = (ms: number) => {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 };
 
+voiceApi.use('*', async (c, next) => {
+  if (!env.xaiKey) return c.json({ error: 'Configure XAI_API_KEY for voice features' }, 503);
+  await next();
+});
+
 voiceApi.get('/options', async (c) => c.json({ voices: await listVoices(), languages: LANGUAGES, speeds: SPEEDS }));
 
 voiceApi.post('/session', async (c) => {
@@ -355,12 +360,12 @@ voiceApi.post('/tool', async (c) => {
   }
 });
 
-const xai = new OpenAI({ apiKey: env.xaiKey, baseURL: XAI, timeout: 45_000 });
+const xai = env.xaiKey ? new OpenAI({ apiKey: env.xaiKey, baseURL: XAI, timeout: 45_000 }) : null;
 
 async function summarizeCall(botName: string, transcript: { role: string; text: string }[], tasks: string[]): Promise<string | null> {
   if (!transcript.length && !tasks.length) return null;
   const lines = transcript.map((t) => `${t.role === 'user' ? 'User' : botName}: ${t.text}`).join('\n').slice(-12_000);
-  const res: any = await xai.responses.create({
+  const res: any = await xai!.responses.create({
     model: env.xaiModel,
     reasoning: { effort: 'low' },
     store: false,

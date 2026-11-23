@@ -62,7 +62,7 @@ applyTheme(readTheme());
 darkQuery?.addEventListener?.('change', () => { if (useConfigUI.getState().theme === 'system') applyTheme('system'); });
 
 // store.ts forwards events it doesn't handle itself as a DOM event.
-window.addEventListener('teammates:event', (e) => {
+window.addEventListener('marion-agent:event', (e) => {
   const ev = (e as CustomEvent<ServerEvent>).detail;
   const { bump } = useConfigUI.getState();
   if (ev.type === 'tasks') { bump('tasks'); bump(`tasks:${ev.botId}`); }

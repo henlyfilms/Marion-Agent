@@ -2,11 +2,10 @@ import { Hono } from 'hono';
 import { db, now } from './db.js';
 import './db-config.js';
 import { newId } from './lib/ids.js';
-import { hub } from './lib/hub.js';
 import { requireUser, type AuthVars } from './lib/auth.js';
 import { getBotRow, listRoutines, listTasks } from './store.js';
-import { BOX_ROOT, chromeProfilePattern, computerState, ensureComputer, linkLegacyBoxRoot } from './computer.js';
-import { orgo } from './orgo.js';
+import { BOX_ROOT, computerState, screenFor, stopDesktop } from './computer.js';
+import { desktop } from './desktop.js';
 import { runInBotQueue } from './agent/loop.js';
 import { consolidateBot, historySize, maybeCompact, memoryConfig } from './agent/memory.js';
 import { idleConfig, viewerCount } from './idle.js';
@@ -131,7 +130,8 @@ configApi.post('/bots/:id/compact', async (c) => {
 
 const LIB_ROOT = `${BOX_ROOT}/files`;
 
-function safeRel(p: string | undefined): string | null {
+function safeRel(p: unknown): string | null {
+  if (p !== undefined && typeof p !== 'string') return null;
   const rel = (p ?? '').replace(/^\/+|\/+$/g, '');
   if (!rel) return '';
   if (rel.split('/').some((s) => !s || s === '.' || s === '..') || /[\0\n\r]/.test(rel)) return null;
@@ -154,18 +154,6 @@ export function parseLs(out: string): LibraryFile[] {
   return files.sort((a, b) => Number(b.isDir) - Number(a.isDir) || b.modifiedAt - a.modifiedAt);
 }
 
-/** The bot's computer id if it is awake (or `wake` is set), plus the bot's leased screen if it has one. */
-async function boxFor(userId: string, botId: string, wake: boolean): Promise<{ computerId: string; screenId?: string } | null> {
-  const comp = db.prepare('SELECT orgo_id, status FROM computers WHERE user_id=?').get(userId) as any;
-  let computerId: string | null = comp?.status === 'running' ? comp.orgo_id : null;
-  if (!computerId && wake) computerId = await ensureComputer(userId);
-  if (!computerId) return null;
-  await linkLegacyBoxRoot(computerId);
-  // Use the bot's own screen when it has one; never lease (and evict) a screen just to list files.
-  const scr = db.prepare('SELECT screen_id FROM screens WHERE bot_id=?').get(botId) as any;
-  return { computerId, screenId: scr?.screen_id };
-}
-
 configApi.get('/bots/:id/files', async (c) => {
   const user = c.get('user');
   const b = ownBot(user.id, c.req.param('id'));
@@ -173,10 +161,12 @@ configApi.get('/bots/:id/files', async (c) => {
   const rel = safeRel(c.req.query('path'));
   if (rel === null) return c.json({ error: 'bad path' }, 400);
   try {
-    const box = await boxFor(user.id, b.id, c.req.query('wake') === '1');
-    if (!box) return c.json({ status: 'asleep', path: rel, files: [] });
+    if (c.req.query('wake') === '1') await screenFor(user.id, b.id);
+    else if (!db.prepare('SELECT 1 FROM screens WHERE bot_id=? AND screen_id=bot_id').get(b.id) || !await desktop.running(b.id)) {
+      return c.json({ status: 'asleep', path: rel, files: [] });
+    }
     const dir = `${LIB_ROOT}/${b.id}${rel ? `/${rel}` : ''}`;
-    const r = await orgo.bash(box.computerId, box.screenId, `mkdir -p ${shq(`${LIB_ROOT}/${b.id}`)} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
+    const r = await desktop.bash(b.id, `mkdir -p ${shq(`${LIB_ROOT}/${b.id}`)} && ls -la --time-style=+%s ${shq(dir)} 2>&1`, 30);
     if (r.exit_code !== 0) return c.json({ status: 'error', path: rel, files: [], error: (r.output ?? '').slice(0, 300) });
     return c.json({ status: 'ok', path: rel, files: parseLs(r.output ?? '') });
   } catch (e: any) {
@@ -192,12 +182,13 @@ configApi.post('/bots/:id/files/download', async (c) => {
   const rel = safeRel(path);
   if (!rel) return c.json({ error: 'bad path' }, 400);
   try {
-    const box = await boxFor(user.id, b.id, true);
-    if (!box) return c.json({ error: 'computer unavailable' }, 409);
-    const r: any = await orgo.exportFile(box.computerId, `${LIB_ROOT}/${b.id}/${rel}`);
-    const url = r?.url ?? r?.file?.url ?? r?.download_url;
-    if (!url) return c.json({ error: 'export returned no link' }, 502);
-    return c.json({ url });
+    await screenFor(user.id, b.id);
+    const bytes = await desktop.download(b.id, `${LIB_ROOT}/${b.id}/${rel}`);
+    return c.body(new Uint8Array(bytes), 200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': 'attachment',
+      'Cache-Control': 'no-store',
+    });
   } catch (e: any) {
     return c.json({ error: String(e?.message ?? e).slice(0, 300) }, 502);
   }
@@ -207,7 +198,7 @@ configApi.post('/bots/:id/files/download', async (c) => {
 
 configApi.get('/computer/details', (c) => {
   const userId = c.get('user').id;
-  const leases = db.prepare('SELECT bot_id, screen_id, last_used_at FROM screens WHERE user_id=? ORDER BY last_used_at DESC').all(userId) as any[];
+  const leases = db.prepare('SELECT bot_id, screen_id, last_used_at FROM screens WHERE user_id=? AND screen_id=bot_id ORDER BY last_used_at DESC').all(userId) as any[];
   return c.json({
     computer: computerState(userId),
     screens: leases.map((l) => ({ botId: l.bot_id, screenId: l.screen_id, lastUsedAt: l.last_used_at })),
@@ -215,26 +206,13 @@ configApi.get('/computer/details', (c) => {
   });
 });
 
-/** Give a bot a clean screen: close its windows (default screen) or destroy its extra screen so a fresh one is made next time. */
 configApi.post('/bots/:id/screen/reset', async (c) => {
   const user = c.get('user');
   const b = ownBot(user.id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  const lease = db.prepare('SELECT screen_id FROM screens WHERE bot_id=?').get(b.id) as any;
-  if (!lease) return c.json({ ok: true, note: 'no screen yet' });
-  const comp = db.prepare("SELECT orgo_id FROM computers WHERE user_id=? AND status='running'").get(user.id) as any;
-  if (!comp?.orgo_id) return c.json({ error: 'Wake the computer first' }, 409);
-  const profile = `${BOX_ROOT}/profiles/${b.id}`;
   try {
-    await linkLegacyBoxRoot(comp.orgo_id);
-    await orgo.bash(comp.orgo_id, undefined, `pkill -f ${shq(chromeProfilePattern(b.id))}; rm -f ${shq(profile)}/Singleton*; echo ok`, 30).catch(() => null);
-    if (lease.screen_id !== 'default') {
-      await orgo.deleteScreen(comp.orgo_id, lease.screen_id).catch((e) => console.warn('[computer] delete screen', e?.message));
-      db.prepare('DELETE FROM screens WHERE bot_id=?').run(b.id);
-    }
-    console.log(`[computer] reset screen ${lease.screen_id} for bot ${b.id}`);
-    hub.emit(user.id, { type: 'computer', state: computerState(user.id) });
-    return c.json({ ok: true, screenId: lease.screen_id });
+    await stopDesktop(user.id, b.id);
+    return c.json({ ok: true });
   } catch (e: any) {
     return c.json({ error: String(e?.message ?? e).slice(0, 300) }, 502);
   }

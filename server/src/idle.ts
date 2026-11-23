@@ -5,8 +5,8 @@ import { isBotBusy } from './agent/loop.js';
 import { appEnv } from './env.js';
 
 /**
- * Computer hibernation: suspend a user's Orgo box when no bot turn is running and no
- * viewer WebSocket is connected for TEAMMATES_IDLE_SUSPEND_MIN minutes (default 20).
+ * Computer hibernation: suspend a user's desktops when no bot turn is running and no
+ * viewer WebSocket is connected for MARION_IDLE_SUSPEND_MIN minutes (default 20).
  * The next computer tool call wakes it again through ensureComputer().
  */
 
@@ -111,7 +111,7 @@ export function startIdleWatcher() {
   const watcher = createIdleWatcher(
     {
       now: dbNow,
-      computers: () => (db.prepare("SELECT user_id, status FROM computers WHERE orgo_id IS NOT NULL").all() as any[]).map((r) => ({ userId: r.user_id, status: r.status })),
+      computers: () => (db.prepare("SELECT user_id, status FROM computers").all() as any[]).map((r) => ({ userId: r.user_id, status: r.status })),
       anyTurnRunning: (userId) => (db.prepare('SELECT id FROM bots WHERE user_id=?').all(userId) as any[]).some((b) => isBotBusy(b.id) || getLive(b.id).isRunning),
       viewers: viewerCount,
       lastActivity: (userId) => {
@@ -119,7 +119,7 @@ export function startIdleWatcher() {
         const c = db.prepare('SELECT updated_at t FROM computers WHERE user_id=?').get(userId) as any;
         return Math.max(b?.t ?? 0, c?.t ?? 0);
       },
-      suspend: (userId) => suspendComputer(userId, 'idle'),
+      suspend: (userId) => suspendComputer(userId),
       log: (m) => console.log(m),
     },
     { idleMs: idleConfig.idleMin * 60_000, dryRun: idleConfig.dryRun },

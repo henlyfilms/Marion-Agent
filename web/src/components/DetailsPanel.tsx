@@ -57,7 +57,7 @@ function ComputerCard({ bot }: { bot: Bot }) {
   const computer = useStore((s) => s.computer);
   const set = useStore((s) => s.set);
   const [shot, setShot] = useState<string | null>(null);
-  const running = computer?.status === 'running';
+  const running = computer?.screens.some(screen => screen.botId === bot.id && screen.running) ?? false;
 
   // Refresh the thumbnail every ~4s while visible and awake. 204 = no screen yet.
   useEffect(() => {
@@ -107,7 +107,7 @@ function ComputerCard({ bot }: { bot: Bot }) {
         </span>
       </div>
       {!running && !busy && (
-        <button type="button" className="panel-row panel-row--action" onClick={() => api.ensureComputer().catch(() => {})}>
+        <button type="button" className="panel-row panel-row--action" onClick={() => api.ensureComputer(bot.id).catch(() => {})}>
           <Icon name="monitor" size={14} opacity={0.56} /> Wake computer
         </button>
       )}

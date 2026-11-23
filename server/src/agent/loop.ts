@@ -11,7 +11,7 @@ import { repairHistory } from './history.js';
 import { maybeCompact, noteUsage } from './memory.js';
 import { activityFor, functionSchemas, humanizeSlug, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
 
-const xai = new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 360_000 });
+const xai = env.xaiKey ? new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 360_000 }) : null;
 
 export type Trigger =
   | { type: 'user'; text: string }
@@ -100,7 +100,7 @@ function triggerItem(t: Trigger): any | null {
 
 async function runTurn(botId: string, trigger: Trigger) {
   const bot = getBotRow(botId);
-  if (!bot) return;
+  if (!bot || !xai) return;
   const userId: string = bot.user_id;
   const ctrl = new AbortController();
   aborts.set(botId, ctrl);
@@ -266,20 +266,20 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
     reasoning: { effort: bot.effort ?? 'medium' },
     store: false,
     include: ['reasoning.encrypted_content'],
-    prompt_cache_key: `teammates:${botId}:${bot.generation}`,
+    prompt_cache_key: `marion-agent:${botId}:${bot.generation}`,
     safety_identifier: sha256(userId).slice(0, 32),
     stream: true,
   };
 
   let stream: any;
   try {
-    stream = await xai.responses.create(body, { signal });
+    stream = await xai!.responses.create(body, { signal });
   } catch (e: any) {
     // If a Composio tool schema is rejected, retry with only our own tools.
     if (e?.status === 400 && tools.length > functionSchemas().length + 2) {
       console.warn('[agent] 400 with composio tools, retrying without:', e?.message);
       body.tools = [...functionSchemas(), { type: 'web_search' }, { type: 'x_search' }];
-      stream = await xai.responses.create(body, { signal });
+      stream = await xai!.responses.create(body, { signal });
     } else throw e;
   }
 

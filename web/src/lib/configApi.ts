@@ -55,7 +55,13 @@ export const configApi = {
   botTasks: (botId: string) => req<{ tasks: Task[] }>('GET', `/bots/${botId}/tasks`),
 
   files: (botId: string, path = '', wake = false) => req<LibraryListing>('GET', `/bots/${botId}/files?path=${encodeURIComponent(path)}${wake ? '&wake=1' : ''}`),
-  downloadFile: (botId: string, path: string) => req<{ url: string }>('POST', `/bots/${botId}/files/download`, { path }),
+  async downloadFile(botId: string, path: string) {
+    const response = await fetch(`/api/bots/${botId}/files/download`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `Download failed (${response.status})`);
+    return response.blob();
+  },
 
   computerDetails: () => req<ComputerDetails>('GET', '/computer/details'),
   wake: () => req<{ computer: ComputerState }>('POST', '/computer/ensure'),

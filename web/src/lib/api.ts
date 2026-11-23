@@ -25,7 +25,7 @@ export interface AppsResponse { apps: Toolkit[]; connected: string[]; categories
 export interface RoomMember { id: string; name: string; label: string; avatarShape: string; avatarColor: string }
 
 export const api = {
-  me: () => req<{ user: User | null; devLogin: boolean }>('GET', '/auth/me'),
+  me: () => req<{ user: User | null; devLogin: boolean; googleLogin: boolean }>('GET', '/auth/me'),
   devLogin: (email: string, name?: string) => req<{ ok: true }>('POST', '/auth/dev', { email, name }),
   logout: () => req<{ ok: true }>('POST', '/auth/logout'),
 
@@ -45,7 +45,7 @@ export const api = {
   setRoutine: (rid: string, enabled: boolean) => req<{ routine: Routine }>('PATCH', `/routines/${rid}`, { enabled }),
 
   computer: () => req<{ computer: ComputerState }>('GET', '/computer'),
-  ensureComputer: () => req<{ computer: ComputerState }>('POST', '/computer/ensure'),
+  ensureComputer: (botId: string) => req<{ computer: ComputerState }>('POST', '/computer/ensure', { botId }),
 
   apps: (search = '', category = '') => req<AppsResponse>('GET', `/apps?search=${encodeURIComponent(search)}&category=${encodeURIComponent(category)}`),
   connect: (slug: string, botId?: string, seq?: number) => req<{ redirectUrl: string }>('POST', `/apps/${slug}/connect`, { botId, seq }),
@@ -63,12 +63,12 @@ export function openPopup(url: string) {
   const w = 520, h = 680;
   const left = window.screenX + (window.outerWidth - w) / 2;
   const top = window.screenY + (window.outerHeight - h) / 2;
-  connectPopup = window.open(url, 'teammates-connect', `width=${w},height=${h},left=${left},top=${top}`);
+  connectPopup = window.open(url, 'marion-agent-connect', `width=${w},height=${h},left=${left},top=${top}`);
   return connectPopup;
 }
 
 /** True for the "app connected" message posted by our OAuth callback page (from our popup or our own origin). */
 export function isConnectedMessage(e: MessageEvent): boolean {
-  if ((e.data as { type?: string } | null)?.type !== 'teammates-connected') return false;
+  if ((e.data as { type?: string } | null)?.type !== 'marion-agent-connected') return false;
   return e.origin === window.location.origin || (connectPopup !== null && e.source === connectPopup);
 }

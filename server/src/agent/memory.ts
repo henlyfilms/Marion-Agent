@@ -13,12 +13,12 @@ import { getBotRow, getLive } from '../store.js';
  *  (c) a bounded, relevance-ranked memory section for the system prompt.
  */
 
-const xai = new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 300_000 });
+const xai = env.xaiKey ? new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 300_000 }) : null;
 
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
 
 export const memoryConfig = {
-  /** Compact when the history estimate passes this many characters (~4 chars/token). TEAMMATES_COMPACT_TOKENS overrides. */
+  /** Compact when the history estimate passes this many characters (~4 chars/token). MARION_COMPACT_TOKENS overrides. */
   compactChars: appEnv('COMPACT_TOKENS') ? num(appEnv('COMPACT_TOKENS'), 75_000) * 4 : num(appEnv('COMPACT_CHARS'), 300_000),
   /** User turns kept verbatim after a compaction. */
   keepTurns: num(appEnv('COMPACT_KEEP_TURNS'), 4),
@@ -153,15 +153,17 @@ export function renderTranscript(items: any[], maxChars = 200_000): string {
 }
 
 async function compactWithXai(old: any[]): Promise<any[]> {
-  const res: any = await xai.post('/responses/compact', { body: { model: env.xaiModel, input: old } });
+  if (!xai) throw new Error('Configure XAI_API_KEY for memory compaction');
+  const res: any = await xai!.post('/responses/compact', { body: { model: env.xaiModel, input: old } });
   const out = (res?.output ?? []) as any[];
   if (!out.length || !out.some((o) => o?.type === 'compaction' || o?.encrypted_content || o?.role)) throw new Error('compact returned no items');
   return out;
 }
 
 async function compactWithSummary(old: any[]): Promise<any[]> {
+  if (!xai) throw new Error('Configure XAI_API_KEY for memory compaction');
   const transcript = renderTranscript(old);
-  const res: any = await xai.responses.create({
+  const res: any = await xai!.responses.create({
     model: env.xaiModel,
     input: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: transcript }],
     store: false,
@@ -204,7 +206,7 @@ export async function maybeCompact(botId: string, items: any[], opts: { force?: 
   let method = 'xai-compact';
   let replaced: any[];
   try {
-    if (memoryConfig.compactMethod === 'summary') throw new Error('xAI compaction disabled by TEAMMATES_COMPACT_METHOD=summary');
+    if (memoryConfig.compactMethod === 'summary') throw new Error('xAI compaction disabled by MARION_COMPACT_METHOD=summary');
     replaced = await compactWithXai(old);
   } catch (e: any) {
     console.warn(`[memory] compact via /responses/compact failed for ${botId}: ${e?.message ?? e}; falling back to a summary`);
@@ -296,7 +298,7 @@ export async function consolidateBot(botId: string, opts: { upTo?: number } = {}
   if (transcript.length > 24_000) transcript = transcript.slice(-24_000);
 
   const existing = (db.prepare('SELECT text FROM memories WHERE bot_id=? ORDER BY created_at DESC LIMIT 200').all(botId) as any[]).map((m) => m.text as string);
-  const res: any = await xai.responses.create({
+  const res: any = await xai!.responses.create({
     model: env.xaiModel,
     input: [
       { role: 'system', content: CONSOLIDATE_PROMPT },
@@ -340,6 +342,7 @@ export function botsDueForConsolidation(idleMs: number, at = now()): { botId: st
 }
 
 export function startMemoryConsolidation() {
+  if (!xai) return;
   const idleMs = memoryConfig.consolidateIdleMin * 60_000;
   const sweep = async () => {
     for (const { botId, lastAt } of botsDueForConsolidation(idleMs)) {

@@ -3,16 +3,14 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { db } from './db.js';
 import { env } from './env.js';
 import { userFromCookieHeader } from './lib/auth.js';
-import { vncAuthResponse } from './lib/des.js';
-import { orgo } from './orgo.js';
+import { desktop } from './desktop.js';
 import { screenFor } from './computer.js';
 import { viewerClosed, viewerOpened } from './idle.js';
 
 /**
- * VNC relay: browser <-> our server <-> Orgo websockify.
- * The server performs the RFB handshake upstream with the computer's VNC password
- * (which is root-equivalent and never reaches the browser), then offers the browser
- * an unauthenticated RFB session. In "watch" mode, client input messages
+ * VNC relay: browser <-> API server <-> isolated desktop.
+ * The desktop listener is private to its container. The API checks app authentication
+ * before offering the browser an RFB session. In watch mode, client input messages
  * (KeyEvent, PointerEvent, ClientCutText) are dropped server-side.
  */
 
@@ -42,7 +40,7 @@ class ByteQueue {
 
 const u32 = (n: number) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
 
-async function upstreamHandshake(q: ByteQueue, send: (b: Buffer) => void, password: string): Promise<Buffer> {
+async function upstreamHandshake(q: ByteQueue, send: (b: Buffer) => void): Promise<Buffer> {
   await q.read(12); // server ProtocolVersion
   send(Buffer.from('RFB 003.008\n'));
   const n = (await q.read(1))[0];
@@ -50,14 +48,8 @@ async function upstreamHandshake(q: ByteQueue, send: (b: Buffer) => void, passwo
     const len = (await q.read(4)).readUInt32BE();
     throw new Error(`VNC refused: ${(await q.read(len)).toString()}`);
   }
-  const types = [...(await q.read(n))];
-  const choice = types.includes(2) ? 2 : types.includes(1) ? 1 : -1;
-  if (choice < 0) throw new Error(`Unsupported VNC security types: ${types.join(',')}`);
-  send(Buffer.from([choice]));
-  if (choice === 2) {
-    const challenge = await q.read(16);
-    send(vncAuthResponse(password, challenge));
-  }
+  if (!(await q.read(n)).includes(1)) throw new Error('Desktop does not offer the expected loopback security type');
+  send(Buffer.from([1]));
   const result = (await q.read(4)).readUInt32BE();
   if (result !== 0) {
     let reason = '';
@@ -152,36 +144,36 @@ export function attachVncRelay(server: Server) {
 async function relay(client: WebSocket, userId: string, botId: string, mode: 'watch' | 'control') {
   const fromClient = new ByteQueue();
   const fromUp = new ByteQueue();
-  let upstream: WebSocket | null = null;
+  let upstream: ReturnType<typeof desktop.vnc> | null = null;
   let piping = false;
   const filter = new WatchFilter();
   const closeAll = (code = 1000, reason = '') => {
     try { client.close(code, reason.slice(0, 120)); } catch { /* */ }
-    try { upstream?.close(); } catch { /* */ }
+    try { upstream?.kill(); } catch { /* */ }
   };
 
   client.on('message', (data: Buffer) => {
     if (!piping) return fromClient.push(Buffer.from(data));
     const fwd = mode === 'watch' ? filter.feed(Buffer.from(data)) : Buffer.from(data);
-    if (fwd.length && upstream?.readyState === WebSocket.OPEN) upstream.send(fwd);
+    if (fwd.length && upstream?.stdin.writable) upstream.stdin.write(fwd);
   });
-  client.on('close', () => { viewerClosed(userId); fromClient.close(new Error('client closed')); try { upstream?.close(); } catch { /* */ } });
+  client.on('close', () => { viewerClosed(userId); fromClient.close(new Error('client closed')); try { upstream?.kill(); } catch { /* */ } });
   viewerOpened(userId); // keeps the computer awake while someone is watching (see idle.ts)
 
   try {
-    const { computerId, screenId } = await screenFor(userId, botId);
-    const { password } = await orgo.vncPassword(computerId);
-    const upUrl = `wss://www.orgo.ai/desktops/${computerId}/ws/websockify?token=${encodeURIComponent(password)}${screenId !== 'default' ? `&screen=${encodeURIComponent(screenId)}` : ''}`;
-    upstream = new WebSocket(upUrl, ['binary']);
-    upstream.on('message', (data: Buffer) => {
+    const desktopId = await screenFor(userId, botId);
+    if (client.readyState !== WebSocket.OPEN) return;
+    upstream = desktop.vnc(desktopId);
+    upstream.stderr.resume();
+    upstream.stdin.on('error', error => fromUp.close(error));
+    upstream.stdout.on('data', (data: Buffer) => {
       if (!piping) return fromUp.push(Buffer.from(data));
       if (client.readyState === WebSocket.OPEN) client.send(data);
     });
-    upstream.on('close', (code, reason) => { fromUp.close(new Error(`upstream closed ${code}`)); closeAll(1000, `upstream ${code} ${reason}`); });
+    upstream.on('close', () => { fromUp.close(new Error('Desktop disconnected')); closeAll(); });
     upstream.on('error', (e) => { fromUp.close(e as Error); closeAll(1011, String(e)); });
-    await new Promise<void>((res, rej) => { upstream!.once('open', () => res()); upstream!.once('error', rej); });
 
-    const serverInit = await upstreamHandshake(fromUp, (b) => upstream!.send(b), password);
+    const serverInit = await upstreamHandshake(fromUp, (b) => upstream!.stdin.write(b));
     await browserHandshake(fromClient, (b) => client.send(b), serverInit);
     // Flush anything that arrived during the handshake, then switch to piping.
     piping = true;
@@ -190,7 +182,7 @@ async function relay(client: WebSocket, userId: string, botId: string, mode: 'wa
     const leftoverClient = fromClient.takeAll();
     if (leftoverClient.length) {
       const fwd = mode === 'watch' ? filter.feed(leftoverClient) : leftoverClient;
-      if (fwd.length) upstream.send(fwd);
+      if (fwd.length) upstream.stdin.write(fwd);
     }
   } catch (e: any) {
     console.warn('[vnc] relay failed', e?.message ?? e);

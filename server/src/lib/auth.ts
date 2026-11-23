@@ -5,9 +5,7 @@ import { env } from '../env.js';
 import { token } from './ids.js';
 import type { User } from '../types.js';
 
-const COOKIE = 'teammates_session';
-/** Session cookie name before the rename; still accepted so existing sign-ins survive the upgrade. */
-const LEGACY_COOKIE = 'grokbot_session';
+const COOKIE = 'marion_agent_session';
 const TTL_MS = 30 * 24 * 3600 * 1000;
 
 export type AuthVars = { Variables: { user: User } };
@@ -19,11 +17,9 @@ export function createSession(c: Context, userId: string) {
 }
 
 export function destroySession(c: Context) {
-  for (const name of [COOKIE, LEGACY_COOKIE]) {
-    const t = getCookie(c, name);
-    if (t) db.prepare('DELETE FROM auth_sessions WHERE token=?').run(t);
-    deleteCookie(c, name, { path: '/' });
-  }
+  const t = getCookie(c, COOKIE);
+  if (t) db.prepare('DELETE FROM auth_sessions WHERE token=?').run(t);
+  deleteCookie(c, COOKIE, { path: '/' });
 }
 
 export function userFromToken(t: string | undefined): User | null {
@@ -36,15 +32,13 @@ export function userFromToken(t: string | undefined): User | null {
 
 export function userFromCookieHeader(cookieHeader: string | undefined): User | null {
   const parts = cookieHeader?.split(/;\s*/) ?? [];
-  for (const name of [COOKIE, LEGACY_COOKIE]) {
-    const m = parts.find((p) => p.startsWith(`${name}=`));
-    if (m) return userFromToken(decodeURIComponent(m.slice(name.length + 1)));
-  }
-  return null;
+  const entry = parts.find((part) => part.startsWith(`${COOKIE}=`));
+  if (!entry) return null;
+  try { return userFromToken(decodeURIComponent(entry.slice(COOKIE.length + 1))); } catch { return null; }
 }
 
 export const requireUser: MiddlewareHandler<AuthVars> = async (c, next) => {
-  const u = userFromToken(getCookie(c, COOKIE) ?? getCookie(c, LEGACY_COOKIE));
+  const u = userFromToken(getCookie(c, COOKIE));
   if (!u) return c.json({ error: 'unauthenticated' }, 401);
   c.set('user', u);
   await next();

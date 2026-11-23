@@ -10,6 +10,7 @@ interface Transcript { generation: number; bySeq: Record<number, Row>; loaded: b
 interface State {
   user: User | null;
   devLogin: boolean;
+  googleLogin: boolean;
   authChecked: boolean;
 
   bots: Bot[];
@@ -48,6 +49,7 @@ const lsSet = prefSet;
 export const useStore = create<State>((set, get) => ({
   user: null,
   devLogin: false,
+  googleLogin: false,
   authChecked: false,
   bots: [],
   live: {},
@@ -64,8 +66,8 @@ export const useStore = create<State>((set, get) => ({
 
   async checkAuth() {
     try {
-      const { user, devLogin } = await api.me();
-      set({ user, devLogin, authChecked: true });
+      const { user, devLogin, googleLogin } = await api.me();
+      set({ user, devLogin, googleLogin, authChecked: true });
     } catch {
       set({ user: null, authChecked: true });
     }
@@ -166,7 +168,7 @@ export const useStore = create<State>((set, get) => ({
       case 'tasks':
       case 'memories':
         // Picked up by configStore.ts (Tasks view, Library/Tasks tabs, bot settings).
-        window.dispatchEvent(new CustomEvent('teammates:event', { detail: ev }));
+        window.dispatchEvent(new CustomEvent('marion-agent:event', { detail: ev }));
         return;
       case 'connections':
         set((st) => ({ connectionsVersion: st.connectionsVersion + 1 }));

@@ -1,6 +1,7 @@
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { getLive } from '../store.js';
+import { stopDesktop } from '../computer.js';
 
 /**
  * Subagents.
@@ -48,9 +49,10 @@ export function listSubagents(parentId: string) {
   });
 }
 
-export function deleteSubagent(parentId: string, subId: string) {
+export async function deleteSubagent(parentId: string, subId: string) {
   const s = db.prepare('SELECT user_id FROM bots WHERE id=? AND parent_bot_id=?').get(subId, parentId) as any;
   if (!s) return false;
+  await stopDesktop(s.user_id, subId);
   db.prepare('DELETE FROM screens WHERE bot_id=?').run(subId);
   db.prepare('DELETE FROM bots WHERE id=?').run(subId);
   return true;

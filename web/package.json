@@ -1,6 +1,6 @@
 {
-  "name": "@orgo-teammates/web",
-  "description": "Orgo Teammates web app",
+  "name": "@marion-agent/web",
+  "description": "Marion Agent web app",
   "private": true,
   "type": "module",
   "scripts": {

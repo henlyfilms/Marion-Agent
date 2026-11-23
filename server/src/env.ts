@@ -1,20 +1,6 @@
-import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-/** Reads TEAMMATES_<name>, falling back to the pre-rename GROKBOT_<name> so existing .env files keep working. */
-export const appEnv = (name: string): string | undefined => process.env[`TEAMMATES_${name}`] ?? process.env[`GROKBOT_${name}`];
-
-/** Default database file. Installs from before the rename keep using data/grokbot.db until it is renamed. */
-function defaultDbPath(): string {
-  const current = new URL('../../data/teammates.db', import.meta.url).pathname;
-  const legacy = new URL('../../data/grokbot.db', import.meta.url).pathname;
-  return !fs.existsSync(current) && fs.existsSync(legacy) ? legacy : current;
-}
-
-function req(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env ${name}`);
-  return v;
-}
+export const appEnv = (name: string) => process.env[`MARION_${name}`];
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 const isLoopbackUrl = (u: string) => {
@@ -31,17 +17,10 @@ export const env = {
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',
   /** Public URL of this server, used for OAuth callbacks. */
   serverUrl,
-  xaiKey: req('XAI_API_KEY'),
+  xaiKey: process.env.XAI_API_KEY?.trim() ?? '',
   xaiModel: process.env.XAI_MODEL ?? 'grok-4.7',
-  composioKey: req('COMPOSIO_API_KEY'),
-  orgoKey: req('ORGO_API_KEY'),
-  /** Orgo workspace that holds every user's box. */
-  orgoWorkspaceId: process.env.ORGO_WORKSPACE_ID ?? '',
-  /** Orgo box size for new users. */
-  orgoRamGb: Number(process.env.ORGO_RAM_GB ?? 8),
-  orgoCpu: Number(process.env.ORGO_CPU ?? 2),
-  orgoResolution: process.env.ORGO_RESOLUTION ?? '1280x800x24',
-  sessionSecret: req('SESSION_SECRET'),
+  composioKey: process.env.COMPOSIO_API_KEY?.trim() ?? '',
+  desktopImage: appEnv('DESKTOP_IMAGE') ?? 'marion-agent-desktop:local',
   /**
    * Passwordless email sign-in for local testing. It lets anyone sign in as any email, so it only
    * turns on when the server listens on loopback and SERVER_URL is a localhost URL.
@@ -53,11 +32,11 @@ export const env = {
   /**
    * Who may create an account: comma-separated emails and/or @domains. Unset means anyone, but only
    * while SERVER_URL is a localhost URL; a public server with no list accepts no new sign-ups, because
-   * every account spends the owner's xAI, Orgo and Composio credits.
+   * every account spends the owner's xAI and Composio credits and host resources.
    */
   allowedEmails: (process.env.ALLOWED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   openSignup: isLoopbackUrl(serverUrl),
   /** Mark cookies Secure when the server is reached over HTTPS. */
   secureCookies: serverUrl.startsWith('https://'),
-  dbPath: process.env.DB_PATH ?? defaultDbPath(),
+  dbPath: process.env.DB_PATH ?? fileURLToPath(new URL('../../data/marion-agent.db', import.meta.url)),
 };

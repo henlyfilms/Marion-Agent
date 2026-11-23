@@ -8,8 +8,8 @@ import { hub } from './lib/hub.js';
 import { createSession, destroySession, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
-import { computerState, ensureComputer, refreshComputer, suspendComputer } from './computer.js';
-import { orgo } from './orgo.js';
+import { computerState, ensureComputer, refreshComputer, screenFor, stopDesktop, suspendComputer } from './computer.js';
+import { desktop } from './desktop.js';
 import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, startGoogleLogin, toolkitInfo } from './composio.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
@@ -64,7 +64,7 @@ function findOrCreateUser(email: string, name?: string, preferId?: string) {
 
 api.get('/auth/me', (c) => {
   const user = userFromCookieHeader(c.req.header('cookie'));
-  return c.json({ user, devLogin: env.devLogin });
+  return c.json({ user, devLogin: env.devLogin, googleLogin: Boolean(env.composioKey) });
 });
 
 // Sign-in attempts are bound to the browser that started them (a short-lived cookie), so a callback URL
@@ -73,6 +73,7 @@ const LOGIN_COOKIE = 'login_attempt';
 const LOGIN_TTL_MS = 15 * 60_000;
 
 api.get('/auth/google/start', async (c) => {
+  if (!env.composioKey) return c.json({ error: 'Configure COMPOSIO_API_KEY for Google sign-in' }, 503);
   db.prepare('DELETE FROM login_attempts WHERE created_at < ?').run(now() - LOGIN_TTL_MS);
   const attemptId = newId('login');
   const provisional = newId('usr');
@@ -181,9 +182,10 @@ api.patch('/bots/:id', async (c) => {
   return c.json({ bot: getBot(b.id) });
 });
 
-api.delete('/bots/:id', (c) => {
+api.delete('/bots/:id', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
+  await stopDesktop(c.get('user').id, b.id);
   for (const r of listRoutines(b.id)) unscheduleRoutine(r.id);
   db.prepare('DELETE FROM screens WHERE bot_id=?').run(b.id);
   db.prepare('DELETE FROM bots WHERE id=?').run(b.id);
@@ -222,6 +224,7 @@ api.post('/bots/:id/messages', async (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   const { text } = await c.req.json<{ text: string }>();
   if (!text?.trim()) return c.json({ error: 'empty' }, 400);
+  if (!env.xaiKey) return c.json({ error: 'Configure XAI_API_KEY to send messages to agents' }, 503);
   const row = appendRow(b.id, 'message', { type: 'message', role: 'user', text: text.trim() });
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (b.kind === 'room') dispatchRoomMessage(b.id, text.trim(), enqueue);
@@ -336,9 +339,15 @@ api.delete('/memories/:id', (c) => {
 
 api.get('/computer', async (c) => c.json({ computer: await refreshComputer(c.get('user').id) }));
 
-api.post('/computer/ensure', (c) => {
+api.post('/computer/ensure', async (c) => {
   const userId = c.get('user').id;
-  ensureComputer(userId).catch((e) => console.warn('[computer] ensure failed', e.message));
+  const { botId } = await c.req.json<{ botId?: string }>().catch(() => ({ botId: undefined }));
+  const bot = botId ? ownBot(userId, botId) : null;
+  if (botId && (!bot || bot.kind === 'room')) {
+    return c.json({ error: 'Bot desktop not found' }, 404);
+  }
+  const opening = botId ? screenFor(userId, botId) : ensureComputer(userId);
+  opening.catch((e) => console.warn('[computer] ensure failed', e.message));
   return c.json({ computer: computerState(userId) });
 });
 
@@ -351,11 +360,10 @@ api.get('/bots/:id/screenshot', async (c) => {
   const user = c.get('user');
   const b = ownBot(user.id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  const comp = db.prepare("SELECT orgo_id FROM computers WHERE user_id=? AND status='running'").get(user.id) as any;
-  const scr = db.prepare('SELECT screen_id FROM screens WHERE bot_id=?').get(b.id) as any;
-  if (!comp?.orgo_id || !scr) return c.body(null, 204);
+  if (!db.prepare('SELECT 1 FROM screens WHERE bot_id=? AND screen_id=bot_id').get(b.id)) return c.body(null, 204);
   try {
-    const s = await orgo.screenshot(comp.orgo_id, scr.screen_id);
+    if (!await desktop.running(b.id)) return c.body(null, 204);
+    const s = await desktop.screenshot(b.id);
     const b64 = s.image.replace(/^data:[^,]+,/, '');
     return c.body(Buffer.from(b64, 'base64'), 200, { 'Content-Type': s.mime_type ?? 'image/jpeg', 'Cache-Control': 'no-store' });
   } catch {
@@ -379,6 +387,7 @@ api.get('/apps', async (c) => {
 });
 
 api.post('/apps/:slug/connect', async (c) => {
+  if (!env.composioKey) return c.json({ error: 'Configure COMPOSIO_API_KEY for connected apps' }, 503);
   const user = c.get('user');
   const slug = c.req.param('slug');
   const { botId, seq } = await c.req.json<{ botId?: string; seq?: number }>().catch(() => ({} as any));
@@ -414,7 +423,7 @@ api.get('/apps/callback', async (c) => {
     }
   }
   // Data embedded in an inline <script> must not be able to close the tag, so escape `<` (and U+2028/2029).
-  const payload = jsonForScript({ type: 'teammates-connected', slug, ok });
+  const payload = jsonForScript({ type: 'marion-agent-connected', slug, ok });
   const target = jsonForScript(new URL(env.appUrl).origin);
   c.header('Cache-Control', 'no-store');
   c.header('X-Content-Type-Options', 'nosniff');

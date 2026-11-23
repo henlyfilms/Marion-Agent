@@ -1,11 +1,11 @@
-// Orgo Teammates end-to-end smoke test (real backend, real Grok 4.7, real Orgo computer).
+// Marion Agent end-to-end smoke test (real backend, real Grok 4.7, local Linux desktop).
 // Usage: node tests/e2e.mjs [baseUrl]   (default http://localhost:8787)
 // Creates a throwaway "QA" bot on the dev account, exercises the core flows, then deletes it.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const BASE = process.argv[2] ?? 'http://localhost:8787';
+const BASE = process.argv[2] ?? 'http://127.0.0.1:8787';
 const OUT = path.resolve(new URL('.', import.meta.url).pathname, 'out');
 fs.mkdirSync(OUT, { recursive: true });
 const results = [];
@@ -23,14 +23,14 @@ const step = async (name, fn) => {
 };
 
 const login = await fetch(`${BASE}/api/auth/dev`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: process.env.E2E_EMAIL ?? 'dev@example.com', name: 'Dev' }) });
-const cookie = (login.headers.get('set-cookie') ?? '').match(/teammates_session=([^;]+)/)?.[1];
+const cookie = (login.headers.get('set-cookie') ?? '').match(/marion_agent_session=([^;]+)/)?.[1];
 if (!cookie) throw new Error('dev login failed: ' + login.status);
-const api = (p, init = {}) => fetch(`${BASE}${p}`, { ...init, headers: { 'content-type': 'application/json', cookie: `teammates_session=${cookie}`, ...(init.headers ?? {}) } });
+const api = (p, init = {}) => fetch(`${BASE}${p}`, { ...init, headers: { 'content-type': 'application/json', origin: BASE, cookie: `marion_agent_session=${cookie}`, ...(init.headers ?? {}) } });
 
-const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+const browser = await chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE || undefined, args: ['--no-sandbox'] });
 const ctx = await browser.newContext({ viewport: { width: 1512, height: 864 } });
 const host = new URL(BASE).hostname;
-await ctx.addCookies([{ name: 'teammates_session', value: cookie, domain: host, path: '/' }]);
+await ctx.addCookies([{ name: 'marion_agent_session', value: cookie, domain: host, path: '/' }]);
 const page = await ctx.newPage();
 const consoleErrors = [];
 page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
@@ -75,8 +75,8 @@ await step('chat reply streams (grok-4.7)', async () => {
 });
 
 await step('bot uses its own computer (shell on its screen)', async () => {
-  await send('Use your shell tool to run `echo teammates-$((40+2))-e2e` and reply with only the output.');
-  await waitReply(/teammates-42-e2e/, 240000);
+  await send('Use your shell tool to run `echo marion-agent-$((40+2))-e2e` and reply with only the output.');
+  await waitReply(/marion-agent-42-e2e/, 240000);
   const comp = await (await api('/api/computer')).json();
   if (!comp.computer.screens.some((s) => s.botId === botId)) throw new Error('no screen leased for QA bot');
   await shot('04-computer-tool');

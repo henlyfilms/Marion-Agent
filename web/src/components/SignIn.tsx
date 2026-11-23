@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { TrafficLights } from './Sidebar';
 
 export function SignIn() {
+  const googleLogin = useStore((s) => s.googleLogin);
   const devLogin = useStore((s) => s.devLogin);
   const checkAuth = useStore((s) => s.checkAuth);
   const [email, setEmail] = useState('');
@@ -26,11 +27,12 @@ export function SignIn() {
         <div className="signin__hero">
           <BotAvatar shape="blob" color="black" size={84} />
         </div>
-        <h1 className="signin__title">Orgo Teammates</h1>
+        <h1 className="signin__title">Marion Agent</h1>
         <p className="signin__sub">AI teammates with their own computers. Hand them a task and they get it done.</p>
-        <a className="btn btn--primary signin__google" href="/api/auth/google/start">
+        {googleLogin && <a className="btn btn--primary signin__google" href="/api/auth/google/start">
           <GoogleG /> Sign in with Google
-        </a>
+        </a>}
+        {!googleLogin && !devLogin && <p>Enable local sign-in or configure Google sign-in on the server.</p>}
         {devLogin && (
           <form className="signin__dev" onSubmit={dev}>
             <div className="signin__divider"><span>Dev sign-in</span></div>

@@ -20,7 +20,7 @@ export function ComputerViewer() {
   const [mode, setMode] = useState<Mode>('watch');
   const [conn, setConn] = useState<Conn>('connecting');
   const [attempt, setAttempt] = useState(0);
-  const running = computer?.status === 'running';
+  const running = computer?.screens.some(screen => screen.botId === bot?.id && screen.running) ?? false;
   const close = () => set({ viewerOpen: false });
 
   useEffect(() => {
@@ -96,13 +96,13 @@ export function ComputerViewer() {
           <div className="viewer__overlay viewer__overlay--asleep">
             <span className="viewer__sleep-face"><i /><i /></span>
             <span>{busy ? computerStatusText(computer) : 'The computer is asleep.'}</span>
-            {!busy && <button type="button" className="btn btn--light" onClick={() => api.ensureComputer().catch(() => {})}>Wake computer</button>}
+            {!busy && <button type="button" className="btn btn--light" onClick={() => api.ensureComputer(bot.id).catch(() => {})}>Wake computer</button>}
             {computer?.error && <span className="viewer__err">{computer.error}</span>}
           </div>
         )}
       </div>
 
-      {running && (
+      {running && conn === 'connected' && (
         <div className={`viewer__bar${mode === 'control' ? ' is-control' : ''}`}>
           {mode === 'watch' ? (
             <>

@@ -170,9 +170,8 @@ export interface LibraryFile { name: string; size: number; modifiedAt: number; i
 
 export interface ComputerState {
   status: 'absent' | 'creating' | 'starting' | 'running' | 'suspending' | 'suspended' | 'resuming' | 'error' | 'stopped';
-  orgoId: string | null;
   error: string | null;
-  screens: { botId: string; screenId: string }[];
+  screens: { botId: string; screenId: string; running: boolean }[];
 }
 
 export interface Toolkit {

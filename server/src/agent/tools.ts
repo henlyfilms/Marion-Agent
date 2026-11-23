@@ -1,8 +1,8 @@
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { orgo } from '../orgo.js';
-import { BOX_ROOT, chromeProfilePattern, screenFor } from '../computer.js';
+import { desktop } from '../desktop.js';
+import { BOX_ROOT, screenFor } from '../computer.js';
 import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
@@ -42,9 +42,9 @@ interface ToolDef {
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
 
 async function shot(ctx: ToolCtx, caption: string): Promise<ToolResult> {
-  const { computerId, screenId } = await screenFor(ctx.userId, ctx.botId);
+  const desktopId = await screenFor(ctx.userId, ctx.botId);
   await new Promise((r) => setTimeout(r, 700));
-  const s = await orgo.screenshot(computerId, screenId);
+  const s = await desktop.screenshot(desktopId);
   const mime = s.mime_type ?? 'image/png';
   const url = s.image.startsWith('data:') ? s.image : `data:${mime};base64,${s.image}`;
   return {
@@ -56,9 +56,9 @@ async function shot(ctx: ToolCtx, caption: string): Promise<ToolResult> {
   };
 }
 
-async function onScreen<T>(ctx: ToolCtx, fn: (computerId: string, screenId: string) => Promise<T>) {
-  const { computerId, screenId } = await screenFor(ctx.userId, ctx.botId);
-  return fn(computerId, screenId);
+async function onScreen<T>(ctx: ToolCtx, fn: (desktopId: string) => Promise<T>) {
+  const desktopId = await screenFor(ctx.userId, ctx.botId);
+  return fn(desktopId);
 }
 
 function botByName(userId: string, name: string) {
@@ -81,7 +81,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'on_its_computer',
     label: 'Clicking on screen',
     impl: async (a, ctx) => {
-      await onScreen(ctx, (c, s) => orgo.click(c, s, { x: a.x, y: a.y, button: a.button ?? 'left', double: !!a.double }));
+      await onScreen(ctx, (id) => desktop.click(id, { x: a.x, y: a.y, button: a.button ?? 'left', double: !!a.double }));
       return shot(ctx, `Clicked (${a.x}, ${a.y}).`);
     },
   },
@@ -93,7 +93,7 @@ export const TOOLS: ToolDef[] = [
     label: 'Typing',
     impl: async (a, ctx) => {
       const text = String(a.text);
-      for (let i = 0; i < text.length; i += 1500) await onScreen(ctx, (c, s) => orgo.type(c, s, text.slice(i, i + 1500)));
+      for (let i = 0; i < text.length; i += 1500) await onScreen(ctx, (id) => desktop.type(id, text.slice(i, i + 1500)));
       return shot(ctx, `Typed ${text.length} characters.`);
     },
   },
@@ -105,7 +105,7 @@ export const TOOLS: ToolDef[] = [
     label: 'Pressing keys',
     impl: async (a, ctx) => {
       const keys = String(a.keys).split('+').map((k) => (k.length === 1 ? k.toLowerCase() : k)).join('+');
-      await onScreen(ctx, (c, s) => orgo.key(c, s, keys));
+      await onScreen(ctx, (id) => desktop.key(id, keys));
       return shot(ctx, `Pressed ${keys}.`);
     },
   },
@@ -116,7 +116,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'on_its_computer',
     label: 'Scrolling',
     impl: async (a, ctx) => {
-      await onScreen(ctx, (c, s) => orgo.scroll(c, s, { x: a.x, y: a.y, direction: a.direction, amount: a.amount ?? 3 }));
+      await onScreen(ctx, (id) => desktop.scroll(id, { x: a.x, y: a.y, direction: a.direction, amount: a.amount ?? 3 }));
       return shot(ctx, `Scrolled ${a.direction}.`);
     },
   },
@@ -127,7 +127,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'on_its_computer',
     label: 'Dragging',
     impl: async (a, ctx) => {
-      await onScreen(ctx, (c, s) => orgo.drag(c, s, a));
+      await onScreen(ctx, (id) => desktop.drag(id, a));
       return shot(ctx, 'Dragged.');
     },
   },
@@ -138,50 +138,44 @@ export const TOOLS: ToolDef[] = [
     activity: 'browsing_web',
     label: 'Browsing a site',
     impl: async (a, ctx) => {
-      const url = String(a.url).replace(/'/g, '%27');
-      await onScreen(ctx, (c, s) => {
-        const display = s === 'default' ? ':99' : `:${s.replace('screen-', '')}`;
-        const profile = `${BOX_ROOT}/profiles/${ctx.botId}`;
-        // Reuse the bot's running Chrome if present (opens a new tab), else start one detached.
-        return orgo.bash(
-          c,
-          s,
-          `export DISPLAY=${display}; mkdir -p ${profile}; pgrep -f "${chromeProfilePattern(ctx.botId)}" >/dev/null || rm -f ${profile}/Singleton*; ` +
-            `setsid nohup google-chrome --no-sandbox --no-first-run --no-default-browser-check --disable-dev-shm-usage --password-store=basic ` +
-            `--user-data-dir=${profile} --start-maximized '${url}' >/tmp/chrome-${ctx.botId}.log 2>&1 < /dev/null & sleep 4; echo ok`,
-          40,
-        );
-      });
+      const url = new URL(String(a.url));
+      if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Enter an HTTP or HTTPS URL');
+      const quoted = "'" + url.href.replace(/'/g, "'\\''") + "'";
+      const profile = `${BOX_ROOT}/profiles/${ctx.botId}`;
+      const result = await onScreen(ctx, (id) => desktop.bash(id,
+        `mkdir -p ${profile} && (setsid nohup chromium --no-sandbox --no-first-run --disable-dev-shm-usage --password-store=basic ` +
+        `--user-data-dir=${profile} --start-maximized ${quoted} >/tmp/marion-browser.log 2>&1 < /dev/null &)`, 15));
+      if (result.exit_code !== 0) throw new Error(result.output || 'Could not launch Chromium');
+      await new Promise(resolve => setTimeout(resolve, 1500));
       return shot(ctx, `Opened ${a.url}.`);
     },
   },
   {
     name: 'save_file',
-    description: "Save a deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it. Saved under /root/teammates/files/<your id>/ on your computer.",
+    description: "Save a deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it. Saved under /workspace/files/<your id>/ on your computer.",
     parameters: obj({ filename: { type: 'string', description: 'e.g. briefing-2026-11-09.md' }, content: { type: 'string' } }, ['filename', 'content']),
     activity: 'drafting_file',
     label: 'Saving notes',
     impl: async (a, ctx) => {
-      const name = String(a.filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file.txt';
+      const name = String(a.filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120).replace(/^\.+$/, '') || 'file.txt';
       const dir = `${BOX_ROOT}/files/${ctx.botId}`;
-      const b64 = Buffer.from(String(a.content), 'utf8').toString('base64');
-      // Chunk the base64 so very large files don't exceed a single command's size.
-      await onScreen(ctx, async (c, s) => {
-        await orgo.bash(c, s, `mkdir -p ${dir} && : > ${dir}/${name}.b64`, 30);
-        for (let i = 0; i < b64.length; i += 60000) await orgo.bash(c, s, `printf '%s' '${b64.slice(i, i + 60000)}' >> ${dir}/${name}.b64`, 30);
-        return orgo.bash(c, s, `base64 -d ${dir}/${name}.b64 > ${dir}/${name} && rm ${dir}/${name}.b64 && wc -c ${dir}/${name}`, 30);
+      const data = Buffer.from(String(a.content), 'utf8');
+      await onScreen(ctx, async (id) => {
+        const init = await desktop.bash(id, `mkdir -p ${dir}`, 30);
+        if (init.exit_code !== 0) throw new Error(init.output);
+        await desktop.save(id, `${dir}/${name}`, data);
       });
       return { output: JSON.stringify({ ok: true, path: `${dir}/${name}` }), summary: `Saved ${name}` };
     },
   },
   {
     name: 'shell',
-    description: 'Run a bash command on your own Linux computer (as root). Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters.',
+    description: 'Run a bash command on your own Linux computer. Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters.',
     parameters: obj({ command: { type: 'string' }, timeout_seconds: { type: 'integer' } }, ['command']),
     activity: 'running_commands',
     label: 'Running commands',
     impl: async (a, ctx) => {
-      const r = await onScreen(ctx, (c, s) => orgo.bash(c, s, String(a.command), Math.min(Math.max(a.timeout_seconds ?? 120, 1), 290)));
+      const r = await onScreen(ctx, (id) => desktop.bash(id, String(a.command), Math.min(Math.max(a.timeout_seconds ?? 120, 1), 290)));
       const out = (r.output ?? '').slice(-20000);
       return { output: JSON.stringify({ exit_code: r.exit_code, output: out }), summary: `exit ${r.exit_code}` };
     },
@@ -406,7 +400,7 @@ export const TOOLS: ToolDef[] = [
     impl: async (a, ctx) => {
       const { interrupt } = await import('./loop.js');
       interrupt(String(a.subagent_id));
-      return { output: deleteSubagent(ctx.botId, String(a.subagent_id)) ? 'Stopped and removed.' : 'No such subagent.' };
+      return { output: await deleteSubagent(ctx.botId, String(a.subagent_id)) ? 'Stopped and removed.' : 'No such subagent.' };
     },
   },
   {
