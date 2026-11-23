@@ -45,7 +45,7 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
         <>
           <div className="card__actions">
             <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>
-            <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>
+            {body.tool !== 'ask_grok' && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>}
             <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('allow')}>Allow</button>
           </div>
           {error && <div className="card__error">{error}</div>}

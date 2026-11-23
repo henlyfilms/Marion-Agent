@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { localModel } from './models.js';
 import { db, now } from '../db.js';
 import '../db-config.js';
 import { appEnv, env } from '../env.js';
@@ -13,8 +13,6 @@ import { getBotRow, getLive } from '../store.js';
  *  (c) a bounded, relevance-ranked memory section for the system prompt.
  */
 
-const xai = env.xaiKey ? new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 300_000 }) : null;
-
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
 
 export const memoryConfig = {
@@ -26,7 +24,6 @@ export const memoryConfig = {
   consolidateIdleMin: num(appEnv('CONSOLIDATE_IDLE_MIN'), 10),
   consolidateSweepSec: num(appEnv('CONSOLIDATE_SWEEP_SEC'), 60),
   /** 'auto' tries xAI /responses/compact then falls back to a summary; 'summary' skips xAI compaction. */
-  compactMethod: appEnv('COMPACT_METHOD') === 'summary' ? 'summary' : 'auto',
   /** Character budget for the memory section of the system prompt. */
   promptMemoryChars: num(appEnv('PROMPT_MEMORY_CHARS'), 4000),
 };
@@ -152,28 +149,16 @@ export function renderTranscript(items: any[], maxChars = 200_000): string {
   return out;
 }
 
-async function compactWithXai(old: any[]): Promise<any[]> {
-  if (!xai) throw new Error('Configure XAI_API_KEY for memory compaction');
-  const res: any = await xai!.post('/responses/compact', { body: { model: env.xaiModel, input: old } });
-  const out = (res?.output ?? []) as any[];
-  if (!out.length || !out.some((o) => o?.type === 'compaction' || o?.encrypted_content || o?.role)) throw new Error('compact returned no items');
-  return out;
-}
-
 async function compactWithSummary(old: any[]): Promise<any[]> {
-  if (!xai) throw new Error('Configure XAI_API_KEY for memory compaction');
   const transcript = renderTranscript(old);
-  const res: any = await xai!.responses.create({
-    model: env.xaiModel,
+  const res: any = await localModel.responses.create({
+    model: env.localModelName,
     input: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: transcript }],
-    store: false,
     reasoning: { effort: 'low' },
   } as any);
   const text = String(res.output_text ?? '').trim();
   if (!text) throw new Error('summary was empty');
-  // Earlier xAI compaction items can't be read back as text, so carry them over unchanged.
-  const carried = old.filter((it) => it?.type === 'compaction');
-  return [...carried, { role: 'user', content: `[Automatic summary of the earlier conversation, made to save space. Treat it as your own notes.]\n${text}` }];
+  return [{ role: 'user', content: `[Automatic summary of the earlier conversation, made to save space. Treat it as your own notes.]\n${text}` }];
 }
 
 const compactCooldown = new Map<string, number>();
@@ -203,21 +188,14 @@ export async function maybeCompact(botId: string, items: any[], opts: { force?: 
 
   const bot = getBotRow(botId);
   const t0 = Date.now();
-  let method = 'xai-compact';
+  const method = 'summary';
   let replaced: any[];
   try {
-    if (memoryConfig.compactMethod === 'summary') throw new Error('xAI compaction disabled by MARION_COMPACT_METHOD=summary');
-    replaced = await compactWithXai(old);
-  } catch (e: any) {
-    console.warn(`[memory] compact via /responses/compact failed for ${botId}: ${e?.message ?? e}; falling back to a summary`);
-    method = 'summary';
-    try {
-      replaced = await compactWithSummary(old);
-    } catch (e2: any) {
-      console.error(`[memory] summary fallback failed for ${botId}: ${e2?.message ?? e2}`);
-      compactCooldown.set(botId, now() + 10 * 60_000);
-      return items;
-    }
+    replaced = await compactWithSummary(old);
+  } catch (error) {
+    console.warn(`[memory] summary failed for ${botId}`, error);
+    compactCooldown.set(botId, now() + 10 * 60_000);
+    return items;
   }
 
   const next = [...replaced, ...keep];
@@ -298,15 +276,14 @@ export async function consolidateBot(botId: string, opts: { upTo?: number } = {}
   if (transcript.length > 24_000) transcript = transcript.slice(-24_000);
 
   const existing = (db.prepare('SELECT text FROM memories WHERE bot_id=? ORDER BY created_at DESC LIMIT 200').all(botId) as any[]).map((m) => m.text as string);
-  const res: any = await xai!.responses.create({
-    model: env.xaiModel,
+  const res: any = await localModel.responses.create({
+    model: env.localModelName,
     input: [
       { role: 'system', content: CONSOLIDATE_PROMPT },
       { role: 'user', content: `EXISTING MEMORIES:\n${existing.length ? existing.map((t) => `- ${t}`).join('\n') : '(none)'}\n\nRECENT CONVERSATION:\n${transcript}` },
     ],
     text: { format: { type: 'json_schema', name: 'memories', schema: SCHEMA, strict: true } },
     reasoning: { effort: 'low' },
-    store: false,
   } as any);
   let proposed: string[] = [];
   try { proposed = (JSON.parse(String(res.output_text ?? '{}')).memories ?? []).map((m: any) => String(m.text ?? '').trim()).filter(Boolean); } catch { /* bad json → nothing */ }
@@ -342,7 +319,6 @@ export function botsDueForConsolidation(idleMs: number, at = now()): { botId: st
 }
 
 export function startMemoryConsolidation() {
-  if (!xai) return;
   const idleMs = memoryConfig.consolidateIdleMin * 60_000;
   const sweep = async () => {
     for (const { botId, lastAt } of botsDueForConsolidation(idleMs)) {

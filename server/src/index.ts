@@ -26,7 +26,7 @@ initRooms();
 const app = new Hono();
 // Cookie auth: reject cross-origin form/text POSTs (JSON requests already need a CORS preflight, which we never allow).
 app.use('/api/*', csrf({ origin: env.trustedOrigins }));
-app.get('/api/health', (c) => c.json({ ok: true, model: env.xaiModel }));
+app.get('/api/health', (c) => c.json({ ok: true, model: env.localModelName, provider: 'local' }));
 app.route('/api/checkins', checkinsApi);
 app.route('/api/rooms', roomsApi);
 app.route('/api', api);
@@ -39,7 +39,7 @@ if (fs.existsSync(webDist)) {
   app.get('*', (c) => c.html(fs.readFileSync(path.join(webDist, 'index.html'), 'utf8')));
 }
 
-const server = serve({ fetch: app.fetch, port: env.port, hostname: env.host }, (info) => console.log(`[marion-agent] server on http://${env.host.includes(':') ? `[${env.host}]` : env.host}:${info.port} (model ${env.xaiModel})`));
+const server = serve({ fetch: app.fetch, port: env.port, hostname: env.host }, (info) => console.log(`[marion-agent] server on http://${env.host.includes(':') ? `[${env.host}]` : env.host}:${info.port} (model ${env.localModelName})`));
 if (!env.allowedEmails.length && !env.openSignup) console.warn('[auth] ALLOWED_EMAILS is not set and SERVER_URL is not localhost: new sign-ups are disabled.');
 if (env.devLoginRequested && !env.devLogin) console.warn('[auth] DEV_LOGIN=1 ignored: dev sign-in only works when HOST is loopback and SERVER_URL is a localhost URL.');
 attachVncRelay(server as unknown as Server);

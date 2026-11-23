@@ -224,7 +224,6 @@ api.post('/bots/:id/messages', async (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   const { text } = await c.req.json<{ text: string }>();
   if (!text?.trim()) return c.json({ error: 'empty' }, 400);
-  if (!env.xaiKey) return c.json({ error: 'Configure XAI_API_KEY to send messages to agents' }, 503);
   const row = appendRow(b.id, 'message', { type: 'message', role: 'user', text: text.trim() });
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (b.kind === 'room') dispatchRoomMessage(b.id, text.trim(), enqueue);

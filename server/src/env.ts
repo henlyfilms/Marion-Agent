@@ -18,7 +18,10 @@ export const env = {
   /** Public URL of this server, used for OAuth callbacks. */
   serverUrl,
   xaiKey: process.env.XAI_API_KEY?.trim() ?? '',
-  xaiModel: process.env.XAI_MODEL ?? 'grok-4.7',
+  xaiModel: process.env.XAI_MODEL ?? 'grok-4.6',
+  localModelName: appEnv('LOCAL_MODEL')?.trim() || 'qwen3.8:27b',
+  localModelUrl: appEnv('LOCAL_MODEL_URL')?.trim() || 'http://127.0.0.1:11434/v1',
+  localModelKey: appEnv('LOCAL_MODEL_API_KEY')?.trim() || '',
   composioKey: process.env.COMPOSIO_API_KEY?.trim() ?? '',
   desktopImage: appEnv('DESKTOP_IMAGE') ?? 'marion-agent-desktop:local',
   /**

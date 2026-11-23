@@ -1,4 +1,4 @@
-// Marion Agent end-to-end smoke test (real backend, real Grok 4.7, local Linux desktop).
+// Marion Agent end-to-end smoke test (real backend, real local model, local Linux desktop).
 // Usage: node tests/e2e.mjs [baseUrl]   (default http://localhost:8787)
 // Creates a throwaway "QA" bot on the dev account, exercises the core flows, then deletes it.
 import { chromium } from 'playwright';
@@ -68,7 +68,7 @@ const waitReply = async (re, timeout) => {
   );
 };
 
-await step('chat reply streams (grok-4.7)', async () => {
+await step('chat reply streams (local model)', async () => {
   await send('What is 17 times 3? Reply with only the number immediately followed by -e2e (no spaces).');
   await waitReply(/\b51-e2e/, 90000);
   await shot('03-chat');

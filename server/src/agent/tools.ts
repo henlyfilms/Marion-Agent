@@ -1,3 +1,5 @@
+import { grok } from './models.js';
+import { env } from '../env.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
@@ -459,6 +461,23 @@ export const TOOLS: ToolDef[] = [
   },
 ];
 
+if (grok) {
+  const client = grok;
+  TOOLS.push({
+    name: 'ask_grok',
+    description: 'Ask the optional hosted Grok model a standalone question. After approval, the exact prompt goes to xAI. Submit only the information needed for the question.',
+    parameters: obj({ prompt: { type: 'string' } }, ['prompt']),
+    activity: 'working',
+    label: 'Asking Grok',
+    impl: async (args) => {
+      const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
+      if (!prompt || prompt.length > 6000) throw new Error('Enter a prompt of 1–6,000 characters');
+      const reply = await client.responses.create({ model: env.xaiModel, input: prompt, store: false, max_output_tokens: 2000 });
+      return { output: reply.output_text || 'Grok returned no text.', summary: 'Received a Grok response' };
+    },
+  });
+}
+
 export const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
 
 export function functionSchemas() {
@@ -473,6 +492,10 @@ export type Decision = 'allow' | 'ask' | 'block';
 const DISCOVERY_META_TOOLS = new Set(['COMPOSIO_SEARCH_TOOLS', 'COMPOSIO_GET_TOOL_SCHEMAS']);
 
 export function policyFor(userId: string, toolName: string, args: any): { decision: Decision; key: string; toolkit?: string; title: string } {
+  // Approval is required for every prompt sent to the optional hosted connector.
+  if (toolName === 'ask_grok') return grok
+    ? { decision: 'ask', key: toolName, title: 'send this prompt to Grok' }
+    : { decision: 'block', key: toolName, title: 'Grok connector is disabled' };
   if (toolMap.has(toolName) || DISCOVERY_META_TOOLS.has(toolName)) return { decision: 'allow', key: toolName, title: toolName };
   let slugs = innerToolSlugs(toolName, args);
   // Fail closed: a meta tool we can't see inside (or a batch we can't parse) is gated under its own name.

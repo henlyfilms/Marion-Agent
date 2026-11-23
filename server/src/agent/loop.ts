@@ -1,7 +1,7 @@
-import OpenAI from 'openai';
+import { localInput, localModel } from './models.js';
 import { db, now } from '../db.js';
 import { env } from '../env.js';
-import { newId, sha256 } from '../lib/ids.js';
+import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { appendHistory, appendRow, emitBot, getBotRow, getRow, loadHistory, setLive, updateRow } from '../store.js';
 import type { MessageBody, ToolCallBody } from '../types.js';
@@ -10,8 +10,6 @@ import { systemPrompt } from './prompt.js';
 import { repairHistory } from './history.js';
 import { maybeCompact, noteUsage } from './memory.js';
 import { activityFor, functionSchemas, humanizeSlug, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
-
-const xai = env.xaiKey ? new OpenAI({ apiKey: env.xaiKey, baseURL: 'https://api.x.ai/v1', timeout: 360_000 }) : null;
 
 export type Trigger =
   | { type: 'user'; text: string }
@@ -100,7 +98,7 @@ function triggerItem(t: Trigger): any | null {
 
 async function runTurn(botId: string, trigger: Trigger) {
   const bot = getBotRow(botId);
-  if (!bot || !xai) return;
+  if (!bot) return;
   const userId: string = bot.user_id;
   const ctrl = new AbortController();
   aborts.set(botId, ctrl);
@@ -130,8 +128,6 @@ async function runTurn(botId: string, trigger: Trigger) {
     const tools = [
       ...functionSchemas(),
       ...(await composioTools(userId)),
-      { type: 'web_search' },
-      { type: 'x_search' },
     ];
 
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -189,7 +185,7 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
       const tk = pol.toolkit ? await toolkitInfo(pol.toolkit) : undefined;
       const card = appendRow(botId, 'card', {
         type: 'card', card: 'approval', approvalId, title: `Allow ${getBotRow(botId).name} to ${pol.title.split(': ')[1] ?? pol.title}?`,
-        detail: describeArgs(args), tool: pol.key, toolkit: pol.toolkit, toolkitName: tk?.name, logo: tk?.logo, args, status: 'pending',
+        detail: c.name === 'ask_grok' && typeof args.prompt === 'string' ? args.prompt.trim().slice(0, 6000) : describeArgs(args), tool: pol.key, toolkit: pol.toolkit, toolkitName: tk?.name, logo: tk?.logo, args, status: 'pending',
       });
       db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, c.call_id, pol.key, 'pending', now());
       updateRow(botId, c.rowSeq, { ...body, status: 'awaiting-approval' });
@@ -257,29 +253,27 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
   // Runs inside the bot's serial queue, so compaction can't race a turn.
   const history = await maybeCompact(botId, loadHistory(botId)).catch(() => loadHistory(botId));
   // The model is only called when no approval is pending, so every orphaned call can be repaired.
-  const input = [{ role: 'system', content: await systemPrompt(userId, botId) }, ...pruneImages(repairHistory(history))];
+  const input = localInput([{ role: 'system', content: await systemPrompt(userId, botId) }, ...pruneImages(repairHistory(history))]);
 
   const body: any = {
-    model: env.xaiModel,
+    model: env.localModelName,
     input,
     tools,
     reasoning: { effort: bot.effort ?? 'medium' },
-    store: false,
-    include: ['reasoning.encrypted_content'],
-    prompt_cache_key: `marion-agent:${botId}:${bot.generation}`,
-    safety_identifier: sha256(userId).slice(0, 32),
     stream: true,
   };
 
   let stream: any;
   try {
-    stream = await xai!.responses.create(body, { signal });
+    stream = await localModel.responses.create(body, { signal });
   } catch (e: any) {
     // If a Composio tool schema is rejected, retry with only our own tools.
-    if (e?.status === 400 && tools.length > functionSchemas().length + 2) {
+    if (e?.status === 400 && tools.length > functionSchemas().length) {
       console.warn('[agent] 400 with composio tools, retrying without:', e?.message);
-      body.tools = [...functionSchemas(), { type: 'web_search' }, { type: 'x_search' }];
-      stream = await xai!.responses.create(body, { signal });
+      body.tools = functionSchemas();
+      stream = await localModel.responses.create(body, { signal });
+    } else if (e?.name === 'APIConnectionError' || e?.status === 404) {
+      throw new Error(`Local model ${env.localModelName} is unavailable. Start your model server and check MARION_LOCAL_MODEL and MARION_LOCAL_MODEL_URL.`);
     } else throw e;
   }
 
@@ -348,9 +342,9 @@ export function resolveApproval(userId: string, approvalId: string, decision: 'a
   const ap = db.prepare('SELECT a.*, b.user_id FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=?').get(approvalId) as any;
   if (!ap || ap.user_id !== userId) throw new Error('not found');
   if (ap.status !== 'pending') return;
-  const status = decision === 'deny' ? 'denied' : decision === 'always' ? 'always' : 'allowed';
+  const status = decision === 'deny' ? 'denied' : decision === 'always' && ap.tool !== 'ask_grok' ? 'always' : 'allowed';
   db.prepare('UPDATE approvals SET status=?, resolved_at=? WHERE id=?').run(status, now(), approvalId);
-  if (decision === 'always') db.prepare("INSERT OR REPLACE INTO policies(user_id,tool,mode) VALUES (?,?,'always_allow')").run(userId, ap.tool);
+  if (status === 'always') db.prepare("INSERT OR REPLACE INTO policies(user_id,tool,mode) VALUES (?,?,'always_allow')").run(userId, ap.tool);
   const card = getRow(ap.bot_id, ap.row_seq);
   if (card && card.body.type === 'card' && card.body.card === 'approval') updateRow(ap.bot_id, ap.row_seq, { ...card.body, status });
   enqueue(ap.bot_id, { type: 'resume' });

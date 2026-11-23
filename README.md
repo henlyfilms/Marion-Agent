@@ -22,11 +22,11 @@ Open http://127.0.0.1:8787 on the same machine. Sign in with your email using lo
 
 Each desktop uses a separate Docker container, network, and workspace volume. Browser profiles and Library files under `/workspace` persist when the desktop stops. PowerShell commands remain on the host. Commands issued by a bot run as an unprivileged user inside that bot's container. The default limit is 2 GiB of RAM and 2 CPUs per running desktop.
 
-## Why the xAI API key is needed
+## Run chat with a local model
 
-You can sign in locally, create bots, and use their desktops without provider keys. `XAI_API_KEY` authenticates requests to Grok. The model reads chat, decides which tools to call, interprets screenshots, and writes replies. The same key enables automated memory consolidation, voice, and transcription. Model and voice usage can incur charges even when desktops run on your PC. To enable these features, add the key to `.env` and restart Marion Agent.
+Marion Agent routes chat and memory to your local model server. In `.env`, set `MARION_LOCAL_MODEL_URL` to the server's OpenAI-compatible base URL ending in `/v1`, and set `MARION_LOCAL_MODEL` to the exact ID it serves. The default targets Ollama on port 11434 and uses the name `qwen3.8:27b`. Use the model ID reported by your own runtime. See [local model and connector setup](docs/LOCAL-MODELS.md) for a verified Qwen release and serving options. After building, run `node tests/local-model.mjs` and `node tests/local-model.mjs --grok` to verify the local API integration against a test endpoint and the optional Grok approval flow.
 
-`COMPOSIO_API_KEY` enables Google sign-in and connected apps. It is optional for local use. Keep keys in `.env` on the machine that runs the API.
+`XAI_API_KEY` enables an optional Grok tool that asks for approval before sending its prompt, plus the existing xAI voice and transcription features. Chat and memory use your local model even when the xAI key is set. `COMPOSIO_API_KEY` is optional and enables connected apps and Google sign-in. Keep keys in `.env` on the machine that runs the API.
 
 ## Development
 
