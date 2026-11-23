@@ -214,3 +214,6 @@
 
 /* knob contrasts with the "on" track (matters for black bots in dark mode) */
 .toggle.is-on .toggle__knob { background: var(--bot-on-action, #FFFFFF); }
+
+.local-settings__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.local-settings__controls .text-input { flex: 1 1 240px; min-width: 0; }

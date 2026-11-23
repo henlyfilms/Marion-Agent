@@ -1,0 +1,12 @@
+#!/bin/bash
+set -eu
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+cd "$(dirname "$0")/../../.."
+if ! command -v node >/dev/null; then
+  /usr/bin/osascript -e 'display alert "Marion Agent needs Node.js 24" message "Install Node.js and complete the setup in README.md."'
+  exit 1
+fi
+if ! node scripts/launch.mjs; then
+  /usr/bin/osascript -e 'display alert "Marion Agent could not start" message "Run npm start in the Marion Agent folder to see the error."'
+  exit 1
+fi

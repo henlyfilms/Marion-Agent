@@ -36,11 +36,18 @@ function NativeSelect<T extends string | number>({ label, value, options, onChan
 /** "Voice chat" section of the details panel: voice, speed, language (saved per bot), preview, start a call. */
 export function VoiceSettings({ bot }: { bot: Bot }) {
   const [opts, setOpts] = useState<VoiceOptions>(FALLBACK);
+  const [availability, setAvailability] = useState<Awaited<ReturnType<typeof voiceApi.status>>>();
+  const localCall = useStore(s => s.localVoiceBotId === bot.id);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
 
-  useEffect(() => { voiceApi.options().then(setOpts).catch(() => {}); }, []);
+  useEffect(() => {
+    voiceApi.status().then(status => {
+      setAvailability(status);
+      if (status.realtime && !status.localSpeech) voiceApi.options().then(setOpts).catch(() => {});
+    }).catch(() => {});
+  }, []);
   useEffect(() => setError(null), [bot.id]);
 
   const save = async (patch: Partial<Pick<Bot, 'voice' | 'voiceSpeed' | 'voiceLanguage'>>) => {
@@ -65,6 +72,16 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
     finally { setPreviewing(false); }
   };
 
+  if (!availability?.realtime || availability.localSpeech) {
+    return <div className="panel-card">
+      <div className="panel-row">
+        {availability?.localSpeech ? 'Local push-to-talk uses a voice installed on this device.' : 'Set up a speech provider in Settings → Audio.'}
+      </div>
+      {availability?.localSpeech && <button type="button" className="panel-row panel-row--action" onClick={() => useStore.setState({ localVoiceBotId: localCall ? null : bot.id })}>
+        {localCall ? 'End voice chat' : 'Start voice chat'}
+      </button>}
+    </div>;
+  }
   const voices = opts.voices.some((v) => v.id === bot.voice) ? opts.voices : [{ id: bot.voice, name: bot.voice }, ...opts.voices];
   const speeds = opts.speeds.includes(bot.voiceSpeed) ? opts.speeds : [...opts.speeds, bot.voiceSpeed].sort((a, b) => a - b);
 

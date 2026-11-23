@@ -3,14 +3,14 @@ import { streamSSE } from 'hono/streaming';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { db, now } from './db.js';
 import { env } from './env.js';
-import { newId } from './lib/ids.js';
+import { newId, token } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
 import { computerState, ensureComputer, refreshComputer, screenFor, stopDesktop, suspendComputer } from './computer.js';
 import { desktop } from './desktop.js';
-import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, startGoogleLogin, toolkitInfo } from './composio.js';
+import { catalog, connectedToolkits, connectionsDetail, deleteConnection, disconnect, googleProfile, startConnect, startGoogleLogin } from './composio.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
@@ -376,48 +376,61 @@ api.get('/apps', async (c) => {
   const user = c.get('user');
   const search = (c.req.query('search') ?? '').toLowerCase();
   const category = c.req.query('category') ?? '';
-  const [all, connected] = await Promise.all([catalog(), connectedToolkits(user.id).catch(() => new Set<string>())]);
+  let all: Awaited<ReturnType<typeof catalog>>;
+  let connected: Set<string>;
+  try { [all, connected] = await Promise.all([catalog(), connectedToolkits(user.id)]); }
+  catch { return c.json({ error: 'Composio could not load the catalog or linked accounts. Check your project key and connection.' }, 502); }
   let items: Toolkit[] = all.map((t) => ({ ...t, connected: connected.has(t.slug) }));
   if (search) items = items.filter((t) => t.name.toLowerCase().includes(search) || t.slug.includes(search) || t.description?.toLowerCase().includes(search));
   if (category) items = items.filter((t) => t.categories.some((x) => x.toLowerCase() === category.toLowerCase()));
   const categories = [...new Set(all.flatMap((t) => t.categories))].sort();
   const connectedApps = all.filter((t) => connected.has(t.slug)).map((t) => ({ ...t, connected: true }));
-  return c.json({ apps: items.slice(0, Number(c.req.query('limit') ?? 120)), connected: [...connected], connectedApps, categories, total: items.length });
+  return c.json({ apps: items.slice(0, Number(c.req.query('limit') ?? 120)), connected: [...connected], connectedApps, categories, total: items.length, configured: Boolean(env.composioKey) });
 });
 
 api.post('/apps/:slug/connect', async (c) => {
   if (!env.composioKey) return c.json({ error: 'Configure COMPOSIO_API_KEY for connected apps' }, 503);
   const user = c.get('user');
   const slug = c.req.param('slug');
-  const { botId, seq } = await c.req.json<{ botId?: string; seq?: number }>().catch(() => ({} as any));
-  const cb = new URL(`${env.serverUrl}/api/apps/callback`);
-  cb.searchParams.set('slug', slug);
-  if (botId) cb.searchParams.set('bot', botId);
-  if (seq) cb.searchParams.set('seq', String(seq));
-  const r = await startConnect(user.id, slug, cb.toString());
-  return c.json(r);
+  if (!/^[a-z0-9_-]{1,64}$/i.test(slug)) return c.json({ error: 'Invalid toolkit' }, 400);
+  const body = await c.req.json<{ botId?: string; seq?: number }>().catch(() => null);
+  const botId = typeof body?.botId === 'string' && ownBot(user.id, body.botId) ? body.botId : null;
+  const seq = typeof body?.seq === 'number' && Number.isSafeInteger(body.seq) ? body.seq : null;
+  const flow = token();
+  const callback = new URL(`${env.serverUrl}/api/apps/callback`);
+  callback.searchParams.set('flow', flow);
+  try {
+    const link = await startConnect(user.id, slug, callback.toString());
+    if (!link.connectedAccountId) return c.json({ error: 'Composio did not start a linked account' }, 502);
+    db.prepare('DELETE FROM app_link_attempts WHERE created_at < ?').run(now() - LOGIN_TTL_MS);
+    db.prepare('INSERT INTO app_link_attempts(id,user_id,toolkit,account_id,bot_id,row_seq,created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(flow, user.id, slug, link.connectedAccountId, botId, seq ?? null, now());
+    return c.json({ redirectUrl: link.redirectUrl });
+  } catch {
+    return c.json({ error: 'Could not open the authorization link. Check whether the toolkit requires a custom auth configuration in Composio.' }, 502);
+  }
 });
 
 api.get('/apps/callback', async (c) => {
-  const userId = userFromCookieHeader(c.req.header('cookie'))?.id ?? '';
-  const slug = c.req.query('slug') ?? '';
-  // This route is unauthenticated and reflects `slug` into the page, so accept only toolkit-slug shapes.
-  if (!/^[a-z0-9_-]{1,64}$/i.test(slug)) return c.text('Invalid app.', 400);
-  const botId = c.req.query('bot');
-  const seq = Number(c.req.query('seq') ?? 0);
-  const ok = c.req.query('status') !== 'failed';
-  const userExists = db.prepare('SELECT 1 FROM users WHERE id=?').get(userId);
-  if (userExists && ok) {
-    const connected = await connectedToolkits(userId).catch(() => new Set<string>());
-    if (connected.has(slug)) {
-      hub.emit(userId, { type: 'connections' });
-      // Resume the Bot only for the pending connect card that started this flow, so a replayed or
-      // forged callback URL can't start extra (paid) turns.
-      const row = botId && seq && ownBot(userId, botId) ? getRow(botId, seq) : null;
+  const user = userFromCookieHeader(c.req.header('cookie'));
+  const flow = c.req.query('flow') ?? '';
+  const attempt = user && /^[A-Za-z0-9_-]{43}$/.test(flow)
+    ? db.prepare('DELETE FROM app_link_attempts WHERE id=? AND user_id=? AND created_at>=? RETURNING toolkit,account_id,bot_id,row_seq')
+      .get(flow, user.id, now() - LOGIN_TTL_MS) as { toolkit: string; account_id: string; bot_id?: string; row_seq?: number } | undefined
+    : undefined;
+  const slug = attempt?.toolkit ?? '';
+  let ok = false;
+  if (user && attempt && c.req.query('status') !== 'failed') {
+    const accounts = await connectionsDetail(user.id).catch(() => []);
+    ok = accounts.some(account => account.id === attempt.account_id && account.toolkit === slug && account.status === 'ACTIVE');
+    if (ok) {
+      hub.emit(user.id, { type: 'connections' });
+      const botId = attempt.bot_id;
+      const seq = attempt.row_seq;
+      const row = botId && seq && ownBot(user.id, botId) ? getRow(botId, seq) : null;
       if (botId && row?.body.type === 'card' && row.body.card === 'connect' && row.body.status === 'pending' && row.body.toolkit === slug) {
-        const info = await toolkitInfo(slug);
         updateRow(botId, row.seq, { ...row.body, status: 'connected' });
-        enqueue(botId, { type: 'system', text: `The user connected ${info?.name ?? slug}. Continue with what you were doing.` });
+        enqueue(botId, { type: 'system', text: `The user connected ${row.body.toolkitName}. Continue with what you were doing.` });
       }
     }
   }

@@ -1,4 +1,7 @@
+import { canManageComposio, composioStatus, updateComposioKey } from './composio.js';
 import { Hono } from 'hono';
+import { availableLocalModels, saveLocalModel, selectedLocalModel } from './agent/models.js';
+import { env } from './env.js';
 import { db, now } from './db.js';
 import './db-config.js';
 import { newId } from './lib/ids.js';
@@ -18,7 +21,49 @@ import type { LibraryFile, Memory, Skill } from './types.js';
  */
 export const configApi = new Hono<AuthVars>();
 
-for (const p of ['/bots/*', '/skills/*', '/computer/*']) configApi.use(p, requireUser);
+for (const p of ['/bots/*', '/skills/*', '/computer/*', '/settings/*']) configApi.use(p, requireUser);
+
+configApi.get('/settings/models', async (c) => {
+  const selected = selectedLocalModel(c.get('user').id);
+  try {
+    return c.json({ selected, defaultModel: env.localModelName, models: await availableLocalModels(), reachable: true });
+  } catch {
+    return c.json({ selected, defaultModel: env.localModelName, models: [], reachable: false });
+  }
+});
+
+configApi.put('/settings/models', async (c) => {
+  const body = await c.req.json<{ model?: unknown }>().catch(() => null);
+  const model = body?.model;
+  if (typeof model !== 'string' || model.length > 200) return c.json({ error: 'Select a model' }, 400);
+  if (model) {
+    try {
+      if (!(await availableLocalModels()).includes(model)) return c.json({ error: 'That model is not available on your local server' }, 400);
+    } catch {
+      return c.json({ error: 'Start your local model server and refresh the list' }, 503);
+    }
+  }
+  const userId = c.get('user').id;
+  saveLocalModel(userId, model);
+  return c.json({ selected: selectedLocalModel(userId) });
+});
+
+configApi.get('/settings/composio', (c) => c.json(composioStatus()));
+
+configApi.put('/settings/composio', async (c) => {
+  if (!canManageComposio) return c.json({ error: 'Set COMPOSIO_API_KEY on the server' }, 403);
+  const origin = c.req.header('origin');
+  if (!origin || !env.trustedOrigins.includes(origin)) return c.json({ error: 'Open local Marion Agent settings to change the key' }, 403);
+  const body = await c.req.json<{ key?: unknown }>().catch(() => null);
+  const key = typeof body?.key === 'string' ? body.key.trim() : null;
+  if (key === null || key.length > 512 || (key && !/^[A-Za-z0-9._-]{8,512}$/.test(key))) return c.json({ error: 'Enter a valid Composio project key' }, 400);
+  try {
+    return c.json(await updateComposioKey(key));
+  } catch (error) {
+    const message = (error as NodeJS.ErrnoException).code ? 'Could not save the key on this machine' : (error as Error).message;
+    return c.json({ error: message }, 502);
+  }
+});
 
 const ownBot = (userId: string, id: string) => {
   const b = getBotRow(id);

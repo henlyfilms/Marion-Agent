@@ -1,8 +1,62 @@
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { Composio } from '@composio/core';
 import { OpenAIResponsesProvider } from '@composio/openai';
 import { db } from './db.js';
 import { env } from './env.js';
 import type { Toolkit } from './types.js';
+
+const keyManagedByEnvironment = Boolean(env.composioKey);
+const connectorFile = join(dirname(env.dbPath), 'composio.key');
+export const canManageComposio = env.devLogin && !keyManagedByEnvironment;
+if (canManageComposio) {
+  try { env.composioKey = readFileSync(connectorFile, 'utf8').trim(); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('[composio] Could not read local project key');
+  }
+}
+let credentialRevision = 0;
+
+export function composioStatus() {
+  return { configured: Boolean(env.composioKey), editable: canManageComposio };
+}
+
+export async function updateComposioKey(key: string) {
+  if (!canManageComposio) throw new Error('Manage the project key through COMPOSIO_API_KEY on the server');
+  if (key) {
+    let response: Response;
+    try {
+      response = await fetch(`${REST}/toolkits?limit=1`, {
+        headers: { 'x-api-key': key }, signal: AbortSignal.timeout(10000), redirect: 'error',
+      });
+    } catch {
+      throw new Error('Could not reach Composio to verify the project key');
+    }
+    await response.body?.cancel();
+    if (response.status === 401 || response.status === 403) throw new Error('Composio rejected the project key or access is blocked');
+    if (!response.ok) throw new Error(`Composio key verification failed (HTTP ${response.status})`);
+    mkdirSync(dirname(connectorFile), { recursive: true });
+    const pending = `${connectorFile}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(pending, key + '\n', { mode: 0o600, flag: 'wx' });
+      renameSync(pending, connectorFile);
+    } finally {
+      rmSync(pending, { force: true });
+    }
+  } else {
+    rmSync(connectorFile, { force: true });
+  }
+  env.composioKey = key;
+  credentialRevision++;
+  const previous = client;
+  client = undefined;
+  void previous?.triggers.unsubscribe().catch(() => console.warn('[composio] Could not close previous trigger subscription'));
+  catalogCache = null;
+  sessionCache.clear();
+  db.exec('DELETE FROM composio_sessions; DELETE FROM app_link_attempts');
+  return composioStatus();
+}
 
 let client: Composio<OpenAIResponsesProvider> | undefined;
 export function composio() {
@@ -13,8 +67,8 @@ export function composio() {
 const REST = 'https://backend.composio.dev/api/v3.1';
 async function rest<T = any>(path: string): Promise<T> {
   if (!env.composioKey) throw new Error('Configure COMPOSIO_API_KEY for connected apps');
-  const res = await fetch(`${REST}${path}`, { headers: { 'x-api-key': env.composioKey } });
-  if (!res.ok) throw new Error(`Composio ${path}: ${res.status} ${await res.text()}`);
+  const res = await fetch(`${REST}${path}`, { headers: { 'x-api-key': env.composioKey }, signal: AbortSignal.timeout(12000), redirect: 'error' });
+  if (!res.ok) throw new Error(`Composio catalog request failed (HTTP ${res.status})`);
   return res.json() as Promise<T>;
 }
 
@@ -25,6 +79,7 @@ let catalogCache: { at: number; items: CatalogItem[] } | null = null;
 
 export async function catalog(): Promise<CatalogItem[]> {
   if (!env.composioKey) return [];
+  const revision = credentialRevision;
   if (catalogCache && Date.now() - catalogCache.at < 3600_000) return catalogCache.items;
   const items: CatalogItem[] = [];
   let cursor: string | undefined;
@@ -44,6 +99,7 @@ export async function catalog(): Promise<CatalogItem[]> {
     cursor = r.next_cursor;
     if (!cursor) break;
   }
+  if (revision !== credentialRevision) return [];
   catalogCache = { at: Date.now(), items };
   return items;
 }
@@ -61,7 +117,7 @@ export async function connectedToolkits(userId: string): Promise<Set<string>> {
   return new Set(items.map((i) => i.toolkit?.slug ?? i.toolkitSlug).filter(Boolean));
 }
 
-export async function connectionsDetail(userId: string) {
+export async function connectionsDetail(userId: string): Promise<{ id: string; toolkit: string; status: string }[]> {
   const r = await composio().connectedAccounts.list({ userIds: [userId] } as any);
   return ((r as any).items ?? []).map((i: any) => ({ id: i.id, toolkit: i.toolkit?.slug ?? i.toolkitSlug, status: i.status }));
 }
@@ -78,6 +134,7 @@ export async function disconnect(userId: string, toolkit: string) {
 const sessionCache = new Map<string, any>();
 
 export async function sessionFor(userId: string): Promise<any> {
+  const revision = credentialRevision;
   const cached = sessionCache.get(userId);
   if (cached) return cached;
   const row = db.prepare('SELECT session_id FROM composio_sessions WHERE user_id=?').get(userId) as any;
@@ -87,8 +144,10 @@ export async function sessionFor(userId: string): Promise<any> {
   }
   if (!session) {
     session = await composio().create(userId, { manageConnections: false } as any);
+    if (revision !== credentialRevision) throw new Error('Composio project changed. Try again.');
     db.prepare('INSERT OR REPLACE INTO composio_sessions(user_id, session_id) VALUES (?,?)').run(userId, session.sessionId);
   }
+  if (revision !== credentialRevision) throw new Error('Composio project changed. Try again.');
   sessionCache.set(userId, session);
   return session;
 }

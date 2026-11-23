@@ -28,6 +28,15 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   connected_account_id TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_link_attempts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  toolkit TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  bot_id TEXT,
+  row_seq INTEGER,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS computers (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'absent',

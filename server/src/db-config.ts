@@ -20,6 +20,10 @@ addColumn('skills', 'updated_at', 'INTEGER');
 addColumn('memories', 'source', "TEXT NOT NULL DEFAULT 'chat'");
 
 db.exec(`
+CREATE TABLE IF NOT EXISTS local_model_preferences (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  model TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS memory_jobs (
   bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
   last_consolidated_at INTEGER NOT NULL DEFAULT 0,

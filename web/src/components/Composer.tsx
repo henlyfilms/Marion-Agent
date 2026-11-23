@@ -5,6 +5,7 @@ import { displayName, useStore } from '../store';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
+import { voiceApi, type VoiceStatus } from '../voice/api';
 import { useDictation } from '../voice/dictation';
 
 const MAX_H = 200;
@@ -12,11 +13,19 @@ const drafts = new Map<string, string>();
 
 export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [text, setText] = useState(() => drafts.get(bot.id) ?? '');
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const setModal = useStore((s) => s.setModal);
+  const localCall = useStore(s => s.localVoiceBotId === bot.id);
+  useEffect(() => { voiceApi.status().then(setVoiceStatus).catch(() => {}); }, []);
+  const openCall = () => {
+    if (voiceStatus?.localSpeech) useStore.setState({ localVoiceBotId: bot.id });
+    else if (voiceStatus?.realtime) startCall(bot.id);
+    else setError('Set up a speech provider in Settings → Audio.');
+  };
 
   // Per-bot drafts.
   useEffect(() => { setText(drafts.get(bot.id) ?? ''); setError(null); ref.current?.focus(); }, [bot.id]);
@@ -80,6 +89,9 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   return (
     <div className="composer-area">
       {error && <div className="composer__error">{error} <button type="button" className="link-btn" onClick={() => setError(null)}>Dismiss</button></div>}
+      {(sending || dictation.state === 'transcribing') && <div className="composer__progress" role="status">
+        <span className="loading-dot" aria-hidden="true" />{sending ? 'Sending…' : 'Transcribing…'}
+      </div>}
       <div className={`composer${multiline ? ' is-multiline' : ''}`}>
         <div className="composer__left">
           <span className="composer__plus-anchor">
@@ -118,15 +130,24 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             aria-pressed={dictation.state === 'recording'}
             title={dictation.state === 'recording' ? 'Release or click to stop · Esc cancels' : dictation.state === 'transcribing' ? 'Transcribing…' : 'Hold to dictate, or click to start'}
             disabled={dictation.state === 'transcribing'}
-            onPointerDown={dictation.onPointerDown}
+            onPointerDown={event => {
+              if (voiceStatus?.localSpeech || voiceStatus?.realtime) dictation.onPointerDown(event);
+              else setError('Set up a speech provider in Settings → Audio.');
+            }}
             onPointerUp={dictation.onPointerUp}
-            onKeyDown={dictation.onKeyDown}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                if (voiceStatus?.localSpeech || voiceStatus?.realtime) dictation.onKeyDown(event);
+                else { event.preventDefault(); setError('Set up a speech provider in Settings → Audio.'); }
+              }
+            }}
+            onPointerCancel={dictation.cancel}
             onContextMenu={(e) => e.preventDefault()}
           >
             <Icon name="mic" opacity={0.56} />
           </button>
-          {inCall && !hasText ? (
-            <button type="button" className="composer__cta is-in-call" onClick={endCall} aria-label="End voice call" title="End voice call">
+          {(inCall || localCall) && !hasText ? (
+            <button type="button" className="composer__cta is-in-call" onClick={() => localCall ? useStore.setState({ localVoiceBotId: null }) : endCall()} aria-label="End voice call" title="End voice call">
               <Icon name="voice_a" size={16} />
             </button>
           ) : running && !hasText ? (
@@ -137,7 +158,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             <button
               type="button"
               className="composer__cta"
-              onClick={hasText ? send : () => startCall(bot.id)}
+              onClick={hasText ? send : openCall}
               disabled={hasText && sending}
               aria-label={hasText ? 'Send' : `Start voice chat with ${bot.name}`}
               title={hasText ? 'Send (Enter)' : 'Start voice chat'}

@@ -29,7 +29,14 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 let optionsPromise: Promise<VoiceOptions> | null = null;
 
+export interface VoiceStatus { realtime: boolean; localSpeech: boolean }
+
 export const voiceApi = {
+  async status(): Promise<VoiceStatus> {
+    const response = await fetch('/api/voice/status');
+    if (!response.ok) throw new Error('Could not check voice availability');
+    return response.json();
+  },
   options: () => (optionsPromise ??= fetch('/api/voice/options', { credentials: 'include' }).then((r) => {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json() as Promise<VoiceOptions>;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Toolkit } from '@shared/types';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { api, isConnectedMessage, openPopup, type AppsResponse } from '../../lib/api';
+import { useConfigUI } from '../../configStore';
 import { useStore } from '../../store';
 import { Icon } from '../Icon';
 import { Menu } from '../Menu';
@@ -144,6 +145,7 @@ export function ConnectAppsModal() {
   let body: React.ReactNode;
   if (error) body = <div className="apps-empty">Couldn’t load apps. {error}</div>;
   else if (!data && loading) body = <div className="apps-empty">Loading apps…</div>;
+  else if (data && !data.configured) body = <div className="apps-empty"><button type="button" className="btn btn--primary" onClick={() => { close(); useConfigUI.getState().openAppSettings('apps'); }}>Set up Composio</button></div>;
   else if (view.kind === 'connected') body = connectedApps.length ? <Section title="Connected" apps={connectedApps} onChanged={refresh} /> : <div className="apps-empty">No apps connected yet.</div>;
   else if (searching || view.kind === 'category') {
     body = apps.length ? (

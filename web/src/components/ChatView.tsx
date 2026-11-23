@@ -8,12 +8,14 @@ import { Composer } from './Composer';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
 import { Transcript } from './Transcript';
+import { LocalVoicePanel } from './LocalVoicePanel';
 import { VoiceCallBar } from './VoiceCallBar';
 
 export function ChatView() {
   const bot = useSelectedBot();
   const transcript = useStore((s) => (bot ? s.transcripts[bot.id] : undefined));
   const live = useStore((s) => (bot ? s.live[bot.id] : undefined));
+  const localVoice = useStore(s => s.localVoiceBotId === bot?.id);
   const detailsOpen = useStore((s) => s.detailsOpen);
   const set = useStore((s) => s.set);
   const [menu, setMenu] = useState(false);
@@ -34,7 +36,8 @@ export function ChatView() {
     <main className="chat" style={botVars(bot.avatarColor)}>
       <Transcript bot={bot} rows={rows} live={live} loaded={!!transcript?.loaded} />
       <VoiceCallBar />
-      <Composer bot={bot} running={!!live?.isRunning} />
+      {localVoice && <LocalVoicePanel key={bot.id} bot={bot} close={() => set({ localVoiceBotId: null })} />}
+      <Composer key={bot.id} bot={bot} running={!!live?.isRunning} />
       <header className="chat__header">
         <span className="chat__pill-anchor">
           <button type="button" className="chat__pill" onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu}>

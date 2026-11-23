@@ -10,10 +10,13 @@ import { computerStatusText } from '../DetailsPanel';
 import { Icon } from '../Icon';
 import { ToolkitLogo } from '../ToolkitLogo';
 import { Glyph } from './glyphs';
+import { AudioSettings, ComposioSettings, LocalModelSettings } from './LocalSettings';
 import { ConfirmButton } from './ui';
 
 const SECTIONS: { id: AppSection; label: string }[] = [
   { id: 'general', label: 'General' },
+  { id: 'models', label: 'Models' },
+  { id: 'audio', label: 'Audio' },
   { id: 'computer', label: 'Computer' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'apps', label: 'Connected apps' },
@@ -46,6 +49,8 @@ export function AppSettings() {
         <button type="button" className="app-settings__close icon-btn" onClick={close} aria-label="Close settings" title="Close (Esc)"><Icon name="close" opacity={0.8} /></button>
         <div className="app-settings__page">
           {section === 'general' && <GeneralSection />}
+          {section === 'models' && <><PageHead title="Models" /><LocalModelSettings /></>}
+          {section === 'audio' && <><PageHead title="Audio" /><AudioSettings /></>}
           {section === 'computer' && <ComputerSection />}
           {section === 'permissions' && <PermissionsSection />}
           {section === 'apps' && <AppsSection />}
@@ -226,7 +231,8 @@ function AppsSection() {
   const openApps = () => { useConfigUI.getState().closeAppSettings(); useStore.getState().setModal('apps'); };
   return (
     <>
-      <PageHead title="Connected apps" sub="Apps your Bots can use for you, like email, calendar and docs." />
+      <PageHead title="Connected apps" />
+      <ComposioSettings onReady={openApps} />
       <section className="cfg-section">
         <div className="cfg-card">
           <div className="cfg-row">
@@ -234,7 +240,7 @@ function AppsSection() {
               <div className="cfg-row__title">{apps === null ? 'Checking…' : apps.length ? `${apps.length} app${apps.length === 1 ? '' : 's'} connected` : 'No apps connected yet'}</div>
               <div className="cfg-row__sub">Bots ask before doing anything that changes data in an app.</div>
             </div>
-            <button type="button" className="cfg-btn cfg-btn--primary" onClick={openApps}>{apps?.length ? 'Manage apps' : 'Connect apps'}</button>
+
           </div>
           {apps?.map((a) => (
             <div key={a.slug} className="cfg-row">

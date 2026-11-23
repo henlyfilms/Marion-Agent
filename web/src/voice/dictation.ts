@@ -19,11 +19,13 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
   const [state, setState] = useState<DictationState>('idle');
   const rec = useRef<{ mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; downAt: number; cancelled: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
   const starting = useRef(false);
+  const generation = useRef(0);
   const toggleMode = useRef(false);
   const cb = useRef({ onText, onError, language });
   cb.current = { onText, onError, language };
 
   const finish = useCallback((cancel = false) => {
+    if (cancel) generation.current++;
     const r = rec.current;
     if (!r) return;
     r.cancelled = cancel;
@@ -36,25 +38,32 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
     if (rec.current || starting.current) return;
     if (typeof MediaRecorder === 'undefined') { cb.current.onError('Dictation isn’t supported in this browser.'); return; }
     starting.current = true;
-    const downAt = Date.now();
+    const id = generation.current;
+    let stream: MediaStream | undefined;
     try {
-      const stream = await openMic();
+      stream = await openMic();
+      if (id !== generation.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const captured = stream;
+      const downAt = Date.now();
       const mime = pickMime();
       const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       const r = { mr, stream, chunks: [] as Blob[], downAt, cancelled: false, timer: setTimeout(() => finish(), MAX_MS) };
       rec.current = r;
       mr.ondataavailable = (e) => { if (e.data.size) r.chunks.push(e.data); };
       mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
+        captured.getTracks().forEach((t) => t.stop());
         rec.current = null;
         toggleMode.current = false;
         if (r.cancelled || !r.chunks.length || Date.now() - r.downAt < 250) { setState('idle'); return; }
         setState('transcribing');
         try {
           const text = await voiceApi.transcribe(new Blob(r.chunks, { type: mr.mimeType || mime || 'audio/webm' }), cb.current.language);
-          if (text) cb.current.onText(text);
+          if (text && id === generation.current) cb.current.onText(text);
         } catch (e) {
-          cb.current.onError((e as Error).message || 'Transcription failed');
+          if (id === generation.current) cb.current.onError((e as Error).message || 'Transcription failed');
         } finally {
           setState('idle');
         }
@@ -62,7 +71,8 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
       mr.start(250);
       setState('recording');
     } catch (e) {
-      cb.current.onError(micErrorMessage(e));
+      stream?.getTracks().forEach((track) => track.stop());
+      if (id === generation.current) cb.current.onError(micErrorMessage(e));
       setState('idle');
     } finally {
       starting.current = false;
@@ -91,7 +101,7 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
   }, [finish]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return;
     e.preventDefault();
     if (rec.current) finish();
     else { toggleMode.current = true; void begin(); }
@@ -106,5 +116,5 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
   }, [state, finish]);
   useEffect(() => () => finish(true), [finish]);
 
-  return { state, onPointerDown, onPointerUp, onKeyDown, cancel: () => finish(true) };
+  return { state, onPointerDown, onPointerUp, onKeyDown, begin, finish, cancel: () => finish(true) };
 }

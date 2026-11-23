@@ -3,6 +3,7 @@
 // This module mints the ephemeral secret, builds the voice agent's prompt and tools, serves the relay
 // tools, records call start/end rows, and proxies TTS (voice preview) and STT (composer dictation).
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import OpenAI from 'openai';
 import { db, now } from './db.js';
 import { env } from './env.js';
@@ -17,6 +18,8 @@ export const voiceApi = new Hono<AuthVars>();
 
 const XAI = 'https://api.x.ai/v1';
 const VOICE_MODEL = process.env.XAI_VOICE_MODEL ?? 'grok-voice-latest';
+const LOCAL_STT_URL = process.env.MARION_STT_URL?.trim();
+const LOCAL_STT_KEY = process.env.MARION_STT_API_KEY?.trim();
 const STT_MODEL = process.env.XAI_STT_MODEL ?? 'grok-voice-transcribe-2.0';
 const SAMPLE_RATE = 24000;
 const xaiHeaders = () => ({ Authorization: `Bearer ${env.xaiKey}` });
@@ -233,7 +236,12 @@ const fmtDuration = (ms: number) => {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 };
 
+voiceApi.get('/status', (c) => c.json({
+  realtime: Boolean(env.xaiKey), localSpeech: Boolean(LOCAL_STT_URL),
+}));
+
 voiceApi.use('*', async (c, next) => {
+  if (c.req.path.endsWith('/stt') && LOCAL_STT_URL) return next();
   if (!env.xaiKey) return c.json({ error: 'Configure XAI_API_KEY for voice features' }, 503);
   await next();
 });
@@ -440,22 +448,28 @@ voiceApi.post('/preview', async (c) => {
   });
 });
 
-voiceApi.post('/stt', async (c) => {
+voiceApi.post('/stt', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.json({ error: 'Recording too large' }, 413) }), async (c) => {
   const form = await c.req.formData().catch(() => null);
   const file = form?.get('file');
   if (!file || typeof file === 'string') return c.json({ error: 'file required' }, 400);
   if (file.size > 25 * 1024 * 1024) return c.json({ error: 'recording too long' }, 413);
   if (file.size < 200) return c.json({ text: '' });
   const out = new FormData();
-  out.append('model', STT_MODEL);
+  out.append('model', LOCAL_STT_URL ? process.env.MARION_STT_MODEL || 'whisper-1' : STT_MODEL);
   const lang = String(form?.get('language') ?? '');
   if (lang && lang !== 'auto' && /^[a-z]{2}$/.test(lang)) out.append('language', lang);
   out.append('file', file, file.name || 'dictation.webm'); // must be last
-  const r = await fetch(`${XAI}/stt`, { method: 'POST', headers: xaiHeaders(), body: out, signal: AbortSignal.timeout(60_000) }).catch(() => null);
+  const headers = LOCAL_STT_URL
+    ? LOCAL_STT_KEY ? { Authorization: `Bearer ${LOCAL_STT_KEY}` } : undefined
+    : xaiHeaders();
+  const r = await fetch(LOCAL_STT_URL || `${XAI}/stt`, {
+    method: 'POST', headers, body: out, signal: AbortSignal.timeout(90_000), redirect: 'error',
+  }).catch(() => null);
   if (!r?.ok) {
-    console.warn('[voice] stt failed', r?.status, (await r?.text().catch(() => ''))?.slice(0, 200));
+    console.warn('[voice] stt failed', r?.status);
     return c.json({ error: 'Transcription failed' }, 502);
   }
-  const j = (await r.json()) as { text?: string };
-  return c.json({ text: (j.text ?? '').trim() });
+  const result = await r.json().catch(() => null) as { text?: unknown } | null;
+  if (typeof result?.text !== 'string') return c.json({ error: 'Speech server returned no transcript' }, 502);
+  return c.json({ text: result.text.trim() });
 });

@@ -193,3 +193,8 @@
   max-width: 960px; margin: 0 auto 8px; padding: 6px 12px; border-radius: 12px; background: var(--color-danger-bg); color: var(--color-danger-text);
   font-size: 13px; line-height: 18px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+
+.composer__progress { display: flex; align-items: center; gap: 8px; padding: 0 10px 7px; font-size: 12px; color: var(--color-text-secondary); }
+.loading-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: marion-loading 1s ease-in-out infinite alternate; }
+@keyframes marion-loading { from { opacity: 0.35; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
+.local-voice { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 auto 8px; padding: 12px; max-width: min(90%, 750px); border: 1px solid var(--color-border); border-radius: 12px; }

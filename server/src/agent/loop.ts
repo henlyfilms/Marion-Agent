@@ -1,6 +1,5 @@
-import { localInput, localModel } from './models.js';
+import { localInput, localModel, selectedLocalModel } from './models.js';
 import { db, now } from '../db.js';
-import { env } from '../env.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { appendHistory, appendRow, emitBot, getBotRow, getRow, loadHistory, setLive, updateRow } from '../store.js';
@@ -130,9 +129,10 @@ async function runTurn(botId: string, trigger: Trigger) {
       ...(await composioTools(userId)),
     ];
 
+    const model = selectedLocalModel(userId);
     for (let step = 0; step < MAX_STEPS; step++) {
       if (ctrl.signal.aborted) throw new Error('interrupted');
-      const result = await callModel(ctx, tools, ctrl.signal);
+      const result = await callModel(ctx, model, tools, ctrl.signal);
       appendHistory(botId, result.output);
       const calls = result.output.filter((o: any) => o.type === 'function_call');
       if (!calls.length) break;
@@ -247,7 +247,7 @@ async function finishPending(ctx: ToolCtx, st: PendingState, _reason: string) {
 
 // ---------- model call with streaming into a message row ----------
 
-async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promise<{ output: any[] }> {
+async function callModel(ctx: ToolCtx, model: string, tools: any[], signal: AbortSignal): Promise<{ output: any[] }> {
   const { botId, userId } = ctx;
   const bot = getBotRow(botId);
   // Runs inside the bot's serial queue, so compaction can't race a turn.
@@ -256,7 +256,7 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
   const input = localInput([{ role: 'system', content: await systemPrompt(userId, botId) }, ...pruneImages(repairHistory(history))]);
 
   const body: any = {
-    model: env.localModelName,
+    model,
     input,
     tools,
     reasoning: { effort: bot.effort ?? 'medium' },
@@ -273,7 +273,7 @@ async function callModel(ctx: ToolCtx, tools: any[], signal: AbortSignal): Promi
       body.tools = functionSchemas();
       stream = await localModel.responses.create(body, { signal });
     } else if (e?.name === 'APIConnectionError' || e?.status === 404) {
-      throw new Error(`Local model ${env.localModelName} is unavailable. Start your model server and check MARION_LOCAL_MODEL and MARION_LOCAL_MODEL_URL.`);
+      throw new Error(`Local model ${model} is unavailable. Start your model server and check MARION_LOCAL_MODEL and MARION_LOCAL_MODEL_URL.`);
     } else throw e;
   }
 

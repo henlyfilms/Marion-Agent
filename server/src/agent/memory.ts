@@ -1,7 +1,7 @@
-import { localModel } from './models.js';
+import { localModel, modelForBot } from './models.js';
 import { db, now } from '../db.js';
 import '../db-config.js';
-import { appEnv, env } from '../env.js';
+import { appEnv } from '../env.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { getBotRow, getLive } from '../store.js';
@@ -149,10 +149,10 @@ export function renderTranscript(items: any[], maxChars = 200_000): string {
   return out;
 }
 
-async function compactWithSummary(old: any[]): Promise<any[]> {
+async function compactWithSummary(botId: string, old: any[]): Promise<any[]> {
   const transcript = renderTranscript(old);
   const res: any = await localModel.responses.create({
-    model: env.localModelName,
+    model: modelForBot(botId),
     input: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: transcript }],
     reasoning: { effort: 'low' },
   } as any);
@@ -191,7 +191,7 @@ export async function maybeCompact(botId: string, items: any[], opts: { force?: 
   const method = 'summary';
   let replaced: any[];
   try {
-    replaced = await compactWithSummary(old);
+    replaced = await compactWithSummary(botId, old);
   } catch (error) {
     console.warn(`[memory] summary failed for ${botId}`, error);
     compactCooldown.set(botId, now() + 10 * 60_000);
@@ -277,7 +277,7 @@ export async function consolidateBot(botId: string, opts: { upTo?: number } = {}
 
   const existing = (db.prepare('SELECT text FROM memories WHERE bot_id=? ORDER BY created_at DESC LIMIT 200').all(botId) as any[]).map((m) => m.text as string);
   const res: any = await localModel.responses.create({
-    model: env.localModelName,
+    model: modelForBot(botId),
     input: [
       { role: 'system', content: CONSOLIDATE_PROMPT },
       { role: 'user', content: `EXISTING MEMORIES:\n${existing.length ? existing.map((t) => `- ${t}`).join('\n') : '(none)'}\n\nRECENT CONVERSATION:\n${transcript}` },

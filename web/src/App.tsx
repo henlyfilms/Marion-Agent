@@ -71,6 +71,16 @@ function Shell() {
 }
 
 export function App() {
+  useEffect(() => {
+    const refresh = (event: KeyboardEvent) => {
+      if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        window.location.reload();
+      }
+    };
+    window.addEventListener('keydown', refresh);
+    return () => window.removeEventListener('keydown', refresh);
+  }, []);
   const authChecked = useStore((s) => s.authChecked);
   const user = useStore((s) => s.user);
   useEffect(() => { useStore.getState().checkAuth(); }, []);

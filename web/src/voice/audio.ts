@@ -1,3 +1,8 @@
+import { prefGet, prefSet } from '../lib/prefs';
+
+export function microphoneId() { return prefGet('microphone') ?? ''; }
+export function setMicrophoneId(id: string) { prefSet('microphone', id); }
+
 // Browser audio for voice calls: mic capture → PCM16 @ 24 kHz (AudioWorklet), and a gapless PCM16 player.
 
 export const RATE = 24000;
@@ -59,16 +64,16 @@ export function createAudioContext(): AudioContext {
 export function micErrorMessage(e: unknown): string {
   const name = (e as { name?: string })?.name;
   if (name === 'NotAllowedError' || name === 'SecurityError') return 'Microphone access was blocked. Allow it in your browser’s site settings.';
-  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'No microphone found.';
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'The selected microphone is unavailable. Choose another input in Settings → Audio.';
   if (name === 'NotReadableError') return 'Your microphone is in use by another app.';
   if (!navigator.mediaDevices?.getUserMedia) return 'This browser can’t use the microphone here (it needs HTTPS or localhost).';
   return (e as Error)?.message || 'Could not open the microphone.';
 }
 
-export async function openMic(): Promise<MediaStream> {
+export async function openMic(deviceId = microphoneId()): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error('no mediaDevices'), { name: 'NotSupportedError' });
   return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
   });
 }
 

@@ -6,6 +6,8 @@ dist/
 *.db
 *.db-*
 data/
+composio.key
+composio.key.*.tmp
 .DS_Store
 
 # Local-only material (not part of the open-source repo)

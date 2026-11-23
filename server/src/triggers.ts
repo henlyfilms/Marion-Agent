@@ -10,7 +10,7 @@ import { appendRow } from './store.js';
  */
 
 let enqueueFn: ((botId: string, t: any) => void) | null = null;
-let subscribed = false;
+let subscriptionClient: ReturnType<typeof composio> | null = null;
 
 export const isEventSchedule = (schedule: string) => schedule.startsWith('event:');
 
@@ -29,17 +29,23 @@ export async function initTriggers(enqueue: (botId: string, t: any) => void) {
 }
 
 async function ensureSubscribed() {
-  if (subscribed) return;
-  subscribed = true;
+  let client: ReturnType<typeof composio> | undefined;
   try {
-    await composio().triggers.subscribe(
-      (data: any) => onTrigger(data),
+    client = composio();
+    if (subscriptionClient === client) return;
+    const activeClient = client;
+    subscriptionClient = activeClient;
+    await activeClient.triggers.subscribe(
+      (data) => {
+        try { if (activeClient === composio()) onTrigger(data); }
+        catch { /* Credentials were removed. */ }
+      },
       undefined,
-      (err) => console.warn('[triggers] subscription error', JSON.stringify(err).slice(0, 300)),
+      () => console.warn('[triggers] subscription error'),
     );
     console.log('[triggers] realtime subscription active');
   } catch (e) {
-    subscribed = false;
+    if (subscriptionClient === client) subscriptionClient = null;
     console.warn('[triggers] subscribe failed', (e as Error).message);
   }
 }

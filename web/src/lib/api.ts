@@ -20,7 +20,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return res.json() as Promise<T>;
 }
 
-export interface AppsResponse { apps: Toolkit[]; connected: string[]; categories: string[]; total: number }
+export interface AppsResponse { configured: boolean; apps: Toolkit[]; connected: string[]; categories: string[]; total: number }
 
 export interface RoomMember { id: string; name: string; label: string; avatarShape: string; avatarColor: string }
 

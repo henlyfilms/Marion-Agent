@@ -27,6 +27,7 @@ interface State {
   sidebarCollapsed: boolean;
   modal: ModalKind;
   viewerOpen: boolean;
+  localVoiceBotId: string | null;
 
   checkAuth(): Promise<void>;
   loadBots(): Promise<void>;
@@ -63,6 +64,7 @@ export const useStore = create<State>((set, get) => ({
   sidebarCollapsed: lsGet(LS_SIDEBAR) === '1',
   modal: null,
   viewerOpen: false,
+  localVoiceBotId: null,
 
   async checkAuth() {
     try {

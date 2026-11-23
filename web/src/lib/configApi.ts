@@ -34,7 +34,14 @@ export interface ComputerDetails {
 
 export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode'>>;
 
+export interface LocalModels { selected: string; defaultModel: string; models: string[]; reachable: boolean }
+export interface ComposioStatus { configured: boolean; editable: boolean }
+
 export const configApi = {
+  models: () => req<LocalModels>('GET', '/settings/models'),
+  selectModel: (model: string) => req<{ selected: string }>('PUT', '/settings/models', { model }),
+  composio: () => req<ComposioStatus>('GET', '/settings/composio'),
+  saveComposioKey: (key: string) => req<ComposioStatus>('PUT', '/settings/composio', { key }),
   settings: (botId: string) => req<BotSettingsBundle>('GET', `/bots/${botId}/settings`),
   updateBot: (botId: string, p: BotPatch) => req<{ bot: Bot }>('PATCH', `/bots/${botId}`, p),
   deleteBot: (botId: string) => req<{ ok: true }>('DELETE', `/bots/${botId}`),
