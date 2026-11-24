@@ -1,3 +1,4 @@
+import { orchestrationFor } from './agent/orchestration-settings.js';
 import { saveAttachments, type UploadedAttachment } from './attachments.js';
 import { db, now } from './db.js';
 import { hub } from './lib/hub.js';
@@ -46,6 +47,7 @@ export function toBot(r: any): Bot {
     templateId: r.template_id ?? null,
     contextTokens: r.context_tokens ?? null,
     compactAtTokens: r.compact_at_tokens ?? null,
+    orchestration: r.kind === 'room' ? undefined : orchestrationFor(r),
     integrations: (() => { try { return r.integrations ? JSON.parse(r.integrations) : []; } catch { return []; } })(),
   };
 }

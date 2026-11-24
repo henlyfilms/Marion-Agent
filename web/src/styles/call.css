@@ -1,0 +1,82 @@
+/* Voice call stage (top of the chat) */
+.call-stage {
+  --accent: var(--bot-action, var(--color-primary));
+  position: relative; z-index: 3; display: flex; align-items: center; gap: 16px;
+  width: min(720px, calc(100% - 32px)); margin: 10px auto 4px; padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--color-border-tertiary)); border-radius: 18px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--color-bg-elevated)), var(--color-bg-elevated) 70%);
+  box-shadow: 0 10px 30px -18px color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: call-in 360ms cubic-bezier(.2, .9, .25, 1.1) both;
+}
+.call-stage.is-leaving { animation: call-out 240ms ease-in both; }
+@keyframes call-in { from { opacity: 0; transform: translateY(-14px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes call-out { to { opacity: 0; transform: translateY(-10px) scale(.98); } }
+
+.call-stage__avatar { --level: 0; position: relative; display: grid; place-items: center; flex: none; width: 72px; height: 72px; border-radius: 50%; }
+.call-stage__avatar > :last-child { position: relative; z-index: 1; transition: transform 160ms ease; transform: scale(calc(1 + var(--level) * .08)); }
+.call-stage__ring { position: absolute; inset: 8px; border-radius: 50%; border: 2px solid var(--accent); opacity: 0; pointer-events: none; }
+/* Ringing: rings ripple outward. */
+.call-stage.is-ringing .call-stage__ring { animation: call-ripple 1.8s ease-out infinite; }
+.call-stage.is-ringing .call-stage__ring--2 { animation-delay: .6s; }
+.call-stage.is-ringing .call-stage__ring--3 { animation-delay: 1.2s; }
+.call-stage.is-ringing .call-stage__avatar > :last-child { animation: call-wiggle 1.1s ease-in-out infinite; }
+@keyframes call-ripple { from { opacity: .55; transform: scale(.9); } to { opacity: 0; transform: scale(1.55); } }
+@keyframes call-wiggle { 0%, 60%, 100% { transform: rotate(0); } 70% { transform: rotate(-6deg); } 80% { transform: rotate(6deg); } 90% { transform: rotate(-3deg); } }
+/* Speaking / hearing: rings follow the voice level. */
+.call-stage.is-speaking .call-stage__ring, .call-stage.is-hearing .call-stage__ring {
+  opacity: calc(.15 + var(--level) * .6); transform: scale(calc(1 + var(--level) * .45)); transition: transform 90ms linear, opacity 90ms linear;
+}
+.call-stage.is-speaking .call-stage__ring--2, .call-stage.is-hearing .call-stage__ring--2 { transform: scale(calc(1.08 + var(--level) * .7)); opacity: calc(var(--level) * .4); }
+.call-stage.is-speaking .call-stage__ring--3, .call-stage.is-hearing .call-stage__ring--3 { display: none; }
+.call-stage.is-speaking .call-stage__avatar { cursor: pointer; }
+/* Listening: a calm breathing ring. Thinking: a slow spin. */
+.call-stage.is-listening .call-stage__ring--1 { animation: call-breathe 2.6s ease-in-out infinite; }
+.call-stage.is-thinking .call-stage__ring--1, .call-stage.is-transcribing .call-stage__ring--1 {
+  opacity: .7; border-color: var(--accent) transparent transparent transparent; animation: call-spin 1s linear infinite;
+}
+@keyframes call-breathe { 0%, 100% { opacity: .12; transform: scale(1); } 50% { opacity: .35; transform: scale(1.12); } }
+@keyframes call-spin { to { transform: rotate(360deg); } }
+.call-stage.is-muted .call-stage__ring { display: none; }
+
+.call-stage__info { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.call-stage__name { display: flex; align-items: baseline; gap: 8px; font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.call-stage__time { color: var(--color-text-secondary); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.call-stage__status { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--color-text-secondary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-stage__model { overflow: hidden; text-overflow: ellipsis; color: var(--color-text-tertiary); }
+.call-stage.is-error .call-stage__status { color: var(--color-danger-text, #d05050); white-space: normal; }
+.call-stage__dots { display: inline-flex; gap: 3px; }
+.call-stage__dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: call-dot 1s ease-in-out infinite; }
+.call-stage__dots i:nth-child(2) { animation-delay: .15s; }
+.call-stage__dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes call-dot { 0%, 100% { opacity: .3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
+.call-stage__caption {
+  margin: 4px 0 0; font-size: 13px; line-height: 1.4; color: var(--color-ink);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
+  animation: call-caption 220ms ease both;
+}
+.call-stage__caption.is-user { color: var(--color-text-secondary); font-style: italic; }
+@keyframes call-caption { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+.call-stage__actions { display: flex; gap: 8px; flex: none; }
+.call-stage__btn {
+  display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
+  border: 1px solid var(--color-border-tertiary); background: var(--color-bg-chrome); color: var(--color-ink);
+  transition: transform 140ms ease, background-color 160ms ease;
+}
+.call-stage__btn:hover { background: var(--color-bg-hover); transform: scale(1.05); }
+.call-stage__btn:active { transform: scale(.95); }
+.call-stage__btn.is-on { background: var(--color-ink); color: var(--color-bg-elevated); }
+.call-stage__btn--end { border: 0; background: #e5484d; color: #fff; }
+.call-stage__btn--end:hover { background: #d13a40; }
+
+.composer__cta.is-call-ringing { animation: call-wiggle 1.1s ease-in-out infinite; }
+.composer__cta.is-in-call { background: #e5484d; color: #fff; }
+
+@media (max-width: 630px) {
+  .call-stage { gap: 10px; padding: 10px 12px; }
+  .call-stage__avatar { width: 56px; height: 56px; }
+  .call-stage__btn { width: 40px; height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .call-stage, .call-stage__ring, .call-stage__avatar > :last-child, .call-stage__caption, .call-stage__dots i { animation: none !important; }
+}

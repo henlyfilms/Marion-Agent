@@ -31,6 +31,15 @@ export function computerStatusText(c: ComputerState | null): string {
   }
 }
 
+/** Turn a raw desktop error (often a long Docker socket message) into one short, readable line. */
+export function friendlyComputerError(error: string | null | undefined): string {
+  if (!error) return '';
+  if (/docker (api|daemon)|docker\.sock|colima|cannot connect to the docker/i.test(error)) return 'Docker isn’t running. Start Colima or Docker Desktop.';
+  if (/no such image|pull access|image.+not found/i.test(error)) return 'The desktop image is missing. Rebuild it in Settings.';
+  const line = error.replace(/\s+/g, ' ').trim();
+  return line.length > 90 ? `${line.slice(0, 88)}…` : line;
+}
+
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button type="button" role="switch" aria-checked={on} aria-label={label} className={`toggle${on ? ' is-on' : ''}`} onClick={() => onChange(!on)}>
@@ -115,7 +124,7 @@ function ComputerCard({ bot, open }: { bot: Bot; open: boolean }) {
         }}>
         <span className="panel-row__text">
           <span className="panel-row__title">Bot's computer</span>
-          <span className="panel-row__meta">{computerStatusText(computer)}{computer?.error && computer.status === 'error' ? ` · ${computer.error}` : ''}</span>
+          <span className="panel-row__meta" title={computer?.error && computer.status === 'error' ? computer.error : undefined}>{computerStatusText(computer)}{computer?.error && computer.status === 'error' ? ` · ${friendlyComputerError(computer.error)}` : ''}</span>
         </span>
         <span className={`computer-thumb${shot ? ' has-shot' : ''}`}>
           {shot ? <img src={shot} alt="Bot's screen" /> : running || busy ? (

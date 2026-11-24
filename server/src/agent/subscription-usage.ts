@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import type { SubscriptionUsage, UsageWindow } from '../types.js';
+import { getSetting, setSetting } from '../features/schema.js';
 import {
   claudeIsolation, cliEnvironment, codexArgs, executable, googleSettings, initializeCodex,
   parseLine, requireClaudeSubscription, type SubscriptionProvider,
@@ -15,6 +16,13 @@ export const usageProviders = ['codex', 'claude', 'gemini'] as const;
 const maxAge = 60_000;
 const cache = new Map<SubscriptionProvider, { saved: SubscriptionUsage; expires: number }>();
 const pending = new Map<SubscriptionProvider, Promise<SubscriptionUsage>>();
+
+/** Highest share of any limit window used in the last reading (0–100), if one is cached. */
+export function lastUsedPercent(provider: SubscriptionProvider): number | undefined {
+  const saved = cache.get(provider)?.saved;
+  if (!saved?.windows.length) return undefined;
+  return Math.max(...saved.windows.map(window => window.usedPercent));
+}
 
 function usageWindow(id: string, label: string, usedPercent: unknown, resetsAt?: number): UsageWindow[] {
   if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)) return [];
@@ -173,4 +181,38 @@ export function readProvider(provider: SubscriptionProvider, desktop: boolean, r
 
 export function subscriptionUsage(desktop: boolean, refresh: boolean) {
   return Promise.all(usageProviders.map(provider => readProvider(provider, desktop, refresh)));
+}
+
+// ---------- plan labels ----------
+// The CLIs report the plan stored in their sign-in token, which lags behind an upgrade until the
+// owner signs in again (Claude still says "pro" after moving to Max). The owner's chosen plan wins.
+
+export const planOptions: Record<SubscriptionProvider, string[]> = {
+  claude: ['Claude Pro · $20/mo', 'Claude Max · $100/mo', 'Claude Max · $200/mo'],
+  codex: ['ChatGPT Plus · $20/mo', 'ChatGPT Pro · $200/mo'],
+  gemini: ['Google AI Pro · $20/mo', 'Google AI Ultra · $250/mo'],
+};
+const defaultPlans: Record<SubscriptionProvider, string> = {
+  claude: 'Claude Max · $100/mo',
+  codex: 'ChatGPT Plus · $20/mo',
+  gemini: 'Google AI Pro · $20/mo',
+};
+
+export const planLabels = (userId: string) => getSetting<Record<SubscriptionProvider, string>>(userId, 'plan-labels', defaultPlans);
+
+export function savePlanLabels(userId: string, input: Record<string, unknown>) {
+  const next = { ...planLabels(userId) };
+  for (const provider of usageProviders) {
+    const value = input[provider];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || !planOptions[provider].includes(value)) throw new Error('Choose one of the listed plans.');
+    next[provider] = value;
+  }
+  setSetting(userId, 'plan-labels', next);
+  return next;
+}
+
+export function withPlanLabel(userId: string, usage: SubscriptionUsage): SubscriptionUsage {
+  const plan = planLabels(userId)[usage.provider];
+  return plan ? { ...usage, plan } : usage;
 }

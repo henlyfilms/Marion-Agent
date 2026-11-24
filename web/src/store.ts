@@ -6,7 +6,7 @@ import { configApi } from './lib/configApi';
 
 import { showNotification } from './lib/notifications';
 
-export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'group' | null;
+export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'group' | 'team' | null;
 
 interface Transcript { generation: number; bySeq: Record<number, Row>; loaded: boolean }
 

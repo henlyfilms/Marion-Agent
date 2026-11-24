@@ -106,8 +106,8 @@
 .context-card__meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--color-text-tertiary); }
 .context-card__auto { position: relative; }
 .context-card__auto .menu { min-width: 170px; }
-.context-card__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.context-card__actions .cfg-btn { width: 100%; justify-content: center; }
+.context-card__actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 118px), 1fr)); gap: 6px; }
+.context-card__actions .cfg-btn { width: 100%; min-width: 0; justify-content: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-card__message { margin: 0; font-size: 12px; line-height: 17px; color: var(--color-text-secondary); }
 .panel-row--switch { min-height: 40px; }
 .panel-row__error { margin: 0 8px 8px; font-size: 12px; line-height: 16px; color: var(--color-danger); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }

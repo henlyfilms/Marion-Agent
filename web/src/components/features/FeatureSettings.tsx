@@ -171,17 +171,10 @@ export function NotificationsSection() {
 
 export function LifeLinkSection() {
   const [link, setLink] = useState<LifeLink | null>(null);
-  const [url, setUrl] = useState('');
   const [key, setKey] = useState('');
-  const [email, setEmail] = useState('');
   const [busy, setBusy] = useState('');
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
-  const load = async () => {
-    const data = await featuresApi.lifeLink();
-    setLink(data);
-    setUrl(current => current || data.settings.supabaseUrl);
-    setEmail(current => current || data.settings.lifeEmail);
-  };
+  const load = async () => setLink(await featuresApi.lifeLink());
   useEffect(() => { load().catch(e => setNote({ text: (e as Error).message, error: true })); }, []);
   const run = async (name: string, action: () => Promise<unknown>, done?: string) => {
     setBusy(name); setNote(null);
@@ -194,17 +187,17 @@ export function LifeLinkSection() {
     <>
       <div className="app-settings__head">
         <h1>Marion Life</h1>
-        <p>Copy every Marion Agent chat into your Marion Life database, so your Second Brain can find them. Chats update about a minute after each reply.</p>
+        <p>Copy every Marion Agent chat into Marion Life, so your Second Brain can find them. Chats update about a minute after each reply.</p>
       </div>
       <section className="cfg-section">
         <div className="cfg-card">
           <div className="cfg-row">
             <div className="cfg-row__text">
-              <div className="cfg-row__title">{s?.enabled ? 'Linked to Marion Life' : 'Not linked'}</div>
+              <div className="cfg-row__title">{s?.enabled ? `Linked to Marion Life${s.lifeEmail ? ` as ${s.lifeEmail}` : ''}` : 'Not linked'}</div>
               <div className="cfg-row__sub">
                 {s?.enabled
                   ? `${s.syncedChats} chat${s.syncedChats === 1 ? '' : 's'} copied${s.lastSyncAt ? ` · last ${relativeShort(s.lastSyncAt)}` : ''}`
-                  : 'One-time setup: run docs/marion-life-agent-chats.sql in Supabase → SQL Editor, then fill in the fields below.'}
+                  : 'In Marion Life, open Settings → Connections → Marion Agent → Connect Marion Agent, then paste the key here.'}
               </div>
             </div>
             {s?.enabled && <button type="button" className="cfg-btn cfg-btn--primary" disabled={!!busy} onClick={() => void run('sync', featuresApi.syncLife, 'All chats are copied.')}>{busy === 'sync' ? 'Copying…' : 'Sync now'}</button>}
@@ -216,25 +209,17 @@ export function LifeLinkSection() {
         <div className="cfg-section__label">Connection</div>
         <div className="cfg-card cfg-card--form">
           <label className="cfg-field">
-            <span className="cfg-field__label">Supabase project URL</span>
-            <input className="text-input" value={url} placeholder="https://your-project.supabase.co" onChange={e => setUrl(e.target.value)} />
-          </label>
-          <label className="cfg-field">
-            <span className="cfg-field__label">Service role key</span>
-            <input className="text-input" type="password" autoComplete="off" value={key} placeholder={link?.hasKey ? 'Saved on this Mac. Paste a new one to replace it.' : 'Supabase → Project Settings → API → service_role'} onChange={e => setKey(e.target.value)} />
-            <span className="cfg-field__hint">Stays on this Mac. Marion Agent only writes to the life_agent_chats table.</span>
-          </label>
-          <label className="cfg-field">
-            <span className="cfg-field__label">Your Marion Life email</span>
-            <input className="text-input" type="email" value={email} placeholder="you@example.com" onChange={e => setEmail(e.target.value)} />
+            <span className="cfg-field__label">Marion Life key</span>
+            <input className="text-input" type="password" autoComplete="off" value={key} placeholder={link?.hasKey ? 'Saved on this Mac. Paste a new one to replace it.' : 'mb_…'} onChange={e => setKey(e.target.value)} />
+            <span className="cfg-field__hint">This key only lets Marion Agent save chat copies to your own Life account, and you can revoke it in Marion Life. It stays on this Mac and is never sent to an AI model. No database keys needed.</span>
           </label>
           <div className="cfg-actions">
-            <button type="button" className="cfg-btn cfg-btn--primary" disabled={!!busy || !url || !email || (!key && !link?.hasKey)}
-              onClick={() => void run('save', async () => { await featuresApi.saveLifeLink({ supabaseUrl: url, serviceKey: key || undefined, lifeEmail: email }); setKey(''); }, 'Linked. Copying your chats now.')}>
+            <button type="button" className="cfg-btn cfg-btn--primary" disabled={!!busy || (!key && !link?.hasKey)}
+              onClick={() => void run('save', async () => { await featuresApi.saveLifeLink({ linkKey: key || undefined }); setKey(''); }, 'Linked. Copying your chats now.')}>
               {busy === 'save' ? 'Checking…' : s?.enabled ? 'Save' : 'Link Marion Life'}
             </button>
             {s?.enabled && <button type="button" className="cfg-btn cfg-btn--secondary" disabled={!!busy} onClick={() => void run('pause', () => featuresApi.saveLifeLink({ enabled: false }), 'Paused. Nothing new is copied.')}>Pause</button>}
-            {(s?.enabled || link?.hasKey) && <button type="button" className="cfg-btn cfg-btn--ghost-danger" disabled={!!busy} onClick={() => void run('remove', async () => { await featuresApi.removeLifeLink(); setUrl(''); setEmail(''); }, 'Unlinked. Chats already copied stay in Marion Life.')}>Unlink</button>}
+            {(s?.enabled || link?.hasKey) && <button type="button" className="cfg-btn cfg-btn--ghost-danger" disabled={!!busy} onClick={() => void run('remove', featuresApi.removeLifeLink, 'Unlinked. Chats already copied stay in Marion Life.')}>Unlink</button>}
           </div>
           {note && <p className={note.error ? 'cfg-error' : 'cfg-note'} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
         </div>

@@ -179,6 +179,7 @@ addColumn('bots', 'chat_model', 'TEXT');
 addColumn('bots', 'chat_model_label', 'TEXT');
 addColumn('bots', 'chat_effort', 'TEXT');
 addColumn('bots', 'sort_position', 'INTEGER');
+addColumn('bots', 'orchestration', 'TEXT');
 
 export const now = () => Date.now();
 

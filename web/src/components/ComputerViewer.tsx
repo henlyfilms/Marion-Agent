@@ -4,7 +4,7 @@ import { BotAvatarFor } from '../avatar/BotAvatar';
 import { api } from '../lib/api';
 import { botVars } from '../lib/colors';
 import { useSelectedBot, useStore } from '../store';
-import { computerStatusText } from './DetailsPanel';
+import { computerStatusText, friendlyComputerError } from './DetailsPanel';
 import { Icon } from './Icon';
 
 type Mode = 'watch' | 'control';
@@ -97,7 +97,7 @@ export function ComputerViewer() {
             <span className="viewer__sleep-face"><i /><i /></span>
             <span>{busy ? computerStatusText(computer) : 'The computer is asleep.'}</span>
             {!busy && <button type="button" className="btn btn--light" onClick={() => api.ensureComputer(bot.id).catch(() => {})}>Wake computer</button>}
-            {computer?.error && <span className="viewer__err">{computer.error}</span>}
+            {computer?.error && <span className="viewer__err" title={computer.error}>{friendlyComputerError(computer.error)}</span>}
           </div>
         )}
       </div>

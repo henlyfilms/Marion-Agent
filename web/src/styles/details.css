@@ -108,7 +108,8 @@
 .details__name { width: auto; max-width: 75%; padding: 2px; text-align: left; font-size: 14px; }
 .panel-row--computer { display: flex; flex-direction: column-reverse; align-items: stretch; gap: 8px; height: auto; padding: 8px; }
 .panel-row--computer .panel-row__text { align-items: center; padding-block: 2px; width: 100%; min-width: 0; }
-.panel-row--computer .panel-row__meta { max-width: 100%; }
+.panel-row--computer .panel-row__title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-row--computer .panel-row__meta { width: 100%; max-width: 100%; text-align: center; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .computer-thumb { width: 100%; height: auto; aspect-ratio: 16/9; background: var(--color-bg-tertiary); }
 .computer-thumb img { object-fit: contain; }
 .computer-thumb__face { width: 32px; height: 32px; }

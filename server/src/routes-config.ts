@@ -4,6 +4,9 @@ import { totalmem } from 'node:os';
 import { availableLocalModels, localEfforts, saveLocalModel, selectedLocalModel } from './agent/models.js';
 import { getChatProvider, saveChatProvider, subscriptionAvailability, subscriptionModels, subscriptionSelection } from './agent/subscriptions.js';
 import { chatModelForBot } from './agent/chat-model.js';
+import { normalizeMembers, orchestrationFor, saveOrchestration } from './agent/orchestration-settings.js';
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { desktopAccessHeader, hasDesktopAccess, isDesktop } from './lib/desktop-access.js';
 import { env } from './env.js';
 import { db, now } from './db.js';
@@ -26,7 +29,7 @@ import { chatProviders, type ChatModel, type ChatModelSettings, type ChatProvide
  */
 export const configApi = new Hono<AuthVars>();
 
-for (const p of ['/bots/*', '/skills/*', '/computer/*', '/settings/*']) configApi.use(p, requireUser);
+for (const p of ['/bots/*', '/skills/*', '/computer/*', '/settings/*', '/orchestration/*']) configApi.use(p, requireUser);
 
 for (const [kind, access] of [['mobile', env.mobileAccess], ['browser', env.browserAccess]] as const) {
   configApi.get(`/settings/${kind}-access`, (c) => {
@@ -242,6 +245,64 @@ configApi.put('/bots/:id/chat-model', async (c) => {
   const updated = getBot(bot.id)!;
   emitBot(bot.id);
   return c.json({ selection: updated.chatModel, bot: updated });
+});
+
+// ---------- Team mode (multi-model orchestration) ----------
+
+configApi.get('/bots/:id/orchestration', (c) => {
+  const bot = ownBot(c.get('user').id, c.req.param('id'));
+  if (!bot || bot.kind === 'room') return c.json({ error: 'not found' }, 404);
+  return c.json({ settings: orchestrationFor(bot), orchestrator: chatModelForBot(bot) });
+});
+
+configApi.put('/bots/:id/orchestration', async (c) => {
+  const userId = c.get('user').id;
+  const bot = ownBot(userId, c.req.param('id'));
+  if (!bot || bot.kind === 'room') return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json<{ enabled?: unknown; members?: unknown; balanceUsage?: unknown }>().catch(() => null);
+  if (!body) return c.json({ error: 'Send the team settings.' }, 400);
+  let members;
+  try { members = normalizeMembers(body.members ?? []); }
+  catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  // Check every member's model exists and its effort is supported, the same way the chat model picker does.
+  const origin = c.req.header('origin');
+  let localModels: string[] | null = null;
+  for (const member of members) {
+    if (member.provider === 'local') {
+      if (member.effort && !localEfforts.some(option => option === member.effort)) return c.json({ error: `Choose a supported effort for ${member.label}.` }, 400);
+      localModels ??= await availableLocalModels().catch((): string[] => []);
+      if (member.model !== env.localModelName && !localModels.includes(member.model)) return c.json({ error: `${member.model} isn't on your local model server.` }, 400);
+      continue;
+    }
+    if (!isDesktop || !origin || !env.trustedOrigins.includes(origin)) {
+      return c.json({ error: 'Codex, Gemini and Claude team members are available in the Mac workspace.' }, 403);
+    }
+    const catalog = await subscriptionModels(member.provider).catch(() => null);
+    if (!catalog) return c.json({ error: `The ${member.provider} model list is unavailable. Check its CLI and sign-in.` }, 503);
+    const option = catalog.models.find(entry => entry.id === member.model);
+    if (!option) return c.json({ error: `${member.model} isn't available for ${member.label}.` }, 400);
+    if (member.effort === null ? option.efforts.length > 0 && option.defaultEffort === null : member.effort && !option.efforts.includes(member.effort)) {
+      return c.json({ error: `Choose a supported effort for ${member.label}.` }, 400);
+    }
+    if (member.effort === null && option.efforts.length) member.effort = option.defaultEffort;
+  }
+  const settings = { enabled: Boolean(body.enabled) && members.length > 0, members, balanceUsage: body.balanceUsage !== false };
+  saveOrchestration(bot.id, settings);
+  emitBot(bot.id);
+  return c.json({ settings, bot: getBot(bot.id) });
+});
+
+/** T3 Code is the backup orchestrator: Marion only finds and opens it (it runs its own agents). */
+const t3Apps = ['/Applications/T3 Code.app', '/Applications/T3 Code (Beta).app', '/Applications/T3 Code (Nightly).app'];
+configApi.get('/orchestration/backup', (c) => {
+  const app = isDesktop ? t3Apps.find(path => existsSync(path)) : undefined;
+  return c.json({ t3Code: app ? { installed: true, name: app.split('/').pop()!.replace(/\.app$/, '') } : { installed: false } });
+});
+configApi.post('/orchestration/backup/open', (c) => {
+  const app = isDesktop ? t3Apps.find(path => existsSync(path)) : undefined;
+  if (!app || process.platform !== 'darwin') return c.json({ error: 'T3 Code isn’t installed on this Mac.' }, 404);
+  execFile('open', ['-a', app], () => {});
+  return c.json({ ok: true });
 });
 
 const toMemory = (m: any): Memory => ({ id: m.id, botId: m.bot_id, text: m.text, createdAt: m.created_at, source: m.source === 'learned' ? 'learned' : 'chat' });

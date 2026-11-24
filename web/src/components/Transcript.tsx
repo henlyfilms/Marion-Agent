@@ -99,8 +99,9 @@ function SenderLabel({ from }: { from: NonNullable<MessageBody['from']> }) {
   const bot = useStore((s) => (from.kind === 'bot' ? s.bots.find((b) => b.id === from.id) : undefined));
   return (
     <div className="sender-label">
-      {bot ? <BotAvatarFor bot={bot} size={16} /> : from.kind === 'routine' ? <Icon name="clock" size={12} opacity={0.56} /> : from.kind === 'voice' ? <Icon name="voice_a" size={12} opacity={0.56} /> : <BotAvatar shape={DEFAULT_BERRY} color="gray" size={16} />}
-      <span>{from.kind === 'routine' ? `Routine · ${from.name}` : from.kind === 'voice' ? 'Asked on a voice call' : `From ${bot?.name ?? from.name}`}</span>
+      {from.kind === 'model' ? <img className="sender-label__provider" src={`/providers/${({ local: 'qwen-color', codex: 'codex', gemini: 'gemini-color', claude: 'claude-color' } as const)[from.provider ?? 'local']}.svg`} alt="" width="14" height="14" />
+        : bot ? <BotAvatarFor bot={bot} size={16} /> : from.kind === 'routine' ? <Icon name="clock" size={12} opacity={0.56} /> : from.kind === 'voice' ? <Icon name="voice_a" size={12} opacity={0.56} /> : <BotAvatar shape={DEFAULT_BERRY} color="gray" size={16} />}
+      <span>{from.kind === 'model' ? `${from.name} · team member` : from.kind === 'routine' ? `Routine · ${from.name}` : from.kind === 'voice' ? 'Asked on a voice call' : `From ${bot?.name ?? from.name}`}</span>
     </div>
   );
 }

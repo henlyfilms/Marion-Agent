@@ -16,6 +16,7 @@ import { Icon } from './components/Icon';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
 import { UsageDashboard } from './components/modals/UsageDashboard';
+import { TeamModal } from './components/modals/TeamModal';
 import { ConnectAppsModal } from './components/modals/ConnectAppsModal';
 import { CreateBotModal } from './components/modals/CreateBotModal';
 import { CreateGroupModal } from './components/modals/CreateGroupModal';
@@ -173,6 +174,7 @@ function Shell() {
       {modal === 'search' && <SearchModal />}
       {modal === 'apps' && <ConnectAppsModal />}
       {modal === 'usage' && <UsageDashboard />}
+      {modal === 'team' && <TeamModal />}
       {viewerOpen && <ComputerViewer />}
       <ConfigLayer />
       <FieldDictation />

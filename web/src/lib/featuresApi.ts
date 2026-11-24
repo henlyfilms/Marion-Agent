@@ -50,7 +50,7 @@ export interface ContextInfo {
 
 export interface PushDevice { id: string; endpoint: string; label: string; createdAt: number; lastOkAt: number | null }
 export interface LifeLink {
-  settings: { enabled: boolean; supabaseUrl: string; lifeEmail: string; lifeUserId: string; lastSyncAt: number | null; lastError: string | null; syncedChats: number };
+  settings: { enabled: boolean; endpoint: string; lifeEmail: string; lastSyncAt: number | null; lastError: string | null; syncedChats: number };
   hasKey: boolean;
 }
 
@@ -71,7 +71,7 @@ export const featuresApi = {
   removeDevice: (endpoint: string) => req<{ ok: true }>('DELETE', '/notifications/devices', { endpoint }),
   testNotification: () => req<{ devices: number; delivered: number }>('POST', '/notifications/test'),
   lifeLink: () => req<LifeLink>('GET', '/life-link'),
-  saveLifeLink: (body: { supabaseUrl?: string; serviceKey?: string; lifeEmail?: string; enabled?: boolean }) => req<LifeLink>('PUT', '/life-link', body),
+  saveLifeLink: (body: { endpoint?: string; linkKey?: string; enabled?: boolean }) => req<LifeLink>('PUT', '/life-link', body),
   removeLifeLink: () => req<{ ok: true }>('DELETE', '/life-link'),
   syncLife: () => req<{ synced: number; settings: LifeLink['settings'] }>('POST', '/life-link/sync'),
 };

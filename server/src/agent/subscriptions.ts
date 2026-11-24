@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -345,8 +345,48 @@ export async function subscriptionReply(selection: SubscriptionSelection, prompt
     if (deadline.aborted) throw new Error(`${labels[provider]} took too long to respond. Try again.`);
     throw error;
   } finally {
+    if (provider === 'gemini') await forgetAntigravityConversation(cwd);
     await rm(cwd, { recursive: true, force: true });
   }
+}
+
+// Antigravity has no "don't save" switch: every chat it answers is kept under
+// ~/.gemini/antigravity-cli (transcript, brain notes and a preview). Marion's chats already live in
+// Marion, so after each reply it removes the copy Antigravity made for that one temporary folder.
+// Only conversations whose working folder is Marion's own temp folder are touched.
+let forgetting = Promise.resolve();
+export function forgetAntigravityConversation(cwd: string) {
+  const job = forgetting.then(async () => {
+    const root = join(homedir(), '.gemini', 'antigravity-cli');
+    const folder = await realpath(cwd).catch(() => cwd);
+    if (!/[\/]marion-(provider|models|usage)-[^\/]+$/.test(folder)) return;
+    const lastPath = join(root, 'cache', 'last_conversations.json');
+    const last = await readFile(lastPath, 'utf8').then(text => JSON.parse(text) as Record<string, string>).catch(() => null);
+    const ids = new Set<string>();
+    for (const key of [folder, cwd]) if (typeof last?.[key] === 'string') ids.add(last[key]);
+    for (const id of ids) {
+      if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+      for (const suffix of ['.db', '.db-wal', '.db-shm', '.db-journal']) await rm(join(root, 'conversations', `${id}${suffix}`), { force: true });
+      await rm(join(root, 'brain', id), { recursive: true, force: true });
+    }
+    const rewrite = async (path: string, edit: (data: any) => boolean) => {
+      const data = await readFile(path, 'utf8').then(text => JSON.parse(text)).catch(() => null);
+      if (!data || !edit(data)) return;
+      const temp = `${path}.marion-${process.pid}`;
+      await writeFile(temp, JSON.stringify(data), { mode: 0o600 });
+      await rename(temp, path);
+    };
+    await rewrite(lastPath, data => { let changed = false; for (const key of [folder, cwd]) if (key in data) { delete data[key]; changed = true; } return changed; });
+    if (ids.size) {
+      await rewrite(join(root, 'cache', 'conversation_metadata.json'), data => {
+        let changed = false;
+        for (const id of ids) if (data?.conversations && id in data.conversations) { delete data.conversations[id]; changed = true; }
+        return changed;
+      });
+    }
+  }).catch(error => console.warn('[subscriptions] could not remove the Antigravity copy', (error as Error).message));
+  forgetting = job;
+  return job;
 }
 
 export function parseLine<T = ProviderMessage>(line: string): T | undefined {
