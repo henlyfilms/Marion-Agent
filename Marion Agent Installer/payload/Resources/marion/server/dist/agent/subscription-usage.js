@@ -4,12 +4,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
+import { getSetting, setSetting } from '../features/schema.js';
 import { claudeIsolation, cliEnvironment, codexArgs, executable, googleSettings, initializeCodex, parseLine, requireClaudeSubscription, } from './subscriptions.js';
 const run = promisify(execFile);
 export const usageProviders = ['codex', 'claude', 'gemini'];
 const maxAge = 60_000;
 const cache = new Map();
 const pending = new Map();
+/** Highest share of any limit window used in the last reading (0–100), if one is cached. */
+export function lastUsedPercent(provider) {
+    const saved = cache.get(provider)?.saved;
+    if (!saved?.windows.length)
+        return undefined;
+    return Math.max(...saved.windows.map(window => window.usedPercent));
+}
 function usageWindow(id, label, usedPercent, resetsAt) {
     if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent))
         return [];
@@ -178,5 +186,36 @@ export function readProvider(provider, desktop, refresh) {
 }
 export function subscriptionUsage(desktop, refresh) {
     return Promise.all(usageProviders.map(provider => readProvider(provider, desktop, refresh)));
+}
+// ---------- plan labels ----------
+// The CLIs report the plan stored in their sign-in token, which lags behind an upgrade until the
+// owner signs in again (Claude still says "pro" after moving to Max). The owner's chosen plan wins.
+export const planOptions = {
+    claude: ['Claude Pro · $20/mo', 'Claude Max · $100/mo', 'Claude Max · $200/mo'],
+    codex: ['ChatGPT Plus · $20/mo', 'ChatGPT Pro · $200/mo'],
+    gemini: ['Google AI Pro · $20/mo', 'Google AI Ultra · $250/mo'],
+};
+const defaultPlans = {
+    claude: 'Claude Max · $100/mo',
+    codex: 'ChatGPT Plus · $20/mo',
+    gemini: 'Google AI Pro · $20/mo',
+};
+export const planLabels = (userId) => getSetting(userId, 'plan-labels', defaultPlans);
+export function savePlanLabels(userId, input) {
+    const next = { ...planLabels(userId) };
+    for (const provider of usageProviders) {
+        const value = input[provider];
+        if (value === undefined)
+            continue;
+        if (typeof value !== 'string' || !planOptions[provider].includes(value))
+            throw new Error('Choose one of the listed plans.');
+        next[provider] = value;
+    }
+    setSetting(userId, 'plan-labels', next);
+    return next;
+}
+export function withPlanLabel(userId, usage) {
+    const plan = planLabels(userId)[usage.provider];
+    return plan ? { ...usage, plan } : usage;
 }
 //# sourceMappingURL=subscription-usage.js.map

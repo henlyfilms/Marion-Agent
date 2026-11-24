@@ -17,6 +17,7 @@ import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes
 import { setCheckins } from '../proactive.js';
 import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
+import { teamDelegate, teamDiscuss } from './orchestration.js';
 import { Cron } from 'croner';
 const obj = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 async function shot(ctx, caption) {
@@ -186,6 +187,32 @@ export const TOOLS = [
             const text = await subscriptionReply(subscriptionSelection(ctx.userId, provider), prompt, ctx.signal ?? AbortSignal.timeout(180_000));
             return { output: text, summary: `Received a reply from ${provider}` };
         },
+    },
+    {
+        name: 'team_delegate',
+        description: 'Team mode: hand pieces of work to the models on your team and get their results back. mode "parallel" runs independent pieces at the same time; mode "chain" runs them in order and each member sees what the previous one wrote (e.g. draft → review → fix). member is a team member\'s name, a provider (codex, gemini, claude, local), or "auto" to pick whoever has the most plan usage left.',
+        parameters: obj({
+            assignments: {
+                type: 'array', minItems: 1, maxItems: 6,
+                items: obj({ member: { type: 'string', description: 'Team member name, provider, or "auto"' }, task: { type: 'string', description: 'A complete, self-contained task with everything the member needs' } }, ['member', 'task']),
+            },
+            mode: { type: 'string', enum: ['parallel', 'chain'] },
+        }, ['assignments', 'mode']),
+        activity: 'messaging_named',
+        label: 'Working with the team',
+        impl: async (args, ctx) => teamDelegate(ctx.botId, args, ctx.signal ?? AbortSignal.timeout(600_000)),
+    },
+    {
+        name: 'team_discuss',
+        description: 'Team mode: have team members talk a problem through together, taking turns and responding to each other for 1–3 rounds, ending with a shared recommendation. Use for plans, designs, reviews and hard decisions.',
+        parameters: obj({
+            topic: { type: 'string', description: 'What the team should discuss, with all needed context' },
+            members: { type: 'array', items: { type: 'string' }, description: 'Member names to include (default: the whole team, up to 4)' },
+            rounds: { type: 'integer', minimum: 1, maximum: 3 },
+        }, ['topic']),
+        activity: 'messaging_named',
+        label: 'Team discussion',
+        impl: async (args, ctx) => teamDiscuss(ctx.botId, args, ctx.signal ?? AbortSignal.timeout(900_000)),
     },
     {
         name: 'remember',

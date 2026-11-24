@@ -2,67 +2,127 @@ import { db, now } from '../db.js';
 import { hub } from '../lib/hub.js';
 import { getLive } from '../store.js';
 import { getSecret, getSetting, setSecret, setSetting } from './schema.js';
-const DEFAULTS = { enabled: false, supabaseUrl: '', lifeEmail: '', lifeUserId: '', lastSyncAt: null, lastError: null, syncedChats: 0 };
-const TABLE = 'life_agent_chats';
-const keyName = (userId) => `life_service_key:${userId}`;
-export const lifeLinkSettings = (userId) => getSetting(userId, 'life-link', DEFAULTS);
+const DEFAULT_ENDPOINT = 'https://marionberry.app/api/mcp';
+const DEFAULTS = { enabled: false, endpoint: DEFAULT_ENDPOINT, lifeEmail: '', lastSyncAt: null, lastError: null, syncedChats: 0 };
+const keyName = (userId) => `life_link_key:${userId}`;
+const legacyKeyName = (userId) => `life_service_key:${userId}`;
+/** Life's limits: a batch of chats must fit in 64 KB; a single chat may be up to 640 KB. */
+const MAX_BATCH = 60_000;
+const MAX_SINGLE = 600_000;
+const MAX_TRANSCRIPT = 500_000;
+export const lifeLinkSettings = (userId) => {
+    const saved = getSetting(userId, 'life-link', DEFAULTS);
+    // Links made with the old Supabase service key are switched off until a Life key is added.
+    const legacy = Boolean(saved.supabaseUrl) || Boolean(getSecret(legacyKeyName(userId)));
+    if (legacy) {
+        setSecret(legacyKeyName(userId), null);
+        const next = { ...DEFAULTS, lastError: 'Marion Life now uses its own key. Paste a Marion Life key to reconnect.' };
+        setSetting(userId, 'life-link', next);
+        return next;
+    }
+    return { ...DEFAULTS, ...saved, endpoint: saved.endpoint || DEFAULT_ENDPOINT };
+};
 export const hasLifeKey = (userId) => Boolean(getSecret(keyName(userId)));
-function normalizeUrl(raw) {
+function normalizeEndpoint(raw) {
     const url = new URL(raw.trim());
-    if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname))
-        throw new Error('Use your Supabase project URL (https://….supabase.co).');
-    return url.origin;
+    const local = ['localhost', '127.0.0.1'].includes(url.hostname);
+    if (!local && (url.protocol !== 'https:' || !/(^|\.)marionberry\.app$/.test(url.hostname)))
+        throw new Error('Use the Marion Life address (https://marionberry.app/api/mcp).');
+    return `${url.origin}${url.pathname}`;
 }
-async function supabase(settings, key, path, init = {}) {
-    const response = await fetch(`${settings.supabaseUrl}${path}`, {
-        ...init,
-        headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+class LifeToolMissing extends Error {
+}
+let rpcId = 0;
+/** Call one Marion Life tool through the key door. */
+async function lifeTool(endpoint, key, name, args) {
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/call', params: { name, arguments: args } }),
         signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        if (response.status === 404 || /42P01|does not exist|schema cache/.test(text)) {
-            throw new Error(`The ${TABLE} table is missing. Run docs/marion-life-agent-chats.sql in Supabase → SQL Editor first.`);
-        }
-        if (response.status === 401 || response.status === 403)
-            throw new Error('Supabase refused the key. Paste the service_role key from Project Settings → API.');
-        throw new Error(`Supabase answered ${response.status}: ${text.slice(0, 200)}`);
+    if (response.status === 401 || response.status === 403)
+        throw new Error('Marion Life refused the key. Make a new one in Life → Settings → Connections → Marion Agent.');
+    if (response.status === 413)
+        throw new Error('That chat is too big for Marion Life to accept.');
+    if (response.status === 429)
+        throw new Error('Marion Life is rate-limiting the link. It will retry in a minute.');
+    const body = await response.json().catch(() => null);
+    if (!response.ok && !body)
+        throw new Error(`Marion Life answered ${response.status}.`);
+    if (body?.error) {
+        if (body.error.code === -32601 || /unknown tool|not found|no such tool/i.test(String(body.error.message)))
+            throw new LifeToolMissing(name);
+        throw new Error(`Marion Life: ${String(body.error.message ?? 'request failed').slice(0, 200)}`);
     }
-    return response;
+    const result = body?.result;
+    let value = result?.structuredContent;
+    if (value === undefined && Array.isArray(result?.content)) {
+        const text = result.content.find((part) => part?.type === 'text')?.text;
+        try {
+            value = JSON.parse(text);
+        }
+        catch {
+            value = text;
+        }
+    }
+    if (result?.isError) {
+        const message = typeof value === 'string' ? value : value?.error ?? value?.message ?? 'request failed';
+        if (/doesn.t have that tool|there is no tool called|unknown tool|no such tool/i.test(String(message)))
+            throw new LifeToolMissing(name);
+        throw new Error(`Marion Life: ${String(message).slice(0, 200)}`);
+    }
+    return value;
 }
-/** Save the connection, find the Life account by email, and check the table exists. */
+const missingSync = 'Connected, but Marion Life hasn’t turned on chat sync yet. Chats will copy over once it does.';
+/** Save the key, check it with Life (whoami), and start copying chats. */
 export async function connectLife(userId, input) {
     const current = lifeLinkSettings(userId);
     const next = { ...current };
-    if (input.supabaseUrl !== undefined)
-        next.supabaseUrl = input.supabaseUrl ? normalizeUrl(input.supabaseUrl) : '';
-    if (input.lifeEmail !== undefined)
-        next.lifeEmail = input.lifeEmail.trim().toLowerCase();
-    if (input.serviceKey)
-        setSecret(keyName(userId), input.serviceKey.trim());
+    if (input.endpoint !== undefined)
+        next.endpoint = input.endpoint ? normalizeEndpoint(input.endpoint) : DEFAULT_ENDPOINT;
+    if (input.linkKey) {
+        const key = input.linkKey.trim();
+        if (!/^mb_[A-Za-z0-9_-]{16,200}$/.test(key))
+            throw new Error('Paste the Marion Life key (it starts with mb_).');
+        setSecret(keyName(userId), key);
+    }
     const key = getSecret(keyName(userId));
     if (input.enabled === false) {
         next.enabled = false;
         setSetting(userId, 'life-link', next);
         return next;
     }
-    if (!next.supabaseUrl || !key || !next.lifeEmail)
-        throw new Error('Add the Supabase URL, service key and your Marion Life email.');
-    const users = await (await supabase(next, key, '/auth/v1/admin/users?per_page=1000')).json();
-    const match = users.users?.find(user => user.email?.toLowerCase() === next.lifeEmail);
-    if (!match)
-        throw new Error(`No Marion Life account uses ${next.lifeEmail}.`);
-    next.lifeUserId = match.id;
-    await supabase(next, key, `/rest/v1/${TABLE}?select=id&limit=1`);
+    if (!key)
+        throw new Error('Paste your Marion Life key first.');
+    try {
+        const me = await lifeTool(next.endpoint, key, 'whoami', {});
+        next.lifeEmail = typeof me?.email === 'string' ? me.email : '';
+        next.lastError = null;
+    }
+    catch (error) {
+        if (!(error instanceof LifeToolMissing))
+            throw error;
+        next.lifeEmail = '';
+        next.lastError = missingSync;
+    }
     next.enabled = true;
-    next.lastError = null;
     setSetting(userId, 'life-link', next);
     queueMicrotask(() => { void syncLife(userId).catch(() => { }); });
     return next;
 }
 export function disconnectLife(userId) {
     setSecret(keyName(userId), null);
+    setSecret(legacyKeyName(userId), null);
     setSetting(userId, 'life-link', DEFAULTS);
+}
+/** Remove one chat's copy from Life (when the chat is deleted here). Best effort. */
+export async function forgetLifeChat(userId, botId, generation) {
+    const settings = lifeLinkSettings(userId);
+    const key = getSecret(keyName(userId));
+    if (!settings.enabled || !key)
+        return;
+    await lifeTool(settings.endpoint, key, 'delete_agent_chat', { id: `${botId}:${generation}` }).catch(() => { });
 }
 /** Chats changed since their last sync, for idle bots only (so half-finished replies aren't copied). */
 function pendingChats(userId, force) {
@@ -85,58 +145,77 @@ function chatDocument(row) {
     const messages = db.prepare("SELECT body, created_at FROM rows WHERE bot_id=? AND generation=? AND kind='message' ORDER BY seq").all(row.bot_id, row.generation)
         .map(r => ({ ...JSON.parse(r.body), at: r.created_at }))
         .filter(body => body.text && !body.streaming);
-    const firstUser = messages.find(m => m.role === 'user' && !m.from);
+    const firstUser = messages.find(m => m.role === 'user' && (!m.from || m.from.kind === 'voice'));
     const transcript = messages.map(m => {
-        const who = m.from?.name ?? (m.role === 'assistant' ? bot.name : 'You');
+        const who = m.from?.kind === 'voice' ? 'You (call)' : m.from?.name ?? (m.role === 'assistant' ? bot.name : 'You');
         const files = m.attachments?.length ? `\nAttachments: ${m.attachments.map((a) => a.name).join(', ')}` : '';
         return `[${new Date(m.at).toISOString()}] ${who}:\n${m.text}${files}`;
     }).join('\n\n');
     return {
-        title: (firstUser?.text ?? `Chat with ${bot.name}`).replace(/\s+/g, ' ').slice(0, 120),
-        bot_name: bot.name,
-        bot_job: bot.label || null,
-        transcript: transcript.slice(0, 500_000),
+        id: `${row.bot_id}:${row.generation}`,
+        marion_bot_id: row.bot_id,
+        generation: row.generation,
+        bot_name: bot.name.slice(0, 80),
+        ...(bot.label ? { bot_job: bot.label.slice(0, 200) } : {}),
+        title: (firstUser?.text ?? `Chat with ${bot.name}`).replace(/\s+/g, ' ').slice(0, 500),
+        transcript: transcript.length > MAX_TRANSCRIPT ? transcript.slice(-MAX_TRANSCRIPT) : transcript,
         message_count: messages.length,
+        started_at: new Date(row.first_at).toISOString(),
+        last_message_at: new Date(row.last_at).toISOString(),
     };
 }
 const syncing = new Set();
 export async function syncLife(userId, opts = {}) {
     const settings = lifeLinkSettings(userId);
     const key = getSecret(keyName(userId));
-    if (!settings.enabled || !key || !settings.lifeUserId || syncing.has(userId))
+    if (!settings.enabled || !key || syncing.has(userId))
         return { synced: 0 };
     syncing.add(userId);
     let synced = 0;
     const errorBefore = settings.lastError;
+    const mark = db.prepare(`INSERT INTO life_sync(bot_id,generation,synced_rev,synced_at,error) VALUES (?,?,?,?,NULL)
+    ON CONFLICT(bot_id,generation) DO UPDATE SET synced_rev=excluded.synced_rev, synced_at=excluded.synced_at, error=NULL`);
     try {
-        const chats = pendingChats(userId, Boolean(opts.force));
-        for (let i = 0; i < chats.length; i += 20) {
-            const batch = chats.slice(i, i + 20);
-            const payload = batch.map(row => ({
-                id: `${row.bot_id}:${row.generation}`,
-                user_id: settings.lifeUserId,
-                marion_bot_id: row.bot_id,
-                generation: row.generation,
-                ...chatDocument(row),
-                started_at: new Date(row.first_at).toISOString(),
-                last_message_at: new Date(row.last_at).toISOString(),
-                source: 'marion-agent',
-            }));
-            await supabase(settings, key, `/rest/v1/${TABLE}?on_conflict=id`, {
-                method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(payload),
-            });
-            const mark = db.prepare(`INSERT INTO life_sync(bot_id,generation,synced_rev,synced_at,error) VALUES (?,?,?,?,NULL)
-        ON CONFLICT(bot_id,generation) DO UPDATE SET synced_rev=excluded.synced_rev, synced_at=excluded.synced_at, error=NULL`);
-            for (const row of batch)
+        const chats = pendingChats(userId, Boolean(opts.force)).map(row => ({ row, doc: chatDocument(row) }));
+        // Small chats go 20 to a request under Life's 64 KB limit; big ones go alone (up to 640 KB, end kept).
+        const batches = [];
+        let batch = [];
+        let size = 0;
+        for (const chat of chats) {
+            let length = Buffer.byteLength(JSON.stringify(chat.doc));
+            if (length > MAX_BATCH) {
+                while (length > MAX_SINGLE && chat.doc.transcript.length > 1000) {
+                    chat.doc.transcript = chat.doc.transcript.slice(-Math.floor(chat.doc.transcript.length * 0.8));
+                    length = Buffer.byteLength(JSON.stringify(chat.doc));
+                }
+                batches.push([chat]);
+                continue;
+            }
+            if (batch.length && (size + length > MAX_BATCH || batch.length >= 20)) {
+                batches.push(batch);
+                batch = [];
+                size = 0;
+            }
+            batch.push(chat);
+            size += length;
+        }
+        if (batch.length)
+            batches.push(batch);
+        for (const group of batches) {
+            await lifeTool(settings.endpoint, key, 'save_agent_chats', { chats: group.map(chat => chat.doc) });
+            for (const { row } of group)
                 mark.run(row.bot_id, row.generation, row.rev, now());
-            synced += batch.length;
+            synced += group.length;
         }
         const total = db.prepare('SELECT COUNT(*) n FROM life_sync s JOIN bots b ON b.id=s.bot_id WHERE b.user_id=?').get(userId).n;
         setSetting(userId, 'life-link', { ...lifeLinkSettings(userId), lastSyncAt: now(), lastError: null, syncedChats: total });
         return { synced };
     }
     catch (error) {
-        setSetting(userId, 'life-link', { ...lifeLinkSettings(userId), lastError: error.message.slice(0, 300) });
+        const message = error instanceof LifeToolMissing ? missingSync : error.message.slice(0, 300);
+        setSetting(userId, 'life-link', { ...lifeLinkSettings(userId), lastError: message });
+        if (error instanceof LifeToolMissing)
+            return { synced };
         throw error;
     }
     finally {

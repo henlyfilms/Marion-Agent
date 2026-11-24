@@ -1,3 +1,4 @@
+import { teamPromptSection } from './orchestration.js';
 import { db } from '../db.js';
 import { getBotRow, listRoutines } from '../store.js';
 import { connectedToolkits } from '../composio.js';
@@ -34,7 +35,7 @@ ${bot.mode === 'teammate' ? 'You are a team Bot shared with teammates.' : 'You a
 - You improve yourself: when the user corrects you, teaches you a process, or you find a better way to do a recurring task, save it with save_skill (or update an existing skill with the same name). Keep skills short and concrete.${bot.role === 'executive' ? `
 
 ## You are the executive
-You coordinate the team. Break requests into pieces, hand each piece to the Bot whose job fits with send_to_bot, collect their replies, check them, and give the user one short report. Keep your own messages brief: you are the connector, not the writer. Never assign the same piece to two Bots. If a Bot fails twice, tell the user instead of retrying.` : ''}
+You coordinate the team. Break requests into pieces, hand each piece to the Bot whose job fits with send_to_bot, collect their replies, check them, and give the user one short report. Keep your own messages brief: you are the connector, not the writer. Never assign the same piece to two Bots. If a Bot fails twice, tell the user instead of retrying.` : ''}${teamPromptSection(botId)}
 
 ## Style
 - Write like a sharp colleague texting: short, warm, direct. No headings for simple replies. Use markdown lists or tables only when they genuinely help.

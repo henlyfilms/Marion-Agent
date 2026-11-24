@@ -12,8 +12,10 @@ import { hub } from './lib/hub.js';
 import { createSession, destroySession, remoteAccessFor, remoteWorkspaceUser, requireUser, userFromCookieHeader } from './lib/auth.js';
 import { allLive, appendRow, chatTranscript, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval, runInBotQueue } from './agent/loop.js';
-import { readProvider, subscriptionUsage, usageProviders } from './agent/subscription-usage.js';
+import { planLabels, planOptions, readProvider, savePlanLabels, subscriptionUsage, usageProviders, withPlanLabel } from './agent/subscription-usage.js';
 import { chatModelForBot } from './agent/chat-model.js';
+import { subscriptionModels } from './agent/subscriptions.js';
+import { availableLocalModels } from './agent/models.js';
 import { localEfforts } from './agent/models.js';
 import { computerState, ensureComputer, refreshComputer, screenFor, stopDesktop, suspendComputer } from './computer.js';
 import { desktop } from './desktop.js';
@@ -22,7 +24,7 @@ import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
-import { chatSortOptions } from './types.js';
+import { chatProviders, chatSortOptions } from './types.js';
 import { orderChats } from './chat-order.js';
 import { isBerryShape, isStemColor } from './avatarShapes.js';
 import { createBotRecord } from './features/bots.js';
@@ -206,9 +208,22 @@ api.get('/subscriptions/usage', async (c) => {
     const desktop = isDesktop && !remoteAccessFor(c);
     const refresh = c.req.query('refresh') === '1';
     const provider = usageProviders.find(option => option === c.req.query('provider'));
+    const userId = c.get('user').id;
     if (provider)
-        return c.json({ subscriptions: [await readProvider(provider, desktop, refresh)] });
-    return c.json({ subscriptions: await subscriptionUsage(desktop, refresh) });
+        return c.json({ subscriptions: [withPlanLabel(userId, await readProvider(provider, desktop, refresh))] });
+    return c.json({ subscriptions: (await subscriptionUsage(desktop, refresh)).map(item => withPlanLabel(userId, item)) });
+});
+api.get('/subscriptions/plans', (c) => c.json({ plans: planLabels(c.get('user').id), options: planOptions }));
+api.put('/subscriptions/plans', async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (!body)
+        return c.json({ error: 'Choose a plan.' }, 400);
+    try {
+        return c.json({ plans: savePlanLabels(c.get('user').id, body) });
+    }
+    catch (error) {
+        return c.json({ error: error.message }, 400);
+    }
 });
 // ---------- events (SSE) ----------
 api.get('/events', (c) => {
@@ -397,6 +412,8 @@ api.post('/bots/:id/messages', bodyLimit({
     if (!b)
         return c.json({ error: 'not found' }, 404);
     let text = '';
+    let call = null;
+    let override;
     let attachments = [];
     if (c.req.header('content-type')?.startsWith('multipart/form-data')) {
         try {
@@ -412,28 +429,63 @@ api.post('/bots/:id/messages', bodyLimit({
     else {
         const body = await c.req.json().catch(() => null);
         text = typeof body?.text === 'string' ? body.text.trim() : '';
+        call = typeof body?.call === 'string' && /^[\w-]{1,80}$/.test(body.call) ? body.call : null;
+        override = body?.model;
     }
     if (!text && !attachments.length)
         return c.json({ error: 'empty' }, 400);
     const current = ownBot(b.user_id, b.id);
     if (!current)
         return c.json({ error: 'not found' }, 404);
-    const { provider, model, effort } = chatModelForBot(current);
+    // A voice call can talk to a different model than the chat (chosen on the call button).
+    let selection = chatModelForBot(current);
+    if (call && override && current.kind !== 'room') {
+        const chosen = await callModel(override).catch(() => null);
+        if (!chosen)
+            return c.json({ error: 'The call model is unavailable. Pick another one on the call button.' }, 400);
+        selection = chosen;
+    }
+    const { provider, model, effort } = selection;
     const row = appendRow(b.id, 'message', {
         type: 'message', role: 'user', text,
+        ...(call ? { from: { kind: 'voice', id: call, name: 'Voice call' } } : {}),
         ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),
     }, attachments);
+    // On a call the bot is talking out loud: short spoken replies, no formatting.
+    const prompt = call
+        ? `[Voice call: you are talking out loud with the user right now. Answer in one to three short, natural spoken sentences. No markdown, lists, headings, links, code or emoji. If the request needs real work, do it with your tools first, then say the outcome briefly.]\n${text}`
+        : text;
     // Group chats dispatch to their member Bots instead of running their own loop.
     if (current.kind === 'room')
         dispatchRoomMessage(b.id, text, enqueue, attachments);
     // Any pending question card is answered by a free-text message.
     else {
         enqueue(b.id, provider === 'local'
-            ? { type: 'user', text, attachments, generation: row.generation, local: { model, effort: effort ?? 'medium' } }
-            : { type: 'user', text, attachments, generation: row.generation, subscription: { provider, model, effort } });
+            ? { type: 'user', text: prompt, attachments, generation: row.generation, local: { model, effort: effort ?? 'medium' } }
+            : { type: 'user', text: prompt, attachments, generation: row.generation, subscription: { provider, model, effort } });
     }
     return c.json({ row });
 });
+/** Check a model picked for voice calls the same way the chat model picker does. */
+async function callModel(raw) {
+    const value = raw;
+    const provider = chatProviders.find(option => option === value?.provider);
+    if (!provider || typeof value?.model !== 'string' || !value.model || value.model.length > 200)
+        return null;
+    if (provider === 'local') {
+        const effort = localEfforts.find(option => option === value.effort) ?? 'medium';
+        if (value.model !== env.localModelName && !(await availableLocalModels().catch(() => [])).includes(value.model))
+            return null;
+        return { provider, model: value.model, effort };
+    }
+    if (!isDesktop)
+        return null;
+    const option = (await subscriptionModels(provider)).models.find(entry => entry.id === value.model);
+    if (!option)
+        return null;
+    const effort = typeof value.effort === 'string' && option.efforts.includes(value.effort) ? value.effort : option.defaultEffort;
+    return { provider, model: option.id, effort, label: option.label };
+}
 api.post('/bots/:id/interrupt', (c) => {
     const b = ownBot(c.get('user').id, c.req.param('id'));
     if (!b)

@@ -26,9 +26,10 @@ const DEFAULT_ENDPOINT = 'https://marionberry.app/api/mcp';
 const DEFAULTS: LifeLinkSettings = { enabled: false, endpoint: DEFAULT_ENDPOINT, lifeEmail: '', lastSyncAt: null, lastError: null, syncedChats: 0 };
 const keyName = (userId: string) => `life_link_key:${userId}`;
 const legacyKeyName = (userId: string) => `life_service_key:${userId}`;
-/** Request bodies stay under Life's limit; long transcripts keep their end. */
-const MAX_BODY = 60_000;
-const MAX_TRANSCRIPT = 200_000;
+/** Life's limits: a batch of chats must fit in 64 KB; a single chat may be up to 640 KB. */
+const MAX_BATCH = 60_000;
+const MAX_SINGLE = 600_000;
+const MAX_TRANSCRIPT = 500_000;
 
 export const lifeLinkSettings = (userId: string) => {
   const saved = getSetting<LifeLinkSettings & { supabaseUrl?: string; lifeUserId?: string }>(userId, 'life-link', DEFAULTS);
@@ -79,7 +80,7 @@ async function lifeTool<T>(endpoint: string, key: string, name: string, args: Re
   }
   if (result?.isError) {
     const message = typeof value === 'string' ? value : value?.error ?? value?.message ?? 'request failed';
-    if (/there is no tool called|unknown tool|no such tool/i.test(String(message))) throw new LifeToolMissing(name);
+    if (/doesn.t have that tool|there is no tool called|unknown tool|no such tool/i.test(String(message))) throw new LifeToolMissing(name);
     throw new Error(`Marion Life: ${String(message).slice(0, 200)}`);
   }
   return value as T;
@@ -130,7 +131,7 @@ export async function forgetLifeChat(userId: string, botId: string, generation: 
   const settings = lifeLinkSettings(userId);
   const key = getSecret(keyName(userId));
   if (!settings.enabled || !key) return;
-  await lifeTool(settings.endpoint, key, 'delete_agent_chat', { agent_chat_id: `${botId}:${generation}` }).catch(() => {});
+  await lifeTool(settings.endpoint, key, 'delete_agent_chat', { id: `${botId}:${generation}` }).catch(() => {});
 }
 
 interface ChatRow { bot_id: string; generation: number; rev: number; first_at: number; last_at: number; count: number }
@@ -162,12 +163,16 @@ function chatDocument(row: ChatRow) {
     return `[${new Date(m.at).toISOString()}] ${who}:\n${m.text}${files}`;
   }).join('\n\n');
   return {
-    agent_chat_id: `${row.bot_id}:${row.generation}`,
-    bot_name: bot.name.slice(0, 60),
-    title: (firstUser?.text ?? `Chat with ${bot.name}`).replace(/\s+/g, ' ').slice(0, 200),
+    id: `${row.bot_id}:${row.generation}`,
+    marion_bot_id: row.bot_id,
+    generation: row.generation,
+    bot_name: bot.name.slice(0, 80),
+    ...(bot.label ? { bot_job: bot.label.slice(0, 200) } : {}),
+    title: (firstUser?.text ?? `Chat with ${bot.name}`).replace(/\s+/g, ' ').slice(0, 500),
     transcript: transcript.length > MAX_TRANSCRIPT ? transcript.slice(-MAX_TRANSCRIPT) : transcript,
     message_count: messages.length,
-    updated_at: new Date(row.last_at).toISOString(),
+    started_at: new Date(row.first_at).toISOString(),
+    last_message_at: new Date(row.last_at).toISOString(),
   };
 }
 
@@ -184,17 +189,21 @@ export async function syncLife(userId: string, opts: { force?: boolean } = {}) {
     ON CONFLICT(bot_id,generation) DO UPDATE SET synced_rev=excluded.synced_rev, synced_at=excluded.synced_at, error=NULL`);
   try {
     const chats = pendingChats(userId, Boolean(opts.force)).map(row => ({ row, doc: chatDocument(row) }));
-    // Pack chats into requests under Life's body limit (big chats go one at a time, trimmed to fit).
+    // Small chats go 20 to a request under Life's 64 KB limit; big ones go alone (up to 640 KB, end kept).
     const batches: typeof chats[] = [];
     let batch: typeof chats = [];
     let size = 0;
     for (const chat of chats) {
-      let length = JSON.stringify(chat.doc).length;
-      if (length > MAX_BODY) {
-        chat.doc.transcript = chat.doc.transcript.slice(-(MAX_BODY - 4000));
-        length = JSON.stringify(chat.doc).length;
+      let length = Buffer.byteLength(JSON.stringify(chat.doc));
+      if (length > MAX_BATCH) {
+        while (length > MAX_SINGLE && chat.doc.transcript.length > 1000) {
+          chat.doc.transcript = chat.doc.transcript.slice(-Math.floor(chat.doc.transcript.length * 0.8));
+          length = Buffer.byteLength(JSON.stringify(chat.doc));
+        }
+        batches.push([chat]);
+        continue;
       }
-      if (batch.length && (size + length > MAX_BODY || batch.length >= 20)) { batches.push(batch); batch = []; size = 0; }
+      if (batch.length && (size + length > MAX_BATCH || batch.length >= 20)) { batches.push(batch); batch = []; size = 0; }
       batch.push(chat);
       size += length;
     }
