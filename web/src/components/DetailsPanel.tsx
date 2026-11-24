@@ -16,6 +16,8 @@ import { BotTasks } from './config/TasksView';
 import { useContextMenu } from './ContextMenu';
 import { botMenuItems } from './botMenuItems';
 import { setDetailsOpen } from '../lib/layout';
+import { featuresApi, useFeatureUI } from '../lib/featuresApi';
+import { ContextCard } from './features/ContextCard';
 
 export function computerStatusText(c: ComputerState | null): string {
   switch (c?.status) {
@@ -67,6 +69,8 @@ function ComputerCard({ bot, open }: { bot: Bot; open: boolean }) {
   const set = useStore((s) => s.set);
   const contextMenu = useContextMenu();
   const [shot, setShot] = useState<string | null>(null);
+  const [switching, setSwitching] = useState<'wake' | 'sleep' | null>(null);
+  const [switchError, setSwitchError] = useState('');
   const running = computer?.screens.some(screen => screen.botId === bot.id && screen.running) ?? false;
 
   // Refresh the thumbnail every ~4s while visible and awake. 204 = no screen yet.
@@ -99,7 +103,8 @@ function ComputerCard({ bot, open }: { bot: Bot; open: boolean }) {
   const busy = computer?.status === 'starting' || computer?.status === 'resuming' || computer?.status === 'creating';
   const computerMenu = contextMenu("Bot's computer", () => [
     { label: 'Open computer', onSelect: () => set({ viewerOpen: true }) },
-    ...(!running && !busy ? [{ label: 'Wake computer', onSelect: () => api.ensureComputer(bot.id) }] : []),
+    ...(!running && !busy ? [{ label: 'Wake computer', onSelect: () => featuresApi.setComputerAwake(bot.id, true) }] : []),
+    ...(running ? [{ label: 'Put computer to sleep', onSelect: () => featuresApi.setComputerAwake(bot.id, false) }] : []),
   ]);
   return (
     <div className="panel-card">
@@ -124,11 +129,17 @@ function ComputerCard({ bot, open }: { bot: Bot; open: boolean }) {
           )}
         </span>
       </div>
-      {!running && !busy && (
-        <button type="button" className="panel-row panel-row--action" onClick={() => api.ensureComputer(bot.id).catch(() => {})}>
-          <Icon name="monitor" size={14} opacity={0.56} /> Wake computer
-        </button>
-      )}
+      <div className="panel-row panel-row--switch">
+        <Icon name="monitor" size={14} opacity={0.56} />
+        <span className="panel-row__title" style={{ flex: 1 }}>{switching ? (switching === 'wake' ? 'Waking up…' : 'Going to sleep…') : running ? 'Computer awake' : 'Computer asleep'}</span>
+        <Toggle on={switching ? switching === 'wake' : running || busy} label={running ? "Put the bot's computer to sleep" : "Wake the bot's computer"} onChange={(awake) => {
+          if (switching) return;
+          setSwitching(awake ? 'wake' : 'sleep');
+          setSwitchError('');
+          featuresApi.setComputerAwake(bot.id, awake).catch(e => setSwitchError((e as Error).message)).finally(() => setSwitching(null));
+        }} />
+      </div>
+      {switchError && <p className="panel-row__error" role="alert" title={switchError}>{switchError}</p>}
     </div>
   );
 }
@@ -141,6 +152,7 @@ export function DetailsPanel({ open, compact }: { open: boolean; compact: boolea
   const contextMenu = useContextMenu();
   if (!bot) return null;
 
+  const identityMenu = contextMenu(displayName(bot), () => botMenuItems(bot));
   const addSlack = async () => {
     const popup = openPopup('about:blank');
     try { const { redirectUrl } = await api.connect('slack'); if (popup) popup.location.href = redirectUrl; } catch { popup?.close(); }
@@ -160,7 +172,10 @@ export function DetailsPanel({ open, compact }: { open: boolean; compact: boolea
         </button>}
       </div>
       <div className="details__scroll">
-        <div className="details__identity" tabIndex={0} {...contextMenu(displayName(bot), () => botMenuItems(bot))}>
+        <div className="details__identity" tabIndex={0} role="button" title="View profile"
+          onClick={() => bot.kind !== 'room' && useFeatureUI.getState().set({ profile: { kind: 'bot', id: bot.id } })}
+          {...identityMenu}
+          onKeyDown={(e) => { identityMenu.onKeyDown(e); if (e.key === 'Enter' && bot.kind !== 'room') useFeatureUI.getState().set({ profile: { kind: 'bot', id: bot.id } }); }}>
           <BotAvatarFor bot={bot} size={30} />
           <div className="details__name" title={displayName(bot)}>{displayName(bot)}</div>
         </div>
@@ -175,6 +190,9 @@ export function DetailsPanel({ open, compact }: { open: boolean; compact: boolea
           <div className="details__sections">
             {bot.kind !== 'room' && <section>
               <ComputerCard bot={bot} open={open} />
+            </section>}
+            {bot.kind !== 'room' && <section>
+              <ContextCard bot={bot} />
             </section>}
             <section>
               <div className="section-label section-label--row">

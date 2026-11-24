@@ -1,5 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
-import { Activity, FileText, Mic, Paperclip, SquareSlash, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
+import { Activity, Clapperboard, FileText, Mic, Paperclip, SquareSlash, X } from 'lucide-react';
+import { useFeatureUI } from '../lib/featuresApi';
 import type { Bot } from '@shared/types';
 import { api } from '../lib/api';
 import { displayName, useStore } from '../store';
@@ -22,6 +23,12 @@ const fileDrafts = new Map<string, File[]>();
 const photoTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const textFiles = '.txt,.md,.markdown,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.htm,.css,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.sh,.sql';
 const isPhoto = (file: File) => photoTypes.includes(file.type) || /\.(?:png|jpe?g|webp|gif)$/i.test(file.name);
+const isTextFile = (file: File) => file.type.startsWith('text/') || textFiles.split(',').some(ext => file.name.toLowerCase().endsWith(ext));
+const MAX_PHOTO = 4 * 1024 * 1024;
+const MAX_TEXT = 256 * 1024;
+/** Pasted screenshots arrive as "image.png"; give them a readable, unique name. */
+const named = (file: File, index: number) => file.name && file.name !== 'image.png' ? file
+  : new File([file], `Pasted image ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }).replace(':', '.')}${index ? ` (${index + 1})` : ''}.${file.type.split('/')[1] || 'png'}`, { type: file.type });
 
 function DraftAttachment({ file, remove, disabled }: { file: File; remove: () => void; disabled: boolean }) {
   const [preview, setPreview] = useState<string>();
@@ -52,6 +59,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const plusButton = useRef<HTMLButtonElement>(null);
   const [audioMenu, setAudioMenu] = useState(false);
+  const [dropping, setDropping] = useState(false);
+  const dragDepth = useRef(0);
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState(microphoneId);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -109,9 +118,16 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const addFiles = (added: File[]) => {
     const combined = [...files, ...added];
     if (combined.length > 4) { setError('Add up to four attachments per message.'); return; }
-    const invalid = added.find(file => !file.size || file.size > (isPhoto(file) ? 4 * 1024 * 1024 : 32 * 1024));
+    const unsupported = added.find(file => !isPhoto(file) && !isTextFile(file));
+    if (unsupported) {
+      setError(/\.pdf$/i.test(unsupported.name)
+        ? 'PDFs can’t be read yet. Copy the text into a .txt file, or take a screenshot of the page.'
+        : `${unsupported.name} isn’t supported. Add photos (PNG, JPEG, WebP, GIF) or text files.`);
+      return;
+    }
+    const invalid = added.find(file => !file.size || file.size > (isPhoto(file) ? MAX_PHOTO : MAX_TEXT));
     if (invalid) {
-      setError(!invalid.size ? 'Choose a file with content.' : isPhoto(invalid) ? 'Photos must be 4 MB or smaller.' : 'Text files must be 32 KB or smaller.');
+      setError(!invalid.size ? 'Choose a file with content.' : isPhoto(invalid) ? 'Photos must be 4 MB or smaller.' : 'Text files must be 256 KB or smaller.');
       return;
     }
     setFiles(combined);
@@ -130,6 +146,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       const after = cur.slice(end);
       const pre = before && !/\s$/.test(before) ? ' ' : '';
       const post = after && !/^\s/.test(after) ? ' ' : '';
+      // Match the live preview: a dictation that starts the message starts with a capital letter.
+      if (!before.trim()) t = t.charAt(0).toUpperCase() + t.slice(1);
       requestAnimationFrame(() => { if (el && document.activeElement === el) { const pos = before.length + pre.length + t.length; el.setSelectionRange(pos, pos); } });
       return before + pre + t + post + after;
     });
@@ -138,7 +156,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const spoken = useLiveDictation(words => setText(current => appendDictation(current, words)), setError, bot.voiceLanguage);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
   const state = spoken.state !== 'idle' ? spoken.state : recorded.state;
-  const shown = spoken.interim ? appendDictation(text, spoken.interim) : text;
+  const liveWords = spoken.interim || recorded.interim;
+  const shown = liveWords ? appendDictation(text, liveWords) : text;
   const discardDictation = () => { spoken.stop(true); recorded.finish(true); };
   const stopDictation = () => {
     if (spoken.state === 'recording') playDictationSound(false);
@@ -189,13 +208,30 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     return () => window.removeEventListener('keydown', key, true);
   });
 
-  useLayoutEffect(() => {
+  const [lines, setLines] = useState(1);
+  const fit = useCallback(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || !el.clientWidth) return;
     el.style.height = '0px';
-    el.style.height = `${Math.min(el.scrollHeight, MAX_H)}px`;
-    el.style.overflowY = el.scrollHeight > MAX_H ? 'auto' : 'hidden';
-  }, [shown, mobileChatOpen]);
+    const full = el.scrollHeight;
+    el.style.height = `${Math.min(full, MAX_H)}px`;
+    el.style.overflowY = full > MAX_H ? 'auto' : 'hidden';
+    const style = getComputedStyle(el);
+    const line = parseFloat(style.lineHeight) || 20;
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    setLines(Math.max(1, Math.round((full - padding) / line)));
+  }, []);
+  useLayoutEffect(fit, [shown, mobileChatOpen, fit]);
+  // Re-measure when the composer is resized (window, panels, fonts) so an empty box never stays tall.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let width = el.clientWidth;
+    const observer = new ResizeObserver(() => { if (el.clientWidth !== width) { width = el.clientWidth; fit(); } });
+    observer.observe(el);
+    void document.fonts?.ready.then(fit);
+    return () => observer.disconnect();
+  }, [fit]);
 
   const showInputs = (requestAccess = false) => {
     setMenu(null);
@@ -233,6 +269,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     { label: '/attach', detail: 'Add files or photos', icon: <Paperclip size={15} />, onSelect: chooseFiles },
     { label: '/usage', detail: 'View subscription limits', icon: <Activity size={15} />, onSelect: () => setModal('usage') },
     { label: '/dictate', detail: 'Toggle dictation', icon: <Mic size={15} />, onSelect: toggleDictation },
+    { label: '/teach', detail: 'Teach by screen recording', icon: <Clapperboard size={15} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) },
   ];
   const runCommand = (command: typeof commands[number]) => {
     if (shown.trim() === command.label) { discardDictation(); setText(''); }
@@ -241,10 +278,27 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     command.onSelect();
   };
   const hasMessage = shown.trim().length > 0 || files.length > 0;
-  const multiline = shown.includes('\n') || (ref.current?.scrollHeight ?? 0) > 30;
+  const multiline = shown.includes('\n') || lines > 1;
 
   return (
-    <div className="composer-area">
+    <div className={`composer-area${dropping ? ' is-dropping' : ''}`}
+      onDragEnter={event => {
+        if (!event.dataTransfer.types.includes('Files')) return;
+        event.preventDefault();
+        dragDepth.current++;
+        setDropping(true);
+      }}
+      onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+      onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDropping(false); }}
+      onDrop={event => {
+        if (!event.dataTransfer.files.length) return;
+        event.preventDefault();
+        dragDepth.current = 0;
+        setDropping(false);
+        addFiles(Array.from(event.dataTransfer.files));
+        ref.current?.focus();
+      }}>
+      {dropping && <div className="composer-drop" aria-hidden="true">Drop photos or files to attach</div>}
       {error && <div className="composer__error">{error} <button type="button" className="link-btn" onClick={() => setError(null)}>Dismiss</button></div>}
       <div className="composer__progress" role="status" data-visible={sending || state !== 'idle'}>
         <span className="loading-dot" aria-hidden="true" />{sending ? 'Sending…' : state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…' : ''}
@@ -276,6 +330,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
                 onClose={() => setMenu(null)}
                 items={menu === 'commands' ? commands.map(command => ({ ...command, onSelect: () => runCommand(command) })) : [
                   { label: 'Add files or photos', icon: <Paperclip size={16} />, onSelect: chooseFiles },
+                  ...(bot.kind === 'room' ? [] : [{ label: 'Teach by screen recording', icon: <Clapperboard size={16} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
                   { label: 'Slash commands', icon: <SquareSlash size={16} />, onSelect: () => setMenu('commands') },
                 ]}
               />
@@ -289,6 +344,12 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             value={shown}
             placeholder={`Message ${displayName(bot)}`}
             onChange={(e) => { discardDictation(); setText(e.target.value); }}
+            onPaste={(e) => {
+              const pasted = Array.from(e.clipboardData.files);
+              if (!pasted.length) return;
+              e.preventDefault();
+              addFiles(pasted.map(named));
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
             }}

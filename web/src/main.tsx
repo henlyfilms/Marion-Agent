@@ -11,6 +11,7 @@ import './styles/modals.css';
 import './styles/usage.css';
 import './styles/viewer.css';
 import './styles/voice.css';
+import './styles/features.css';
 
 if (/Electron\//.test(navigator.userAgent)) document.documentElement.dataset.desktopWindow = 'true';
 

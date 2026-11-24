@@ -8,6 +8,7 @@ import { botVars } from '../../lib/colors';
 import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
 import { useStore } from '../../store';
+import { featuresApi } from '../../lib/featuresApi';
 import { Icon } from '../Icon';
 import { Modal } from '../modals/Modal';
 import { Glyph } from './glyphs';
@@ -159,6 +160,7 @@ function GeneralTab({ bot, onClose, showAppearance = false }: { bot: Bot; onClos
         <Field label="Used as">
           <Segmented label="Bot type" value={draft.mode} options={[{ value: 'personal', label: 'Personal assistant' }, { value: 'teammate', label: 'Teammate' }]} onChange={(v) => put('mode', v)} />
         </Field>
+        <ExecutiveField bot={bot} />
       </section>
 
       <div className={`cfg-savebar${dirty ? ' is-dirty' : ''}`}>
@@ -414,5 +416,23 @@ function RoutineItem({ r, onFlash }: { r: Routine; onFlash: (t: string) => void 
         <Switch on={enabled} onChange={toggle} label={`${r.name} ${enabled ? 'on' : 'paused'}`} />
       </div>
     </div>
+  );
+}
+
+/** Saved on its own (not part of the draft), like the star toggle. */
+function ExecutiveField({ bot }: { bot: Bot }) {
+  const [error, setError] = useState('');
+  const on = bot.role === 'executive';
+  const change = async (value: boolean) => {
+    setError('');
+    try {
+      const { bot: updated } = await featuresApi.setBot(bot.id, { role: value ? 'executive' : null });
+      useStore.setState(s => ({ bots: s.bots.map(b => b.id === updated.id ? updated : b) }));
+    } catch (e) { setError((e as Error).message); }
+  };
+  return (
+    <Field label="Executive" hint={error || `${bot.name} coordinates the other Bots: hands them work, collects their replies and reports back to you.`}>
+      <Switch on={on} label="Executive" onChange={v => void change(v)} />
+    </Field>
   );
 }

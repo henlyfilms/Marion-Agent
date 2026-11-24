@@ -7,7 +7,7 @@ import { useStore } from './store';
 /** UI state for bot settings, app settings, the Tasks view and the theme. Kept apart from store.ts on purpose. */
 
 export type BotSettingsTab = 'general' | 'skills' | 'memories' | 'routines';
-export type AppSection = 'general' | 'models' | 'audio' | 'shortcuts' | 'computer' | 'permissions' | 'apps' | 'account';
+export type AppSection = 'general' | 'models' | 'audio' | 'notifications' | 'shortcuts' | 'computer' | 'permissions' | 'apps' | 'life' | 'account';
 
 interface ConfigUI {
   botSettings: { botId: string; tab: BotSettingsTab; showAppearance?: boolean } | null;

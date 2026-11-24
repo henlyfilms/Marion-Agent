@@ -8,3 +8,5 @@ web/dist/
 *.zip
 from scratch/
 Marion Agent Installer/payload/Resources/marion/node_modules/
+.claude-test.sh
+.claude/

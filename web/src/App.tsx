@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { Bot } from '@shared/types';
+import type { AppNotification, Bot } from '@shared/types';
+import { BotProfile, TemplateGallery } from './components/features/BotProfile';
+import { TeachRecorder } from './components/features/TeachRecorder';
+import { featuresApi, useFeatureUI } from './lib/featuresApi';
+import { registerServiceWorker, setNotificationSound } from './lib/notifications';
+import { openBotChat } from './components/botMenuItems';
 import { api, isConnectedMessage } from './lib/api';
 import { startEvents } from './lib/events';
 import { displayName, useStore } from './store';
@@ -37,6 +42,45 @@ function CompletionNotice() {
   return <div className="completion-notice" data-visible={Boolean(message)} role="status">{message}</div>;
 }
 
+/** Approval / problem / learned notices while the window is in front (background ones become system banners). */
+function NotificationToast() {
+  const [notice, setNotice] = useState<AppNotification | null>(null);
+  useEffect(() => {
+    let timer: number;
+    const show = (event: Event) => {
+      setNotice((event as CustomEvent<AppNotification>).detail);
+      clearTimeout(timer);
+      timer = window.setTimeout(() => setNotice(null), 6000);
+    };
+    window.addEventListener('marion-agent:toast', show);
+    return () => { clearTimeout(timer); window.removeEventListener('marion-agent:toast', show); };
+  }, []);
+  if (!notice) return null;
+  const open = () => { if (notice.botId) openBotChat(notice.botId); setNotice(null); };
+  return (
+    <div className={`notify-toast is-${notice.kind}`} role="status">
+      <button type="button" className="notify-toast__body" onClick={open}>
+        <strong>{notice.title}</strong>{notice.body && <span>{notice.body}</span>}
+      </button>
+      <button type="button" className="notify-toast__close" onClick={() => setNotice(null)} aria-label="Dismiss"><Icon name="close" size={13} /></button>
+    </div>
+  );
+}
+
+function FeatureLayer() {
+  const gallery = useFeatureUI(s => s.gallery);
+  const profile = useFeatureUI(s => s.profile);
+  const teachBotId = useFeatureUI(s => s.teachBotId);
+  return (
+    <>
+      {gallery && <TemplateGallery />}
+      {profile && <BotProfile key={`${profile.kind}:${profile.id}`} target={profile} />}
+      {teachBotId && <TeachRecorder botId={teachBotId} />}
+      <NotificationToast />
+    </>
+  );
+}
+
 function Shell() {
   const detailsOpen = useDetailsOpen();
   const compact = useCompactLayout();
@@ -64,7 +108,22 @@ function Shell() {
       if (s.selectedBotId) s.loadRows(s.selectedBotId).catch(() => {});
     };
     window.addEventListener('message', onMsg);
+    // Notification clicks and ?bot= links open that chat.
+    const openBot = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (useStore.getState().bots.some(b => b.id === id)) openBotChat(id);
+      else useStore.getState().loadBots().then(() => { if (useStore.getState().bots.some(b => b.id === id)) openBotChat(id); }).catch(() => {});
+    };
+    window.addEventListener('marion-agent:open-bot', openBot);
+    void registerServiceWorker();
+    const linked = new URLSearchParams(location.search).get('bot');
+    if (linked) {
+      history.replaceState(null, '', location.pathname);
+      window.dispatchEvent(new CustomEvent('marion-agent:open-bot', { detail: linked }));
+    }
+    featuresApi.notifications().then(r => setNotificationSound(r.settings.sound)).catch(() => {});
     return () => {
+      window.removeEventListener('marion-agent:open-bot', openBot);
       clearTimeout(warmUsage);
       usage.abort();
       stop();
@@ -118,6 +177,7 @@ function Shell() {
       <ConfigLayer />
       <FieldDictation />
       <CompletionNotice />
+      <FeatureLayer />
     </div>
   );
 }

@@ -9,6 +9,9 @@ import type { Server } from 'node:http';
 import { desktopAccessHeader, hasDesktopAccess } from './lib/desktop-access.js';
 import { remoteAccessFor, remoteWorkspaceUser } from './lib/auth.js';
 import { migrateStarterAgent } from './db.js';
+import './features/schema.js';
+import { featuresApi } from './routes-features.js';
+import { startLifeSync } from './features/life-link.js';
 import { appEnv, env } from './env.js';
 import { api } from './routes.js';
 import { attachVncRelay } from './vnc.js';
@@ -54,6 +57,7 @@ app.get('/api/health', (c) => c.json({
 }));
 app.route('/api/checkins', checkinsApi);
 app.route('/api/rooms', roomsApi);
+app.route('/api', featuresApi);
 app.route('/api', api);
 app.route('/api', configApi);
 
@@ -76,3 +80,4 @@ if (appEnv('NO_SCHEDULER') !== '1') {
 } else console.log('[marion-agent] scheduler disabled (MARION_NO_SCHEDULER=1)');
 startIdleWatcher();
 startMemoryConsolidation();
+if (appEnv('NO_SCHEDULER') !== '1') startLifeSync();

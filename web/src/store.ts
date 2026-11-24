@@ -4,6 +4,8 @@ import type { Bot, ChatModelSelection, ChatSort, ComputerState, LiveState, Routi
 import { api } from './lib/api';
 import { configApi } from './lib/configApi';
 
+import { showNotification } from './lib/notifications';
+
 export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'group' | null;
 
 interface Transcript { generation: number; bySeq: Record<number, Row>; loaded: boolean }
@@ -222,6 +224,9 @@ export const useStore = create<State>((set, get) => ({
         return;
       case 'connections':
         set((st) => ({ connectionsVersion: st.connectionsVersion + 1 }));
+        return;
+      case 'notify':
+        showNotification(ev.notification);
         return;
       case 'model-settings':
         set((st) => ({ modelSettingsVersion: st.modelSettingsVersion + 1 }));

@@ -36,6 +36,15 @@ export interface Bot {
   lastActivityAt: number;
   completedAt?: number | null;
   createdAt: number;
+  /** 'executive' bots coordinate the rest of the team. */
+  role?: 'executive' | null;
+  templateId?: string | null;
+  /** Estimated tokens the bot sends the model each turn (history + instructions). */
+  contextTokens?: number | null;
+  /** Auto-compact when context passes this many tokens; 0 = never; null = app default. */
+  compactAtTokens?: number | null;
+  /** Toolkit slugs this bot is meant to use (shown on its profile). */
+  integrations?: string[];
 }
 
 /** A transcript row. `seq` orders rows; `updatedSeq` is a per-bot revision counter (rows are rewritten while streaming). */
@@ -249,4 +258,32 @@ export type ServerEvent =
   | { type: 'memories'; botId: string }
   | { type: 'connections' }
   | { type: 'model-settings' }
+  | { type: 'notify'; notification: AppNotification }
   | { type: 'ping' };
+
+export type NotificationKind = 'finished' | 'approval' | 'question' | 'error' | 'bot-message' | 'routine' | 'learned';
+
+export interface AppNotification {
+  id: string;
+  kind: NotificationKind;
+  botId?: string;
+  title: string;
+  body: string;
+  at: number;
+}
+
+export interface NotificationSettings {
+  /** Banners on the Mac (or any open browser) when Marion Agent is in the background. */
+  desktop: boolean;
+  /** Web push to paired iPhones and other devices that turned notifications on. */
+  push: boolean;
+  /** Which events notify. */
+  events: Record<NotificationKind, boolean>;
+  /** Include the message text in the banner (off = "Barry finished" only). */
+  previews: boolean;
+  /** Quiet hours in local "HH:MM" (both empty = off). Push only. */
+  quietStart: string;
+  quietEnd: string;
+  /** Play the interface sound with desktop banners. */
+  sound: boolean;
+}

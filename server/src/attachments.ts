@@ -6,8 +6,8 @@ import type { ChatAttachment } from './types.js';
 const photoTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const textExtensions = /\.(?:txt|md|markdown|csv|tsv|json|xml|ya?ml|log|html?|css|[cm]?js|tsx?|py|sh|sql)$/i;
 const maxPhoto = 4 * 1024 * 1024;
-const maxText = 32 * 1024;
-export const attachmentBodyLimit = 4 * maxPhoto + 64 * 1024;
+const maxText = 256 * 1024;
+export const attachmentBodyLimit = 4 * maxPhoto + 4 * maxText + 64 * 1024;
 
 export type UploadedAttachment = ChatAttachment & { data: Buffer };
 
@@ -27,7 +27,7 @@ export async function readAttachments(files: (File | string)[]): Promise<Uploade
     if (!photo && !textExtensions.test(name) && !file.type.startsWith('text/')) {
       throw new Error('Choose a PNG, JPEG, WebP, GIF, or UTF-8 text file.');
     }
-    if (file.size > (photo ? maxPhoto : maxText)) throw new Error(photo ? 'Photos must be 4 MB or smaller.' : 'Text files must be 32 KB or smaller.');
+    if (file.size > (photo ? maxPhoto : maxText)) throw new Error(photo ? 'Photos must be 4 MB or smaller.' : 'Text files must be 256 KB or smaller.');
     const data = Buffer.from(await file.arrayBuffer());
     const mime = photo ? imageType(data) : 'text/plain';
     if (!mime) throw new Error('The photo could not be read. Choose a PNG, JPEG, WebP, or GIF.');

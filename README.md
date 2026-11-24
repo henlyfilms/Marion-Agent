@@ -64,6 +64,24 @@ The selected model handles the individual bot’s chat, push-to-talk replies, an
 
 Use **Share** in a chat to copy or download the current conversation as text. In **Recent activity** order, a bot moves up when it finishes and Marion shows a completion notice.
 
+## Templates, teams and teaching
+
+- **Templates.** Choose **+ → Start from a template** for a ready-made Bot: **Bot Builder** (asks a few questions, then creates a focused Bot for you), **Executive**, **Researcher**, **Inbox Helper** or **Code Liaison**. Each template page shows its Instructions, Memories, Skills, Routines and Integrations; **Import Bot** adds it to your team. Template routines start paused.
+- **Profiles.** Click a Bot's name in the details panel (or right-click a chat → **View profile**) to see the same page for any Bot. The share button exports it as a `.marionbot.json` file that **Import file** on the template page turns back into a Bot.
+- **Teams.** Turn on **Executive** in a Bot's settings to make it coordinate the others. Bots message each other with `send_to_bot`; the answer goes back to the asker automatically. A chain of hand-offs stops after 8 steps and two Bots can exchange at most 30 messages in 10 minutes, so Bots can't loop forever.
+- **Teach by screen recording.** Choose **+ → Teach by screen recording** (or `/teach`), do the task once while talking it through, and press Stop. Marion keeps up to 12 key moments and your narration, sends them to the Bot, and the Bot saves the process as a skill. The Mac asks once for Screen Recording permission.
+- **Self-improvement.** After a chat goes quiet, each Bot turns corrections and lessons from it into its **Lessons learned** skill and updates its other skills. **Learn from chat** in the details panel does it right away.
+- **Context.** Each chat shows how many tokens it sends per reply (0 to 1M) in the chat list and the details panel. **Compact now** summarizes older messages; **Auto-compacts at** sets the size per Bot (or Never).
+- **Computer sleep.** The switch under **Bot's computer** puts that Bot's Linux desktop to sleep or wakes it. A sleeping desktop wakes by itself when the Bot needs it.
+
+## Notifications
+
+**Settings → Notifications** turns on Mac banners (shown while Marion Agent is in the background) and chooses which events notify: replies, approvals, questions, problems, routines, Bot hand-offs and self-improvement. For iPhone, open Marion Agent from its Home Screen icon over your private HTTPS address, go to **Settings → Notifications** and choose **Turn on**. Quiet hours pause phone notifications.
+
+## Marion Life
+
+Chats can be copied into the Marion Life database so its Second Brain can find them. Run `docs/marion-life-agent-chats.sql` once in Supabase → SQL Editor, then fill in **Settings → Marion Life** with the project URL, the service role key (it stays on this Mac) and your Marion Life email. Changed chats are copied about a minute after each reply.
+
 ## Connect apps and audio
 
 - Open **Settings → Connected apps**. Paste a Composio project key, choose **Verify and save**, then **Link an app** and approve the provider's authorization form. Composio needs a project key once. Individual OAuth apps are then linked without pasting each app's token into Marion Agent. Hosted deployments configure `COMPOSIO_API_KEY` on the server.
@@ -101,7 +119,7 @@ Marion Agent routes chat and memory to your local model server. In `.env`, set `
 
 Run `scripts/package-distributions.sh` on macOS to regenerate both distribution archives from the canonical source and the installer’s pinned runtime dependencies.
 
-Run `npm run typecheck` and `npm run build` from the project directory. For hot reload, set `APP_URL=http://127.0.0.1:5173` in `.env`, then run `npm run dev -w server` and `npm run dev -w web -- --host 127.0.0.1` in separate terminals. Open http://127.0.0.1:5173. The browser smoke test uses a disposable database, creates two bot desktops, and checks sign-in, viewer input, file downloads, and restart persistence. Start the built app with `DB_PATH` pointing to a temporary database, run `npx playwright install chromium`, then run `node tests/local-desktop.mjs`. Set `CLEANUP_TEST_DESKTOPS=1` to remove the test-created containers, volumes, and networks after the run.
+Run `npm run typecheck` and `npm run build` from the project directory. For hot reload, set `APP_URL=http://127.0.0.1:5173` in `.env`, then run `npm run dev -w server` and `npm run dev -w web -- --host 127.0.0.1` in separate terminals. Open http://127.0.0.1:5173. Run `node tests/features.mjs` for templates, Bot coordination, attachments, teaching, compaction, notifications and the Marion Life link; `node tests/ui-sweep.mjs` and `node tests/live-dictation.mjs` need Chrome (`BROWSER_EXECUTABLE`). The browser smoke test uses a disposable database, creates two bot desktops, and checks sign-in, viewer input, file downloads, and restart persistence. Start the built app with `DB_PATH` pointing to a temporary database, run `npx playwright install chromium`, then run `node tests/local-desktop.mjs`. Set `CLEANUP_TEST_DESKTOPS=1` to remove the test-created containers, volumes, and networks after the run.
 
 For an existing install, back up the SQLite database and set `DB_PATH` to its absolute path before starting. Your accounts, bots, and chat history remain in that database. Sign in again to receive the new session cookie. Export files from any prior remote desktops separately if you still need them.
 

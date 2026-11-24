@@ -16,6 +16,8 @@ import { useContextMenu } from './ContextMenu';
 import { botMenuItems, openBotChat, toggleChatStar } from './botMenuItems';
 import { Modal } from './modals/Modal';
 import { useChatReorder, type ChatMove } from './useChatReorder';
+import { formatTokens } from '../lib/featuresApi';
+import { contextFraction, contextTone } from './features/ContextCard';
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -145,7 +147,11 @@ const BotButton = memo(function BotButton({ bot, selected, running, awaiting, va
         <span className="bot-row__name">{displayName(bot)}{bot.pinned && variant !== 'featured' && <Icon name="star" size={11} className="bot-row__star" />}</span>
         {variant !== 'featured' && <span className="bot-row__preview">{previewFor(bot, running, awaiting)}</span>}
       </span>
-      {variant !== 'featured' && bot.lastPreview && <time className="bot-row__time" dateTime={new Date(bot.lastActivityAt).toISOString()}>{activityTime(bot.lastActivityAt)}</time>}
+      {variant !== 'featured' && (bot.lastPreview || bot.contextTokens) && <span className="bot-row__meta">
+        {bot.lastPreview && <time className="bot-row__time" dateTime={new Date(bot.lastActivityAt).toISOString()}>{activityTime(bot.lastActivityAt)}</time>}
+        {bot.kind !== 'room' && bot.contextTokens ? <span className={`bot-row__context ${contextTone(bot.contextTokens)}`} title={`Context: ${bot.contextTokens.toLocaleString()} of 1,000,000 tokens`}
+          aria-label={`Context ${formatTokens(bot.contextTokens)} tokens`}><span className="bot-row__context-bar"><span style={{ width: `${contextFraction(bot.contextTokens) * 100}%` }} /></span>{formatTokens(bot.contextTokens)}</span> : null}
+      </span>}
     </button>
   );
 });

@@ -18,10 +18,17 @@ interface Recording {
   controller: AbortController;
   media?: MediaRecorder;
   timer?: ReturnType<typeof setTimeout>;
+  /** Live preview: re-transcribes the audio so far while the user is still talking. */
+  preview?: ReturnType<typeof setInterval>;
+  previewing?: AbortController;
 }
+
+/** How often to refresh the live preview: quick at first, slower as the recording (and each pass) grows. */
+const previewEvery = (ms: number) => (ms < 30_000 ? 1200 : ms < 90_000 ? 2500 : 5000);
 
 export function useDictation(onText: (text: string) => void, onError: (msg: string) => void, language?: string, maxMs = MAX_MS, native = false) {
   const [state, setState] = useState<DictationState>('idle');
+  const [interim, setInterim] = useState('');
   const active = useRef<Recording>();
   const cb = useRef({ onText, onError, language, native });
   cb.current = { onText, onError, language, native };
@@ -30,9 +37,12 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
     const recording = active.current;
     if (!recording) return;
     clearTimeout(recording.timer);
+    clearInterval(recording.preview);
+    recording.previewing?.abort();
     if (cancel || !recording.media) {
       active.current = undefined;
       recording.controller.abort();
+      setInterim('');
       setState('idle');
     }
     if (recording.media?.state === 'recording') {
@@ -64,7 +74,9 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
         capture.getTracks().forEach(track => track.stop());
       };
       const idle = () => {
-        if (active.current === recording) { active.current = undefined; setState('idle'); }
+        clearInterval(recording.preview);
+        recording.previewing?.abort();
+        if (active.current === recording) { active.current = undefined; setInterim(''); setState('idle'); }
       };
       media.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
       media.onerror = () => {
@@ -75,6 +87,8 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
       };
       media.onstop = async () => {
         cleanUp();
+        clearInterval(recording.preview);
+        recording.previewing?.abort();
         if (signal.aborted || !chunks.length || Date.now() - start < 250) { idle(); return; }
         setState('transcribing');
         try {
@@ -89,6 +103,20 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
       };
       media.start(500);
       recording.timer = setTimeout(() => finish(), maxMs);
+      // Live preview: every second or so, transcribe what has been said so far and show it in the box.
+      let lastPreview = 0;
+      recording.preview = setInterval(() => {
+        const elapsed = Date.now() - start;
+        if (recording.previewing || !chunks.length || media.state !== 'recording' || Date.now() - lastPreview < previewEvery(elapsed)) return;
+        lastPreview = Date.now();
+        const previewing = new AbortController();
+        recording.previewing = previewing;
+        const audio = new Blob(chunks, { type: media.mimeType || mime || 'audio/webm' });
+        voiceApi.transcribe(audio, cb.current.language, AbortSignal.any([signal, previewing.signal]), cb.current.native)
+          .then(text => { if (!previewing.signal.aborted && active.current === recording && media.state === 'recording') setInterim(text.trim()); })
+          .catch(() => { /* A preview can fail (e.g. too little audio); the final transcription still runs. */ })
+          .finally(() => { if (recording.previewing === previewing) recording.previewing = undefined; });
+      }, 400);
     } catch (cause) {
       stream?.getTracks().forEach(track => track.stop());
       if (!signal.aborted) cb.current.onError(micErrorMessage(cause));
@@ -104,5 +132,5 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
   }, [state, finish]);
   useEffect(() => () => finish(true), [finish]);
 
-  return { state, begin, finish };
+  return { state, interim, begin, finish };
 }

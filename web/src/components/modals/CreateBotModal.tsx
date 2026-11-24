@@ -10,6 +10,7 @@ import { useStore } from '../../store';
 import { Icon } from '../Icon';
 import { openBotChat } from '../botMenuItems';
 import { Modal } from './Modal';
+import { useFeatureUI } from '../../lib/featuresApi';
 
 export function CreateBotModal() {
   const setModal = useStore((s) => s.setModal);
@@ -72,7 +73,10 @@ export function CreateBotModal() {
           {error && <div className="card__error">{error}</div>}
         </div>
         <div className="modal__footer">
-          <button type="button" className="link-btn link-btn--small" style={{ marginRight: 'auto' }} onClick={() => setModal('group')}>New group chat instead</button>
+          <span className="create-modal__alts">
+            <button type="button" className="link-btn link-btn--small" onClick={() => { close(); useFeatureUI.getState().set({ gallery: true }); }}>Start from a template</button>
+            <button type="button" className="link-btn link-btn--small" onClick={() => setModal('group')}>New group chat</button>
+          </span>
           <button type="button" className="btn btn--secondary btn--sm" onClick={close}>Cancel</button>
           <button type="submit" className="btn btn--primary btn--sm" disabled={!canCreate}>{busy ? 'Creating…' : 'Create'}</button>
         </div>

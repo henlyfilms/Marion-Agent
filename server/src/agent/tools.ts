@@ -6,7 +6,10 @@ import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { desktop } from '../desktop.js';
 import { BOX_ROOT, screenFor } from '../computer.js';
-import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
+import { appendRow, getBotRow, getLive, listRoutines, toRoutine, describeCron } from '../store.js';
+import { teamRoster } from '../features/coordination.js';
+import { createBotRecord } from '../features/bots.js';
+import { saveLearnedSkill } from '../features/improve.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
 import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes } from '../triggers.js';
@@ -19,8 +22,12 @@ import { Cron } from 'croner';
 export interface ToolCtx {
   userId: string;
   botId: string;
-  enqueueBotMessage: (fromBotId: string, toBotId: string, text: string, depth: number) => void;
+  enqueueBotMessage: (fromBotId: string, toBotId: string, text: string, depth: number, opts?: { autoReply?: boolean }) => void;
   depth: number;
+  /** Bots this turn already messaged (so the automatic reply isn't sent twice). */
+  messaged?: Set<string>;
+  /** The bot whose message started this turn, if any. Replies to it are always allowed. */
+  replyTo?: string;
   signal?: AbortSignal;
   textScreen?: boolean;
 }
@@ -76,7 +83,8 @@ async function onScreen<T>(ctx: ToolCtx, fn: (desktopId: string) => Promise<T>) 
 }
 
 function botByName(userId: string, name: string) {
-  return db.prepare('SELECT * FROM bots WHERE user_id=? AND lower(name)=lower(?)').get(userId, name.trim()) as any;
+  // Visible bots first, so a helper named like a teammate never shadows the teammate.
+  return db.prepare('SELECT * FROM bots WHERE user_id=? AND lower(name)=lower(?) ORDER BY COALESCE(hidden,0), created_at').get(userId, String(name ?? '').trim().replace(/^@/, '')) as any;
 }
 
 export const TOOLS: ToolDef[] = [
@@ -369,6 +377,59 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'list_team',
+    description: "List every Bot on the user's team: name, job, role, model, whether it is working or idle, and its latest message. Use before delegating.",
+    parameters: obj({}),
+    activity: 'working',
+    label: 'Checking the team',
+    impl: async (_a, ctx) => ({ output: JSON.stringify(teamRoster(ctx.userId, ctx.botId, getLive)), summary: 'Checked the team' }),
+  },
+  {
+    name: 'create_bot',
+    description: 'Create a new Bot on the user\'s team (only when the user asked for one). Give it one clear job, concrete instructions with anti-jobs, only the integrations it needs, 1-3 skills, and routines only for scheduled jobs (paused unless the user asked to start them).',
+    parameters: obj({
+      name: { type: 'string' },
+      job: { type: 'string', description: 'One line: what the Bot does' },
+      description: { type: 'string', description: '2-4 sentences shown on its profile' },
+      instructions: { type: 'string' },
+      avatar_color: { type: 'string', enum: ['brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray', 'black'] },
+      avatar_shape: { type: 'string', description: 'A berry: marionberry, blackberry, raspberry, blueberry, cloudberry, strawberry, cranberry, tayberry, mulberry, gooseberry' },
+      executive: { type: 'boolean', description: 'True only for a Bot whose job is coordinating other Bots' },
+      integrations: { type: 'array', items: { type: 'string' }, description: 'Composio toolkit slugs, e.g. gmail, slack, notion' },
+      memories: { type: 'array', items: { type: 'string' } },
+      skills: { type: 'array', items: obj({ name: { type: 'string' }, description: { type: 'string' }, body: { type: 'string' } }, ['name', 'description', 'body']) },
+      routines: { type: 'array', items: obj({ name: { type: 'string' }, prompt: { type: 'string' }, schedule: { type: 'string', description: '5-field cron' }, timezone: { type: 'string' }, enabled: { type: 'boolean' } }, ['name', 'prompt', 'schedule', 'timezone', 'enabled']) },
+    }, ['name', 'job', 'description', 'instructions', 'avatar_color', 'avatar_shape', 'executive', 'integrations', 'memories', 'skills', 'routines']),
+    activity: 'working',
+    label: 'Creating a Bot',
+    impl: async (a, ctx) => {
+      const name = String(a.name ?? '').trim();
+      if (!name) return { output: 'Give the Bot a name.' };
+      if (botByName(ctx.userId, name)) return { output: `A Bot named "${name}" already exists. Pick another name.` };
+      const recent = (db.prepare('SELECT COUNT(*) n FROM bots WHERE user_id=? AND created_at>?').get(ctx.userId, now() - 3600_000) as any).n;
+      if (recent >= 10) return { output: 'Too many Bots were created in the last hour. Ask the user before creating more.' };
+      const bot = createBotRecord(ctx.userId, {
+        name, label: a.job, description: a.description, instructions: a.instructions,
+        avatarColor: a.avatar_color, avatarShape: a.avatar_shape, role: a.executive ? 'executive' : null,
+        integrations: Array.isArray(a.integrations) ? a.integrations : [], memories: Array.isArray(a.memories) ? a.memories : [],
+        skills: Array.isArray(a.skills) ? a.skills : [], routines: Array.isArray(a.routines) ? a.routines : [], templateId: 'bot-builder',
+      });
+      appendRow(ctx.botId, 'event', { type: 'event', event: 'bot-message', text: `Created ${bot.name}` });
+      return { output: JSON.stringify({ ok: true, name: bot.name, id: bot.id, note: 'It now appears in the user\'s chat list.' }), summary: `Created ${bot.name}` };
+    },
+  },
+  {
+    name: 'save_skill',
+    description: 'Save or update one of your own skills: a short step-by-step playbook for a task you will do again. Use it when the user teaches you a process (including by screen recording), corrects how you did something, or you find a better way. Same name = update.',
+    parameters: obj({ name: { type: 'string' }, description: { type: 'string' }, body: { type: 'string', description: 'Numbered steps, 3-15 lines' } }, ['name', 'description', 'body']),
+    activity: 'working',
+    label: 'Saving a skill',
+    impl: async (a, ctx) => {
+      const result = saveLearnedSkill(ctx.botId, String(a.name ?? ''), String(a.description ?? ''), String(a.body ?? ''));
+      return { output: result.message, summary: result.message };
+    },
+  },
+  {
     name: 'send_to_bot',
     description: "Send a message to another Bot on the user's team (by name) to delegate work or ask a question. Their reply will arrive later as a new message to you.",
     parameters: obj({ bot_name: { type: 'string' }, message: { type: 'string' } }, ['bot_name', 'message']),
@@ -379,9 +440,15 @@ export const TOOLS: ToolDef[] = [
       if (!target) return { output: `No bot named "${a.bot_name}". Team: ${(db.prepare('SELECT name FROM bots WHERE user_id=?').all(ctx.userId) as any[]).map((b) => b.name).join(', ')}` };
       if (target.id === ctx.botId) return { output: 'That is you.' };
       if (target.kind === 'room') return { output: `"${target.name}" is a group chat; use post_to_group instead.` };
-      if (ctx.depth >= 3) return { output: 'Too many hops between bots; answer the user directly instead.' };
-      ctx.enqueueBotMessage(ctx.botId, target.id, String(a.message), ctx.depth + 1);
-      return { output: `Sent to ${target.name}. Their reply will come back to you as a message.`, summary: `Messaged ${target.name}` };
+      if (target.hidden && target.parent_bot_id !== ctx.botId && target.id !== ctx.replyTo) return { output: `"${target.name}" is another Bot's helper. Message its parent instead.` };
+      const replying = target.id === ctx.replyTo;
+      try {
+        ctx.enqueueBotMessage(ctx.botId, target.id, String(a.message), ctx.depth + 1, { autoReply: replying });
+      } catch (e: any) {
+        return { output: `Not sent: ${e?.message ?? e}. Answer the user directly instead.` };
+      }
+      ctx.messaged?.add(target.id);
+      return { output: replying ? `Replied to ${target.name}.` : `Sent to ${target.name}. Their reply will come back to you as a message; end your turn now unless you have other work.`, summary: `Messaged ${target.name}` };
     },
   },
   {
@@ -418,7 +485,9 @@ export const TOOLS: ToolDef[] = [
     impl: async (a, ctx) => {
       const sub = db.prepare('SELECT id FROM bots WHERE id=? AND parent_bot_id=?').get(a.subagent_id, ctx.botId) as any;
       if (!sub) return { output: 'No such subagent.' };
-      ctx.enqueueBotMessage(ctx.botId, sub.id, String(a.message), ctx.depth + 1);
+      try { ctx.enqueueBotMessage(ctx.botId, sub.id, String(a.message), ctx.depth + 1); }
+      catch (e: any) { return { output: `Not sent: ${e?.message ?? e}` }; }
+      ctx.messaged?.add(sub.id);
       return { output: 'Sent.' };
     },
   },

@@ -42,6 +42,11 @@ export function toBot(r: any): Bot {
     lastActivityAt: last?.created_at ?? r.updated_at,
     completedAt: r.completed_at,
     createdAt: r.created_at,
+    role: r.role === 'executive' ? 'executive' : null,
+    templateId: r.template_id ?? null,
+    contextTokens: r.context_tokens ?? null,
+    compactAtTokens: r.compact_at_tokens ?? null,
+    integrations: (() => { try { return r.integrations ? JSON.parse(r.integrations) : []; } catch { return []; } })(),
   };
 }
 

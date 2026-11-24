@@ -4,6 +4,7 @@ import { configApi } from '../lib/configApi';
 import { setDetailsOpen } from '../lib/layout';
 import { useStore } from '../store';
 import type { MenuItem } from './Menu';
+import { useFeatureUI } from '../lib/featuresApi';
 
 export function openBotChat(id: string) {
   useConfigUI.getState().setView('chat');
@@ -32,6 +33,10 @@ export function botMenuItems(bot: Bot, includeOpen = false): MenuItem[] {
       if (selectedBotId !== bot.id || view !== 'chat') openBotChat(bot.id);
       set({ viewerOpen: true });
     } }]),
+    ...(bot.kind === 'room' ? [] : [
+      { label: 'View profile', onSelect: () => useFeatureUI.getState().set({ profile: { kind: 'bot', id: bot.id } }) },
+      { label: 'Teach by screen recording…', onSelect: () => { if (selectedBotId !== bot.id || view !== 'chat') openBotChat(bot.id); useFeatureUI.getState().set({ teachBotId: bot.id }); } },
+    ]),
     { label: 'Change icon…', separator: true, onSelect: () => openBotAppearance(bot.id) },
     { label: bot.pinned ? 'Unstar chat' : 'Star chat', onSelect: () => toggleChatStar(bot.id) },
     { label: bot.kind === 'room' ? 'Group settings…' : 'Bot settings…', onSelect: () => openBotSettings(bot.id) },

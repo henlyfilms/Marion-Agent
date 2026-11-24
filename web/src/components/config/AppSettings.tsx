@@ -13,16 +13,19 @@ import { ToolkitLogo } from '../ToolkitLogo';
 import { Glyph } from './glyphs';
 import { AudioSettings, ComposioSettings, LocalModelSettings, SubscriptionSettings } from './LocalSettings';
 import { ConfirmButton } from './ui';
+import { LifeLinkSection, NotificationsSection } from '../features/FeatureSettings';
 import { DEFAULT_DICTATION_SHORTCUT, dictationShortcut, setDictationShortcut, shortcutFor } from '../../voice/shortcut';
 
 const SECTIONS: { id: AppSection; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'models', label: 'Models' },
   { id: 'audio', label: 'Audio' },
+  { id: 'notifications', label: 'Notifications' },
   { id: 'shortcuts', label: 'Shortcuts' },
   { id: 'computer', label: 'Computer' },
   { id: 'permissions', label: 'Permissions' },
   { id: 'apps', label: 'Connected apps' },
+  { id: 'life', label: 'Marion Life' },
   { id: 'account', label: 'Account' },
 ];
 
@@ -61,6 +64,8 @@ export function AppSettings() {
             {section === 'computer' && <ComputerSection />}
             {section === 'permissions' && <PermissionsSection />}
             {section === 'apps' && <AppsSection />}
+            {section === 'notifications' && <NotificationsSection />}
+            {section === 'life' && <LifeLinkSection />}
             {section === 'account' && <AccountSection />}
           </div>
         </div>

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, nativeTheme, session, shell, webContents } = require('electron');
+const { app, BrowserWindow, Menu, desktopCapturer, dialog, nativeTheme, session, shell, webContents } = require('electron');
 const { spawn } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const { mkdirSync, copyFileSync, chmodSync, constants, existsSync, readFileSync } = require('node:fs');
@@ -32,13 +32,27 @@ const windowOptions = () => ({
 
 function configureSession() {
   appSession = session.fromPartition('persist:marion-agent');
+  // Local pages may use the microphone (dictation, calls), show notifications, and record the
+  // screen for "Teach by screen recording". Nothing else, and nothing for other origins.
   appSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const requesting = details.requestingUrl || contents?.getURL();
-    callback(permission === 'media' && isLocal(requesting)
-      && Boolean(details.mediaTypes?.length) && details.mediaTypes.every(type => type === 'audio'));
+    if (!isLocal(requesting)) return callback(false);
+    if (permission === 'notifications' || permission === 'display-capture') return callback(true);
+    callback(permission === 'media' && Boolean(details.mediaTypes?.length)
+      && details.mediaTypes.every(type => type === 'audio' || type === 'video'));
   });
-  appSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) =>
-    permission === 'media' && requestingOrigin === origin && details.mediaType === 'audio');
+  appSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
+    if (requestingOrigin !== origin) return false;
+    if (permission === 'notifications') return true;
+    return permission === 'media' && (details.mediaType === 'audio' || details.mediaType === 'video');
+  });
+  // getDisplayMedia(): use the macOS screen picker when available, else share the main screen.
+  appSession.setDisplayMediaRequestHandler((request, callback) => {
+    if (!isLocal(request.securityOrigin || request.frame?.url || '')) return callback({});
+    desktopCapturer.getSources({ types: ['screen'] })
+      .then(sources => callback(sources[0] ? { video: sources[0] } : {}))
+      .catch(() => callback({}));
+  }, { useSystemPicker: true });
 
   appSession.webRequest.onBeforeSendHeaders(
     { urls: ['http://127.0.0.1/*', 'ws://127.0.0.1/*'] },
