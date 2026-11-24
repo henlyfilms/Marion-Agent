@@ -4,8 +4,8 @@ import { newId } from './lib/ids.js';
 const photoTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const textExtensions = /\.(?:txt|md|markdown|csv|tsv|json|xml|ya?ml|log|html?|css|[cm]?js|tsx?|py|sh|sql)$/i;
 const maxPhoto = 4 * 1024 * 1024;
-const maxText = 32 * 1024;
-export const attachmentBodyLimit = 4 * maxPhoto + 64 * 1024;
+const maxText = 256 * 1024;
+export const attachmentBodyLimit = 4 * maxPhoto + 4 * maxText + 64 * 1024;
 function imageType(bytes) {
     if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
         return 'image/png';
@@ -28,7 +28,7 @@ export async function readAttachments(files) {
             throw new Error('Choose a PNG, JPEG, WebP, GIF, or UTF-8 text file.');
         }
         if (file.size > (photo ? maxPhoto : maxText))
-            throw new Error(photo ? 'Photos must be 4 MB or smaller.' : 'Text files must be 32 KB or smaller.');
+            throw new Error(photo ? 'Photos must be 4 MB or smaller.' : 'Text files must be 256 KB or smaller.');
         const data = Buffer.from(await file.arrayBuffer());
         const mime = photo ? imageType(data) : 'text/plain';
         if (!mime)

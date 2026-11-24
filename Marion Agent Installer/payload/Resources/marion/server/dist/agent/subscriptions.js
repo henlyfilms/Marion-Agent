@@ -72,13 +72,20 @@ export const codexArgs = [
     '-c', 'features.apps=false', '-c', 'features.plugins=false', '-c', 'features.goals=false',
     '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'project_doc_max_bytes=0',
 ];
+const googleDeny = ['command(*)', 'unsandboxed(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)'];
 export const googleSettings = JSON.stringify({
     modelProvider: '',
     allowNonWorkspaceAccess: false,
-    permissions: {
-        allow: [],
-        deny: ['command(*)', 'unsandboxed(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)'],
-    },
+    permissions: { allow: [], deny: googleDeny },
+});
+/**
+ * With photos attached, Antigravity may read files, but only inside its own fresh temporary
+ * working folder, which holds nothing except those photos (non-workspace access stays off).
+ */
+const googleSettingsWithPhotos = JSON.stringify({
+    modelProvider: '',
+    allowNonWorkspaceAccess: false,
+    permissions: { allow: [], deny: googleDeny.filter(rule => rule !== 'read_file(*)') },
 });
 const agyArgs = [
     '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--settings', googleSettings,
@@ -249,7 +256,9 @@ export async function subscriptionReply(selection, prompt, signal, images = []) 
     try {
         if (provider === 'claude')
             await requireClaudeSubscription(program, cwd, stop);
-        const args = [...providerArgs[provider]];
+        const args = provider === 'gemini' && images.length
+            ? agyArgs.map(arg => arg === googleSettings ? googleSettingsWithPhotos : arg)
+            : [...providerArgs[provider]];
         if (provider !== 'codex') {
             args.push('--model', model);
             if (effort)
@@ -263,6 +272,15 @@ export async function subscriptionReply(selection, prompt, signal, images = []) 
             await writeFile(path, image.data, { mode: 0o600 });
             return { type: 'localImage', path };
         })) : [];
+        // Antigravity's chat protocol takes text only: hand it the photos as files in its working folder.
+        if (provider === 'gemini' && images.length) {
+            const names = await Promise.all(images.map(async (image, index) => {
+                const name = `attached-image-${index + 1}.${image.mime === 'image/jpeg' ? 'jpg' : image.mime.slice('image/'.length)}`;
+                await writeFile(join(cwd, name), image.data, { mode: 0o600 });
+                return name;
+            }));
+            prompt += `\n\nThe user's images are saved in your working folder as: ${names.join(', ')}. Open and look at them before answering.`;
+        }
         const child = spawn(program, args, {
             cwd, env: cliEnvironment(), signal: stop, stdio: ['pipe', 'pipe', 'pipe'],
         });

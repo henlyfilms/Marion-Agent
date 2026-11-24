@@ -1,10 +1,10 @@
-import { localModel, modelForBot } from './models.js';
+import { backgroundText, parseJsonObject } from './background-model.js';
 import { db, now } from '../db.js';
 import '../db-config.js';
 import { appEnv } from '../env.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { getBotRow, getLive } from '../store.js';
+import { emitBot, getBotRow, getLive } from '../store.js';
 /**
  * Memory over time:
  *  (a) compaction of a bot's stored Responses API history (llm_items) when it gets large,
@@ -154,12 +154,7 @@ export function renderTranscript(items, maxChars = 200_000) {
 }
 async function compactWithSummary(botId, old) {
     const transcript = renderTranscript(old);
-    const res = await localModel.responses.create({
-        model: modelForBot(botId),
-        input: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: transcript }],
-        reasoning: { effort: 'low' },
-    });
-    const text = String(res.output_text ?? '').trim();
+    const text = await backgroundText(botId, SUMMARY_PROMPT, transcript);
     if (!text)
         throw new Error('summary was empty');
     return [{ role: 'user', content: `[Automatic summary of the earlier conversation, made to save space. Treat it as your own notes.]\n${text}` }];
@@ -170,8 +165,16 @@ const compactCooldown = new Map();
  * (it is called from the agent loop before each model call), so it never races a turn.
  * Returns the history to send.
  */
+/** Characters of history at which this bot auto-compacts (its own setting, else the app default). 0 = never. */
+export function compactLimitChars(botId) {
+    const own = db.prepare('SELECT compact_at_tokens FROM bots WHERE id=?').get(botId)?.compact_at_tokens;
+    return typeof own === 'number' && own >= 0 ? own * 4 : memoryConfig.compactChars;
+}
 export async function maybeCompact(botId, items, opts = {}) {
-    const limit = memoryConfig.compactChars;
+    const configured = compactLimitChars(botId);
+    if (!opts.force && configured === 0)
+        return items;
+    const limit = configured || memoryConfig.compactChars;
     const before = historySize(botId, items);
     if (!opts.force && before <= limit)
         return items;
@@ -220,6 +223,8 @@ export async function maybeCompact(botId, items, opts = {}) {
     if (!ok)
         return items;
     usage.delete(botId); // indices changed; the next model call measures the compacted history
+    db.prepare('UPDATE bots SET context_tokens=? WHERE id=?').run(Math.round(estimateChars(next) / 4), botId);
+    emitBot(botId);
     lastCompaction.set(botId, { generation: bot.generation, items: next.length });
     console.log(`[memory] compacted ${bot.name} (${botId}) via ${method}: ${items.length} items/${before} chars -> ${next.length} items/${estimateChars(next)} chars, kept ${keep.length} recent, ${Date.now() - t0}ms`);
     return next;
@@ -248,7 +253,7 @@ Read the recent conversation and extract only durable facts worth remembering fo
 - lasting facts about ongoing projects
 Skip: one-off requests, small talk, temporary states, anything the Bot said about itself, passwords or secrets, and anything already covered by EXISTING MEMORIES (even if worded differently).
 Write each memory as one short standalone sentence in the third person (e.g. "Prefers bullet-point summaries."), under 200 characters. Return at most 8. Return an empty list when nothing qualifies.`;
-const SCHEMA = {
+export const MEMORY_SCHEMA = {
     type: 'object',
     properties: { memories: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false } } },
     required: ['memories'],
@@ -277,20 +282,9 @@ export async function consolidateBot(botId, opts = {}) {
     if (transcript.length > 24_000)
         transcript = transcript.slice(-24_000);
     const existing = db.prepare('SELECT text FROM memories WHERE bot_id=? ORDER BY created_at DESC LIMIT 200').all(botId).map((m) => m.text);
-    const res = await localModel.responses.create({
-        model: modelForBot(botId),
-        input: [
-            { role: 'system', content: CONSOLIDATE_PROMPT },
-            { role: 'user', content: `EXISTING MEMORIES:\n${existing.length ? existing.map((t) => `- ${t}`).join('\n') : '(none)'}\n\nRECENT CONVERSATION:\n${transcript}` },
-        ],
-        text: { format: { type: 'json_schema', name: 'memories', schema: SCHEMA, strict: true } },
-        reasoning: { effort: 'low' },
-    });
-    let proposed = [];
-    try {
-        proposed = (JSON.parse(String(res.output_text ?? '{}')).memories ?? []).map((m) => String(m.text ?? '').trim()).filter(Boolean);
-    }
-    catch { /* bad json → nothing */ }
+    const reply = await backgroundText(botId, `${CONSOLIDATE_PROMPT}\nReturn JSON only, shaped like ${JSON.stringify({ memories: [{ text: '...' }] })}.`, `EXISTING MEMORIES:\n${existing.length ? existing.map((t) => `- ${t}`).join('\n') : '(none)'}\n\nRECENT CONVERSATION:\n${transcript}`);
+    const proposed = ((parseJsonObject(reply)?.memories) ?? [])
+        .map((m) => String(m?.text ?? '').trim()).filter(Boolean);
     const added = [];
     let skipped = 0;
     const ins = db.prepare("INSERT INTO memories(id,bot_id,text,created_at,source) VALUES (?,?,?,?,'learned')");
@@ -311,6 +305,7 @@ export async function consolidateBot(botId, opts = {}) {
     return { added, skipped, considered: msgs.length };
 }
 const consolidating = new Set();
+const backgroundCooldown = new Map();
 /** Bots whose newest message is older than the idle window and newer than their last consolidation. */
 export function botsDueForConsolidation(idleMs, at = now()) {
     const rows = db.prepare(`
@@ -327,14 +322,27 @@ export function startMemoryConsolidation() {
         for (const { botId, lastAt } of botsDueForConsolidation(idleMs)) {
             if (consolidating.has(botId) || getLive(botId).isRunning)
                 continue;
+            if ((backgroundCooldown.get(botId) ?? 0) > now())
+                continue;
             if (db.prepare('SELECT 1 FROM pending_turns WHERE bot_id=?').get(botId))
                 continue;
             consolidating.add(botId);
+            // A failure (signed-out CLI, quota, model offline) waits 30 minutes instead of retrying every sweep.
             try {
                 await consolidateBot(botId, { upTo: lastAt });
             }
             catch (e) {
+                backgroundCooldown.set(botId, now() + 30 * 60_000);
                 console.warn(`[memory] consolidation failed for ${botId}: ${e?.message ?? e}`);
+                continue;
+            }
+            try {
+                const { reflectBot } = await import('../features/improve.js');
+                await reflectBot(botId);
+            }
+            catch (e) {
+                backgroundCooldown.set(botId, now() + 30 * 60_000);
+                console.warn(`[improve] reflection failed for ${botId}: ${e?.message ?? e}`);
             }
             finally {
                 consolidating.delete(botId);

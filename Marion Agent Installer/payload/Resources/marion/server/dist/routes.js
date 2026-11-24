@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { attachmentBodyLimit, getAttachment, photos, readAttachments } from './attachments.js';
+import { attachmentBodyLimit, getAttachment, readAttachments } from './attachments.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { streamSSE } from 'hono/streaming';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -24,7 +24,8 @@ import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
 import { chatSortOptions } from './types.js';
 import { orderChats } from './chat-order.js';
-import { DEFAULT_BERRY, DEFAULT_STEM_COLOR, isBerryShape, isStemColor } from './avatarShapes.js';
+import { isBerryShape, isStemColor } from './avatarShapes.js';
+import { createBotRecord } from './features/bots.js';
 export const api = new Hono();
 const COLORS = ['black', 'brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray'];
 function hashPick(id, list) {
@@ -40,13 +41,7 @@ export function jsonForScript(value) {
     return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 function createBot(userId, b) {
-    const id = newId('bot');
-    const shape = isBerryShape(b.avatarShape) ? b.avatarShape : DEFAULT_BERRY;
-    const stemColor = b.avatarStemColor === null || isStemColor(b.avatarStemColor) ? b.avatarStemColor : DEFAULT_STEM_COLOR;
-    const color = COLORS.includes(b.avatarColor) ? b.avatarColor : hashPick(id, COLORS.filter((c) => c !== 'black'));
-    db.prepare('INSERT INTO bots(id,user_id,name,label,description,instructions,avatar_shape,avatar_color,avatar_stem_color,mode,is_primary,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, userId, b.name.trim().slice(0, 60) || 'New Bot', b.label ?? '', b.description ?? '', b.instructions ?? '', shape, color, stemColor, b.mode === 'teammate' ? 'teammate' : 'personal', b.isPrimary ? 1 : 0, now(), now());
-    hub.emit(userId, { type: 'roster' });
-    return getBot(id);
+    return createBotRecord(userId, { ...b, role: b.role === 'executive' ? 'executive' : null });
 }
 function mayCreateAccount(email) {
     const e = email.trim().toLowerCase();
@@ -307,7 +302,12 @@ api.patch('/bots/:id', async (c) => {
     }
     if (p.pinned !== undefined && typeof p.pinned !== 'boolean')
         return c.json({ error: 'Choose whether to star this chat.' }, 400);
-    const cols = { name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
+    if (p.role !== undefined && p.role !== null && p.role !== 'executive')
+        return c.json({ error: 'Choose executive or no role.' }, 400);
+    if (p.compactAtTokens !== undefined && p.compactAtTokens !== null && !(Number.isInteger(p.compactAtTokens) && p.compactAtTokens >= 0 && p.compactAtTokens <= 1_000_000)) {
+        return c.json({ error: 'Choose a compaction size between 0 and 1,000,000 tokens.' }, 400);
+    }
+    const cols = { role: 'role', compactAtTokens: 'compact_at_tokens', name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
     const changes = Object.entries(cols).filter(([key]) => p[key] !== undefined);
     if (changes.length === 1 && changes[0][0] === 'pinned') {
         db.prepare('UPDATE bots SET pinned=? WHERE id=?').run(Number(p.pinned), b.id);
@@ -419,9 +419,6 @@ api.post('/bots/:id/messages', bodyLimit({
     if (!current)
         return c.json({ error: 'not found' }, 404);
     const { provider, model, effort } = chatModelForBot(current);
-    if (provider === 'gemini' && photos(attachments).length) {
-        return c.json({ error: 'The Antigravity chat adapter supports text files. Select Codex, Claude Code, or a vision-capable local model to send photos.' }, 400);
-    }
     const row = appendRow(b.id, 'message', {
         type: 'message', role: 'user', text,
         ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),

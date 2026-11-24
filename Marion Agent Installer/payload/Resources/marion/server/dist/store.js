@@ -39,6 +39,16 @@ export function toBot(r) {
         lastActivityAt: last?.created_at ?? r.updated_at,
         completedAt: r.completed_at,
         createdAt: r.created_at,
+        role: r.role === 'executive' ? 'executive' : null,
+        templateId: r.template_id ?? null,
+        contextTokens: r.context_tokens ?? null,
+        compactAtTokens: r.compact_at_tokens ?? null,
+        integrations: (() => { try {
+            return r.integrations ? JSON.parse(r.integrations) : [];
+        }
+        catch {
+            return [];
+        } })(),
     };
 }
 export const getBotRow = (id) => db.prepare('SELECT * FROM bots WHERE id=?').get(id);
@@ -128,7 +138,7 @@ export function chatTranscript(botId, generation, title) {
 }
 export function clearConversation(botId) {
     const b = getBotRow(botId);
-    db.prepare('UPDATE bots SET generation = generation + 1, next_seq = 1, completed_at=NULL WHERE id=?').run(botId);
+    db.prepare('UPDATE bots SET generation = generation + 1, next_seq = 1, completed_at=NULL, context_tokens=NULL WHERE id=?').run(botId);
     db.prepare('DELETE FROM pending_turns WHERE bot_id=?').run(botId);
     hub.emit(b.user_id, { type: 'cleared', botId, generation: b.generation + 1 });
 }

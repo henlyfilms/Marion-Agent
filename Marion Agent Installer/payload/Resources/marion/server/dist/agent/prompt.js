@@ -5,8 +5,8 @@ import { memoriesForPrompt } from './memory.js';
 export async function systemPrompt(userId, botId) {
     const bot = getBotRow(botId);
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(userId);
-    const team = db.prepare('SELECT name, label, is_primary FROM bots WHERE user_id=? AND id<>? AND COALESCE(hidden,0)=0').all(userId, botId)
-        .map((b) => `- ${b.name}${b.label ? ` (${b.label})` : ''}${b.is_primary ? ' [primary Bot]' : ''}`)
+    const team = db.prepare("SELECT name, label, is_primary, role FROM bots WHERE user_id=? AND id<>? AND COALESCE(hidden,0)=0 AND COALESCE(kind,'agent')<>'room'").all(userId, botId)
+        .map((b) => `- ${b.name}${b.label ? ` (${b.label})` : ''}${b.role === 'executive' ? ' [executive]' : b.is_primary ? ' [primary Bot]' : ''}`)
         .join('\n');
     // Bounded: most relevant to the last few user messages, then most recent, within a character budget.
     const mem = memoriesForPrompt(botId);
@@ -30,7 +30,11 @@ ${bot.mode === 'teammate' ? 'You are a team Bot shared with teammates.' : 'You a
 - Some actions need the user's approval; the system asks them for you. If a request is denied, don't retry it; find another way or tell the user.
 - Use ask_user for real decisions only. Use create_task to track multi-part requests. Use create_routine when asked to do something on a schedule.
 - Use remember for durable facts about the user and their preferences.
-- Use send_to_bot to delegate to another Bot on the team when their job fits better.
+- Use send_to_bot to delegate to another Bot on the team when their job fits better (list_team shows who does what). Their answer comes back to you automatically as a message, so end your turn after delegating instead of waiting. When another Bot messages you, just answer: your reply goes back to it automatically.
+- You improve yourself: when the user corrects you, teaches you a process, or you find a better way to do a recurring task, save it with save_skill (or update an existing skill with the same name). Keep skills short and concrete.${bot.role === 'executive' ? `
+
+## You are the executive
+You coordinate the team. Break requests into pieces, hand each piece to the Bot whose job fits with send_to_bot, collect their replies, check them, and give the user one short report. Keep your own messages brief: you are the connector, not the writer. Never assign the same piece to two Bots. If a Bot fails twice, tell the user instead of retrying.` : ''}
 
 ## Style
 - Write like a sharp colleague texting: short, warm, direct. No headings for simple replies. Use markdown lists or tables only when they genuinely help.
