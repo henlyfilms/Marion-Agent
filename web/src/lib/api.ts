@@ -1,4 +1,4 @@
-import type { Bot, ChatSort, ComputerState, LiveState, Routine, Row, SubscriptionUsage, Toolkit, User } from '@shared/types';
+import type { Bot, ChatModelSelection, ChatSort, ComputerState, LiveState, Routine, Row, SubscriptionUsage, Toolkit, User } from '@shared/types';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -38,6 +38,9 @@ export const api = {
   createBot: (b: Pick<Bot, 'name' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'mode'>) => req<{ bot: Bot }>('POST', '/bots', b),
   markRead: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/read`),
   rows: (id: string) => req<{ generation: number; rows: Row[] }>('GET', `/bots/${id}/rows`),
+  /** A message spoken on a voice call (optionally to a different model than the chat's). */
+  sendCall: (id: string, text: string, call: string, model?: ChatModelSelection | null) =>
+    req<{ row: Row }>('POST', `/bots/${id}/messages`, { text, call, ...(model ? { model } : {}) }),
   send: (id: string, text: string, files: File[] = []) => {
     const path = `/bots/${id}/messages`;
     if (!files.length) return req<{ row: Row }>('POST', path, { text });
@@ -50,6 +53,8 @@ export const api = {
   subscriptionUsage: (refresh: boolean, signal?: AbortSignal, provider?: SubscriptionUsage['provider']) => req<{ subscriptions: SubscriptionUsage[] }>(
     'GET', `/subscriptions/usage?refresh=${Number(refresh)}${provider ? `&provider=${provider}` : ''}`, undefined, signal,
   ),
+  subscriptionPlans: () => req<{ plans: Record<SubscriptionUsage['provider'], string>; options: Record<SubscriptionUsage['provider'], string[]> }>('GET', '/subscriptions/plans'),
+  saveSubscriptionPlan: (provider: SubscriptionUsage['provider'], plan: string) => req<{ plans: Record<SubscriptionUsage['provider'], string> }>('PUT', '/subscriptions/plans', { [provider]: plan }),
   interrupt: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/interrupt`),
   fresh: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/fresh`),
 

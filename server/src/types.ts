@@ -43,6 +43,8 @@ export interface Bot {
   contextTokens?: number | null;
   /** Auto-compact when context passes this many tokens; 0 = never; null = app default. */
   compactAtTokens?: number | null;
+  /** Multi-model team: the bot's own model orchestrates these members. */
+  orchestration?: OrchestrationSettings;
   /** Toolkit slugs this bot is meant to use (shown on its profile). */
   integrations?: string[];
 }
@@ -88,6 +90,24 @@ export interface ChatModelSelection {
   label?: string;
 }
 
+/** One model on an orchestrated team (any provider: local, Codex, Gemini or Claude). */
+export interface TeamMember {
+  id: string;
+  provider: ChatProvider;
+  model: string;
+  effort: string | null;
+  label: string;
+  /** What this member is best at, e.g. "Coder", "Reviewer", "Researcher". */
+  role: string;
+}
+
+export interface OrchestrationSettings {
+  enabled: boolean;
+  members: TeamMember[];
+  /** Spread work across members by their remaining plan usage and hand off when one runs out. */
+  balanceUsage: boolean;
+}
+
 export interface ChatModelSettings {
   selection: ChatModelSelection;
   models: ChatModel[];
@@ -125,7 +145,7 @@ export interface MessageBody {
   streaming?: boolean;
   attachments?: ChatAttachment[];
   /** Set when a message came from another bot, a routine or a voice call rather than the user typing. */
-  from?: { kind: 'bot' | 'routine' | 'voice'; id: string; name: string };
+  from?: { kind: 'bot' | 'routine' | 'voice' | 'model'; id: string; name: string; provider?: ChatProvider };
   citations?: { url: string; title?: string }[];
 }
 

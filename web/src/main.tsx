@@ -9,6 +9,8 @@ import './styles/cards.css';
 import './styles/details.css';
 import './styles/modals.css';
 import './styles/usage.css';
+import './styles/team.css';
+import './styles/call.css';
 import './styles/viewer.css';
 import './styles/voice.css';
 import './styles/features.css';

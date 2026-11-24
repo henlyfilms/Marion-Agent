@@ -5,6 +5,7 @@ import { api } from '../../lib/api';
 import { useStore } from '../../store';
 import { Modal } from './Modal';
 
+type ProviderId = SubscriptionUsage['provider'];
 const providers = [
   { id: 'codex', name: 'Codex', account: 'ChatGPT', icon: Code2, url: 'https://chatgpt.com/codex/settings/usage' },
   { id: 'claude', name: 'Claude Code', account: 'Anthropic', icon: Sun, url: 'https://claude.ai/settings/usage' },
@@ -17,15 +18,27 @@ const resetFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'n
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const localZone = timeFormat.resolvedOptions().timeZone;
 
-function Window({ window }: { window: UsageWindow }) {
+/** Last readings, kept between openings so the dashboard opens with numbers instead of an empty flash. */
+let remembered: SubscriptionUsage[] | undefined;
+let rememberedPlans: { plans: Record<ProviderId, string>; options: Record<ProviderId, string[]> } | undefined;
+
+function Window({ window, index }: { window: UsageWindow; index: number }) {
   const used = window.usedPercent;
   const value = percentage.format(used / 100);
   const reset = window.resetsAt && new Date(window.resetsAt);
   const resetLabel = window.resetLabel?.replace(` (${localZone})`, '');
+  // Start the bar at 0 and let CSS grow it, so new numbers glide in instead of snapping.
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setShown(used));
+    return () => cancelAnimationFrame(frame);
+  }, [used]);
   return (
-    <div className={`usage-window${used >= 90 ? ' is-high' : ''}`}>
+    <div className={`usage-window${used >= 90 ? ' is-high' : ''}`} style={{ animationDelay: `${index * 60}ms` }}>
       <div className="usage-window__label"><span>{window.label}</span><strong>{value} <small>used</small></strong></div>
-      <progress max={100} value={used} aria-label={window.label} aria-valuetext={`${value} used`} />
+      <div className="usage-bar" role="progressbar" aria-label={window.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(used)} aria-valuetext={`${value} used`}>
+        <span style={{ transform: `scaleX(${shown / 100})` }} />
+      </div>
       <div className="usage-window__reset">
         {reset ? <time dateTime={reset.toISOString()}>Resets {resetFormat.format(reset)}</time> : resetLabel ? `Resets ${resetLabel}` : 'Reset time unavailable'}
       </div>
@@ -33,28 +46,64 @@ function Window({ window }: { window: UsageWindow }) {
   );
 }
 
+function Skeleton() {
+  return (
+    <div className="usage-skeleton" aria-hidden="true">
+      {[0, 1].map(key => (
+        <div className="usage-skeleton__window" key={key}>
+          <div className="usage-skeleton__line usage-skeleton__line--label" />
+          <div className="usage-skeleton__line usage-skeleton__line--bar" />
+          <div className="usage-skeleton__line usage-skeleton__line--reset" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function UsageDashboard() {
   const close = () => useStore.getState().setModal(null);
-  const [data, setData] = useState<SubscriptionUsage[]>();
+  const [data, setData] = useState<SubscriptionUsage[] | undefined>(remembered);
+  const [plans, setPlans] = useState(rememberedPlans);
   const [refresh, setRefresh] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [pendingIds, setPendingIds] = useState<Set<ProviderId>>(() => new Set(providers.map(p => p.id)));
   const [error, setError] = useState(false);
+  const loading = pendingIds.size > 0;
+
+  useEffect(() => {
+    api.subscriptionPlans().then(value => { rememberedPlans = value; setPlans(value); }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const request = new AbortController();
-    async function load(provider: typeof providers[number]['id']) {
+    setPendingIds(new Set(providers.map(p => p.id)));
+    async function load(provider: ProviderId) {
       try {
         const { subscriptions: [item] } = await api.subscriptionUsage(refresh > 0, request.signal, provider);
-        if (item && !request.signal.aborted) setData(current => [...(current ?? []).filter(entry => entry.provider !== provider), item]);
+        if (item && !request.signal.aborted) {
+          setData(current => {
+            const next = [...(current ?? []).filter(entry => entry.provider !== provider), item];
+            remembered = next;
+            return next;
+          });
+        }
       } catch {
         if (!request.signal.aborted) setError(true);
+      } finally {
+        if (!request.signal.aborted) setPendingIds(current => { const next = new Set(current); next.delete(provider); return next; });
       }
     }
-    void Promise.all(providers.map(({ id }) => load(id))).then(() => {
-      if (!request.signal.aborted) setLoading(false);
-    });
+    for (const { id } of providers) void load(id);
     return () => request.abort();
   }, [refresh]);
+
+  const choosePlan = (provider: ProviderId, plan: string) => {
+    if (!plans) return;
+    const next = { ...plans, plans: { ...plans.plans, [provider]: plan } };
+    rememberedPlans = next;
+    setPlans(next);
+    setData(current => current?.map(item => item.provider === provider ? { ...item, plan } : item));
+    api.saveSubscriptionPlan(provider, plan).catch(() => {});
+  };
 
   const readings = data?.filter(item => item.status === 'ready').length ?? 0;
   const checkedAt = Math.max(0, ...(data ?? []).map(item => item.checkedAt ?? 0));
@@ -70,27 +119,41 @@ export function UsageDashboard() {
       <div className="usage-dashboard__body" aria-busy={loading}>
         <div className="usage-dashboard__toolbar">
           <span className="usage-dashboard__status" role="status">
-            <span className={readings ? 'usage-check is-ready' : 'usage-check'} />
-            {data ? `${readings} of ${providers.length} reporting${loading ? ' · Updating…' : ''}` : loading ? 'Checking subscriptions…' : 'Usage unavailable'}
+            <span className={`usage-check${readings ? ' is-ready' : ''}${loading ? ' is-loading' : ''}`} />
+            {data?.length ? `${readings} of ${providers.length} reporting` : loading ? 'Checking subscriptions…' : 'Usage unavailable'}
+            <span className={`usage-dashboard__updating${loading && data?.length ? ' is-on' : ''}`}> · Updating…</span>
           </span>
-          <button type="button" className="usage-dashboard__refresh" disabled={loading} onClick={() => { setLoading(true); setError(false); setRefresh(value => value + 1); }}>
-            <RefreshCw size={14} aria-hidden="true" /> Refresh
+          <button type="button" className="usage-dashboard__refresh" disabled={loading} onClick={() => { setError(false); setRefresh(value => value + 1); }}>
+            <RefreshCw size={14} aria-hidden="true" className={loading ? 'is-spinning' : undefined} /> Refresh
           </button>
         </div>
         {error && <p className="usage-dashboard__error" role="alert"><CircleAlert size={16} /> Couldn’t reach the usage service. Try refreshing.</p>}
         <div className="usage-dashboard__grid">
-          {providers.map(({ id, name, account, icon: Mark, url }) => {
+          {providers.map(({ id, name, account, icon: Mark, url }, cardIndex) => {
             const item = data?.find(subscription => subscription.provider === id);
+            const busy = pendingIds.has(id);
+            const plan = plans?.plans[id] ?? item?.plan;
             return (
-              <section className={`usage-card usage-card--${id}`} key={id} aria-label={name}>
+              <section className={`usage-card usage-card--${id}${busy ? ' is-busy' : ''}`} key={id} aria-label={name} style={{ animationDelay: `${cardIndex * 50}ms` }}>
                 <header className="usage-card__header">
                   <span className="usage-card__mark"><Mark size={20} aria-hidden="true" /></span>
-                  <div><h2>{name}</h2><p>{item?.plan ?? account}</p></div>
+                  <div>
+                    <h2>{name}</h2>
+                    {plans ? (
+                      <select className="usage-card__plan" value={plan} aria-label={`${name} plan`} onChange={event => choosePlan(id, event.target.value)}>
+                        {plans.options[id].map(option => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    ) : <p>{plan ?? account}</p>}
+                  </div>
                 </header>
                 <div className="usage-card__body">
-                  {item?.windows.length ? item.windows.map(window => <Window key={window.id} window={window} />) : (
-                    <div className="usage-card__empty">
-                      <span>{item ? statusLabels[item.status] : loading ? 'Checking limits…' : 'Unavailable'}</span>
+                  {item?.windows.length ? (
+                    <div className="usage-card__content" key={item.checkedAt ?? 'saved'}>
+                      {item.windows.map((window, index) => <Window key={window.id} window={window} index={index} />)}
+                    </div>
+                  ) : !item && busy ? <Skeleton /> : (
+                    <div className="usage-card__empty usage-card__content">
+                      <span>{item ? statusLabels[item.status] : 'Unavailable'}</span>
                       {item?.detail && <p>{item.detail}</p>}
                     </div>
                   )}
@@ -105,7 +168,7 @@ export function UsageDashboard() {
         </div>
       </div>
       <footer className="usage-dashboard__footer">
-        <span>Provider-reported usage</span>
+        <span>Provider-reported usage · plan names are the ones you picked</span>
         {checkedAt > 0 && <span>Latest reading at <time dateTime={new Date(checkedAt).toISOString()}>{timeFormat.format(checkedAt)}</time></span>}
       </footer>
     </Modal>

@@ -9,7 +9,7 @@ import { Menu } from './Menu';
 import { useContextMenu } from './ContextMenu';
 import { botMenuItems } from './botMenuItems';
 import { Transcript } from './Transcript';
-import { LocalVoicePanel } from './LocalVoicePanel';
+import { CallStage } from './CallStage';
 import { VoiceCallBar } from './VoiceCallBar';
 import { setDetailsOpen, showChatList } from '../lib/layout';
 
@@ -17,8 +17,6 @@ export function ChatView() {
   const bot = useSelectedBot();
   const transcript = useStore((s) => (bot ? s.transcripts[bot.id] : undefined));
   const live = useStore((s) => (bot ? s.live[bot.id] : undefined));
-  const localVoice = useStore(s => s.localVoiceBotId === bot?.id);
-  const set = useStore((s) => s.set);
   const [menu, setMenu] = useState(false);
   const [share, setShare] = useState(false);
   const toastTimer = useRef<number>();
@@ -102,9 +100,9 @@ export function ChatView() {
           </button>
         </div>
       </header>
+      <CallStage bot={bot} />
       <Transcript bot={bot} rows={rows} live={live} loaded={!!transcript?.loaded} />
       <VoiceCallBar />
-      {localVoice && <LocalVoicePanel key={bot.id} bot={bot} close={() => set({ localVoiceBotId: null })} />}
       <Composer key={bot.id} bot={bot} running={!!live?.isRunning} />
       {toast && <div className="toast" role="status">{toast}</div>}
     </main>

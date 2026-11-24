@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
-import { Activity, Clapperboard, FileText, Mic, Paperclip, SquareSlash, X } from 'lucide-react';
+import { Activity, Clapperboard, FileText, Mic, Paperclip, Phone, PhoneOff, SquareSlash, Users, X } from 'lucide-react';
 import { useFeatureUI } from '../lib/featuresApi';
-import type { Bot } from '@shared/types';
+import type { Bot, ChatModel } from '@shared/types';
+import { configApi } from '../lib/configApi';
+import { callModelFor, chatCallModel, defaultCallModel, endLocalCall, isLocalCallActive, setChatCallModel, setDefaultCallModel, startLocalCall, useLocalCall } from '../voice/localCall';
 import { api } from '../lib/api';
 import { displayName, useStore } from '../store';
 import { Icon } from './Icon';
@@ -67,12 +69,20 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const micPress = useRef<{ id: number; at: number; started: boolean }>();
   const selection = useRef<{ start: number; end: number }>();
   const setModal = useStore((s) => s.setModal);
-  const localCall = useStore(s => s.localVoiceBotId === bot.id);
+  const localCall = useLocalCall(s => s.botId === bot.id && isLocalCallActive(s));
+  const ringing = useLocalCall(s => s.botId === bot.id && s.status === 'ringing');
+  useLocalCall(s => s.status); // re-render when call model prefs change
+  const [callMenu, setCallMenu] = useState(false);
+  const [callModels, setCallModels] = useState<ChatModel[] | null>(null);
+  const showCallMenu = () => {
+    setCallMenu(true);
+    configApi.chatModels(bot.id, true).then(result => setCallModels(result.models)).catch(() => setCallModels([]));
+  };
   const mobileChatOpen = useStore(s => s.mobileChatOpen);
   const compact = useCompactLayout();
   useEffect(() => { voiceApi.status().then(setVoiceStatus).catch(() => {}); }, []);
   const openCall = () => {
-    if (voiceStatus?.localSpeech) useStore.setState({ localVoiceBotId: bot.id });
+    if (voiceStatus?.localSpeech) startLocalCall(bot);
     else if (voiceStatus?.realtime) startCall(bot.id);
     else setError('Set up a speech provider in Settings → Audio.');
   };
@@ -268,6 +278,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const commands = [
     { label: '/attach', detail: 'Add files or photos', icon: <Paperclip size={15} />, onSelect: chooseFiles },
     { label: '/usage', detail: 'View subscription limits', icon: <Activity size={15} />, onSelect: () => setModal('usage') },
+    { label: '/team', detail: 'Orchestrate several models together', icon: <Users size={15} />, onSelect: () => setModal('team') },
     { label: '/dictate', detail: 'Toggle dictation', icon: <Mic size={15} />, onSelect: toggleDictation },
     { label: '/teach', detail: 'Teach by screen recording', icon: <Clapperboard size={15} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) },
   ];
@@ -305,6 +316,14 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       </div>
       <div className="composer__models">
         <ModelPicker bot={bot} inputId={inputId} />
+        {bot.kind !== 'room' && (
+          <button type="button" className={`chat-model__trigger team-trigger${bot.orchestration?.enabled ? ' is-on' : ''}`} onClick={() => setModal('team')}
+            title={bot.orchestration?.enabled ? `Team: ${bot.orchestration.members.map(member => member.label).join(', ')}` : 'Work as a team with other models'}
+            aria-label={bot.orchestration?.enabled ? `Team mode on with ${bot.orchestration.members.length} members` : 'Set up Team mode'}>
+            <Users size={14} aria-hidden="true" />
+            <span>{bot.orchestration?.enabled ? `Team · ${bot.orchestration.members.length}` : 'Team'}</span>
+          </button>
+        )}
       </div>
       {files.length > 0 && <ul className="composer-files" aria-label="Draft attachments">
         {files.map((file, index) => <DraftAttachment key={`${file.name}:${file.lastModified}:${index}`} file={file} disabled={sending}
@@ -380,24 +399,41 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           ]}><div className="menu__header">Audio input</div></Menu>}
           </span>
           {(inCall || localCall) && !hasMessage ? (
-            <button type="button" className="composer__cta is-in-call" onClick={() => localCall ? useStore.setState({ localVoiceBotId: null }) : endCall()} aria-label="End voice call" title="End voice call">
-              <Icon name="voice_a" size={16} />
+            <button type="button" className={`composer__cta is-in-call${ringing ? ' is-call-ringing' : ''}`} onClick={() => localCall ? endLocalCall() : endCall()} aria-label="End call" title="End call">
+              <PhoneOff size={16} aria-hidden />
             </button>
           ) : running && !hasMessage ? (
             <button type="button" className="composer__cta" onClick={stop} aria-label="Stop" title="Stop">
               <Icon name="stop" size={14} />
             </button>
           ) : (
-            <button
-              type="button"
-              className="composer__cta"
-              onClick={hasMessage ? send : openCall}
-              disabled={hasMessage && (sending || savingModel)}
-              aria-label={hasMessage ? 'Send' : `Start voice chat with ${bot.name}`}
-              title={hasMessage ? 'Send (Enter)' : 'Start voice chat'}
-            >
-              <Icon name={hasMessage ? 'arrow_up' : 'voice_a'} size={16} />
-            </button>
+            <span className="composer__call-anchor">
+              <button
+                type="button"
+                className="composer__cta"
+                onClick={hasMessage ? send : openCall}
+                onContextMenu={hasMessage ? undefined : event => { event.preventDefault(); event.stopPropagation(); showCallMenu(); }}
+                onKeyDown={hasMessage ? undefined : event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); showCallMenu(); } }}
+                disabled={hasMessage && (sending || savingModel)}
+                aria-label={hasMessage ? 'Send' : `Call ${bot.name}`}
+                title={hasMessage ? 'Send (Enter)' : `Call ${bot.name} · Right-click to choose the call model`}
+              >
+                {hasMessage ? <Icon name="arrow_up" size={16} /> : <Phone size={16} aria-hidden />}
+              </button>
+              {callMenu && <Menu label="Call model" placement="above" align="right" className="chat-model__menu" onClose={() => setCallMenu(false)} items={[
+                { label: `Same as chat · ${bot.chatModel?.label ?? bot.chatModel?.model ?? 'chat model'}`, checked: !callModelFor(bot.id), onSelect: () => setChatCallModel(bot.id, null) },
+                ...(callModels === null ? [{ label: 'Loading models…', disabled: true, onSelect: () => {} }] : callModels.map(model => {
+                  const chosen = callModelFor(bot.id);
+                  return {
+                    group: ({ local: 'Local models', codex: 'Codex', gemini: 'Gemini', claude: 'Claude' } as const)[model.provider],
+                    label: model.label, checked: chosen?.provider === model.provider && chosen.model === model.id,
+                    onSelect: () => setChatCallModel(bot.id, { provider: model.provider, model: model.id, effort: model.defaultEffort ?? (model.provider === 'local' ? 'medium' : null), label: model.label }),
+                  };
+                })),
+                ...(chatCallModel(bot.id) ? [{ label: 'Use this model for all chats’ calls', separator: true, onSelect: () => setDefaultCallModel(chatCallModel(bot.id)) }] : []),
+                ...(defaultCallModel() ? [{ label: `Clear default (${defaultCallModel()!.label ?? defaultCallModel()!.model})`, separator: !chatCallModel(bot.id), onSelect: () => setDefaultCallModel(null) }] : []),
+              ]}><div className="menu__header">Call model for this chat</div></Menu>}
+            </span>
           )}
         </div>
       </div>
