@@ -50,7 +50,7 @@ async function checkComposer(page, name) {
   const field = page.getByRole('textbox', { name: 'Message ' + name });
   await role.waitFor();
   const [picker, input, shell] = await Promise.all([
-    role.boundingBox(), field.boundingBox(), page.locator('.composer').boundingBox(),
+    page.locator('.composer__models').boundingBox(), field.boundingBox(), page.locator('.composer').boundingBox(),
   ]);
   assert.ok(picker && input && shell);
   assert.ok(picker.y + picker.height <= shell.y && shell.y - (picker.y + picker.height) <= 10);
@@ -276,7 +276,7 @@ try {
   const usage = page.getByRole('dialog', { name: 'Subscription usage' });
   const loadingSize = await usage.evaluate(dialog => [dialog.offsetWidth, dialog.offsetHeight]);
   finishUsage();
-  await usage.getByText('3 of 3 reporting', { exact: true }).waitFor();
+  await usage.getByRole('status').filter({ hasText: '3 of 3 reporting' }).waitFor();
   assert.deepEqual(await usage.evaluate(dialog => [dialog.offsetWidth, dialog.offsetHeight]), loadingSize);
   await usage.getByRole('button', { name: 'Close', exact: true }).click();
   await page.emulateMedia({ colorScheme: 'dark' });

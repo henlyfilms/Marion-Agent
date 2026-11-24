@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { attachmentBodyLimit, getAttachment, photos, readAttachments, type UploadedAttachment } from './attachments.js';
+import { attachmentBodyLimit, getAttachment, readAttachments, type UploadedAttachment } from './attachments.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { streamSSE } from 'hono/streaming';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -24,20 +24,12 @@ import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
-import { chatProviders, chatSortOptions, type AvatarColor, type ChatModelSelection, type ChatSort, type Toolkit } from './types.js';
+import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type Toolkit } from './types.js';
 import { orderChats } from './chat-order.js';
 import { isBerryShape, isStemColor } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
 
 export const api = new Hono<AuthVars>();
-
-const COLORS: AvatarColor[] = ['black', 'brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray'];
-
-function hashPick<T>(id: string, list: T[]): T {
-  let h = 0x811c9dc5;
-  for (const ch of id) { h ^= ch.charCodeAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
-  return list[h % list.length];
-}
 
 /** JSON that is safe to embed inside an inline <script>: `<` can't close the tag and line separators can't break the statement. */
 export function jsonForScript(value: unknown): string {

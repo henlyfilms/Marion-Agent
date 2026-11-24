@@ -85,7 +85,7 @@ printf 'Preparing Marion Agent…\n'
 /bin/mv "$work/Electron.app" "$work/Marion Agent.app"
 bundle="$work/Marion Agent.app"
 resources="$bundle/Contents/Resources"
-/bin/cp "$here/payload/Info-$arch.plist" "$bundle/Contents/Info.plist"
+/bin/cp "$here/payload/Info.plist" "$bundle/Contents/Info.plist"
 /usr/bin/ditto "$here/payload/Resources" "$resources"
 mkdir "$resources/runtime"
 /bin/cp "$work/node-v24.22.3-darwin-$arch/bin/node" "$resources/runtime/node"

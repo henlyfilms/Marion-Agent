@@ -1,14 +1,8 @@
 # Marion Agent architecture
 
-- The React/Vite UI uses the Hono API for sessions, bot settings, chat, routines, Library downloads, screenshots and the desktop viewer. The built API also serves the web bundle. Server-sent events deliver live changes.
-- SQLite holds accounts, sessions, bots, schedules, messages, memories, and desktop assignments. The default database is `data/marion-agent.db`.
-- The agent loop sends model requests to a local Responses endpoint and runs tool calls on the server. Desktop tools use the Docker CLI and operate only inside the assigned container. The desktop image uses XFCE, TigerVNC, Chromium and X11 input tools. Each bot has its own workspace volume and private Docker network.
-- noVNC connects to the API over an authenticated, bot-scoped WebSocket. The API reaches the private desktop listener through `docker exec` and drops keyboard, pointer and clipboard messages in watch mode.
-- Libraries are files under `/workspace/files/<bot id>` in the desktop volume. The API checks ownership and serves bounded downloads directly from the workspace.
-- The local model powers chat, screenshot interpretation, and memory. xAI is available as an optional Grok tool and voice provider. Composio handles connected apps and Google sign-in.
-
-## Marion Life integration checkpoints
-
-1. Verify local sign-in, desktop lifecycle, Library downloads and local chat on the target desktop.
-2. Review the Marion Life repository and agree on identity, session ownership, navigation, secret management and deployment boundaries.
-3. Decide whether to integrate via the Marion Agent API or fold the modules into a shared deployment. Keep the Docker daemon available only to the workspace service. Plan the SQLite data migration and test an isolated integration before switching over.
+- `web/src/` renders chat, settings, routines, and the workspace viewer. The Hono server serves the production build and delivers live updates over server-sent events.
+- `server/src/agent/` runs model turns using a local Responses endpoint or a signed-in provider CLI. It also handles compaction, memory, bot delegation, and Team mode. `server/src/features/` holds templates, teaching, notifications, and Marion Life sync.
+- SQLite stores accounts, sessions, bots, transcripts, routines, and desktop assignments. Source launches default to `data/marion-agent.db`. The installed Mac app stores its workspace under **Library → Application Support → Marion Agent**.
+- `desktop/` builds the XFCE, Chromium, and TigerVNC image. Each bot gets a container, network, and persistent volume. Libraries live under `/workspace/files/<bot id>`. The authenticated noVNC proxy forwards input only after the user takes control.
+- `Marion Agent Installer/` supplies the Electron wrapper, which launches the same server on loopback. The packaging script builds the server and web app, installs the locked server dependencies, and compiles the macOS speech helper into the installer ZIP.
+- `server/src/features/life-link.ts` copies completed chats to Marion Life through its API using a revocable link key. The migration path clears the old stored Supabase service key and prompts the owner to reconnect.

@@ -2,11 +2,15 @@ data/
 .env*
 !.env.example
 node_modules/
-server/dist/
-web/dist/
+/server/dist/
+/web/dist/
 .DS_Store
-*.zip
-from scratch/
-Marion Agent Installer/payload/Resources/marion/node_modules/
-.claude-test.sh
-.claude/
+/*.zip
+/releases/
+/.marion-package.*/
+/tests/out/
+/from scratch/
+/Marion Agent Installer/payload/Resources/marion/
+/Marion Agent Installer/payload/Resources/speech/
+/.claude-test.sh
+/.claude/

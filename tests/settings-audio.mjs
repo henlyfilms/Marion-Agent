@@ -92,11 +92,21 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
     window.spokenReplies = [];
+    window.testMicrophoneLevel = 0;
+    // Drive voice activity deterministically while Chrome records from its fake microphone.
+    Object.defineProperty(AnalyserNode.prototype, 'getFloatTimeDomainData', {
+      value: samples => samples.fill(window.testMicrophoneLevel),
+    });
     window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
     Object.defineProperty(window.speechSynthesis, 'getVoices', {
       value: () => [{ name: 'Test system voice', lang: 'en-US', localService: true }],
     });
-    Object.defineProperty(window.speechSynthesis, 'speak', { value: utterance => window.spokenReplies.push(utterance.text) });
+    Object.defineProperty(window.speechSynthesis, 'speak', {
+      value: utterance => {
+        window.spokenReplies.push(utterance.text);
+        setTimeout(() => utterance.onend?.(), 0);
+      },
+    });
   });
   await page.goto(origin);
   await page.getByRole('textbox', { name: 'Email', exact: true }).fill('desktop-settings@example.com');
@@ -176,18 +186,17 @@ try {
   await page.waitForFunction(() => document.querySelector('.composer__input')?.value === 'Hello from the microphone');
   await composer.fill('');
 
-  await page.getByRole('button', { name: 'Start voice chat with Barry' }).click();
-  const call = page.getByRole('region', { name: 'Local voice chat' });
-  await call.getByRole('button', { name: 'Record message' }).click();
-  await call.getByText('Listening…').waitFor();
+  await page.locator('.composer').getByRole('button', { name: 'Call Barry', exact: true }).click();
+  const call = page.getByRole('region', { name: 'Call with Barry', exact: true });
+  await call.getByText('Listening', { exact: true }).waitFor();
+  await page.evaluate(() => { window.testMicrophoneLevel = 0.2; });
+  await call.getByText('Listening…', { exact: true }).waitFor();
   await page.waitForTimeout(600);
-  await call.getByRole('button', { name: 'Stop and send' }).click();
-  await call.getByText('Waiting for reply…').waitFor();
-  await call.getByRole('button', { name: 'Play reply' }).waitFor({ timeout: 8000 }).catch(async (error) => {
-    console.error('Voice UI:', await page.locator('body').innerText(), 'Models:', modelsUsed, 'Errors:', errors);
-    throw error;
-  });
-  assert.deepEqual(await page.evaluate(() => window.spokenReplies), ['I heard you.']);
+  await page.evaluate(() => { window.testMicrophoneLevel = 0; });
+  await call.getByText('I heard you.', { exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.spokenReplies.slice(-1)), ['I heard you.']);
+  await call.getByRole('button', { name: 'End call' }).click();
+  await call.waitFor({ state: 'hidden' });
   await page.locator('.completion-notice[data-visible="true"]').getByText('Barry finished').waitFor();
   await page.getByRole('button', { name: 'Share', exact: true }).click();
   const download = page.waitForEvent('download');
@@ -223,7 +232,7 @@ try {
     });
   });
   await page.reload();
-  await page.getByRole('button', { name: 'Start voice chat with Barry' }).click();
+  await page.locator('.composer').getByRole('button', { name: 'Call Barry', exact: true }).click();
   const realtime = page.getByRole('region', { name: 'Voice call with Barry' });
   await realtime.getByText('Realtime fixture response.').waitFor();
   for (let i = 0; i < 20 && !sawAudio; i++) await new Promise(resolve => setTimeout(resolve, 50));

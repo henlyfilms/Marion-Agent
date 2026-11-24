@@ -1,6 +1,6 @@
 // End-to-end checks for templates, bot coordination, attachments, teaching, context and compaction,
 // notifications, web push encryption and the Marion Life link. Runs the built server on a disposable
-// database against a scripted fake model and a fake Supabase. Usage: npm run build && node tests/features.mjs
+// database against a scripted fake model and a fake Marion Life API. Usage: npm run build && node tests/features.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createDecipheriv, createECDH, hkdfSync, randomBytes } from 'node:crypto';
@@ -74,24 +74,30 @@ const fakeModel = createServer(async (req, res) => {
   }
 });
 
-// ---------- fake Supabase ----------
-const supabaseRows = new Map();
-const LIFE_USER = '00000000-0000-4000-8000-000000000001';
-const fakeSupabase = createServer(async (req, res) => {
+// ---------- fake Marion Life API ----------
+const lifeRows = new Map();
+const LIFE_KEY = 'mb_test_marion_life_key';
+const LIFE_EMAIL = 'owner@example.com';
+const fakeLife = createServer(async (req, res) => {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  if (req.headers.authorization !== 'Bearer test-service-key') { res.writeHead(401).end('{}'); return; }
-  if (req.url.startsWith('/auth/v1/admin/users')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ users: [{ id: LIFE_USER, email: 'owner@example.com' }] }));
-  } else if (req.url.startsWith('/rest/v1/life_agent_chats') && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end('[]');
-  } else if (req.url.startsWith('/rest/v1/life_agent_chats') && req.method === 'POST') {
-    for (const row of JSON.parse(Buffer.concat(chunks).toString())) supabaseRows.set(row.id, row);
-    res.writeHead(201).end();
-  } else res.writeHead(404).end('{}');
+  if (req.method !== 'POST' || req.url !== '/api/mcp') { res.writeHead(404).end(); return; }
+  if (req.headers.authorization !== `Bearer ${LIFE_KEY}`) { res.writeHead(401).end('{}'); return; }
+
+  const { id, method, params } = JSON.parse(Buffer.concat(chunks).toString());
+  const reply = { jsonrpc: '2.0', id };
+  if (method === 'tools/call' && params.name === 'whoami') {
+    reply.result = { structuredContent: { ok: true, email: LIFE_EMAIL } };
+  } else if (method === 'tools/call' && params.name === 'save_agent_chats') {
+    for (const chat of params.arguments.chats) lifeRows.set(chat.id, chat);
+    reply.result = { structuredContent: { ok: true } };
+  } else {
+    reply.error = { code: -32601, message: 'Unknown tool' };
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(reply));
 });
 
-await Promise.all([fakeModel, fakeSupabase].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))));
+await Promise.all([fakeModel, fakeLife].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))));
 const workDir = await mkdtemp(join(tmpdir(), 'marion-features-'));
 const port = process.env.MARION_TEST_PORT ?? '8796';
 const app = `http://127.0.0.1:${port}`;
@@ -283,27 +289,29 @@ try {
   assert.equal(plain.at(-1), 2);
   pass('web push payloads decrypt with the device keys (iPhone push format)');
 
-  // Marion Life link: connect, find the account, copy chats.
-  const supabaseUrl = `http://127.0.0.1:${fakeSupabase.address().port}`;
-  assert.equal((await api('PUT', '/life-link', { supabaseUrl, serviceKey: 'wrong', lifeEmail: 'owner@example.com' })).status, 400);
-  const linked = await api('PUT', '/life-link', { supabaseUrl, serviceKey: 'test-service-key', lifeEmail: 'owner@example.com' });
-  assert.equal(linked.settings.lifeUserId, LIFE_USER);
+  // Marion Life checks the link key and copies completed chats.
+  const endpoint = `http://127.0.0.1:${fakeLife.address().port}/api/mcp`;
+  assert.equal((await api('PUT', '/life-link', { endpoint, linkKey: 'mb_invalid_test_link_key' })).status, 400);
+  const linked = await api('PUT', '/life-link', { endpoint, linkKey: LIFE_KEY });
+  assert.equal(linked.status, 200, JSON.stringify(linked));
+  assert.equal(linked.settings.lifeEmail, LIFE_EMAIL);
+  await waitFor(async () => (await api('GET', '/life-link')).settings.lastSyncAt, 'initial Marion Life sync');
   const synced = await api('POST', '/life-link/sync');
   assert.equal(synced.status, 200, JSON.stringify(synced));
-  const chiefChat = supabaseRows.get(`${chief.id}:1`);
+  const chiefChat = lifeRows.get(`${chief.id}:1`);
   assert.ok(chiefChat, 'the executive chat was not copied');
-  assert.equal(chiefChat.user_id, LIFE_USER);
+  assert.equal(chiefChat.marion_bot_id, chief.id);
   assert.match(chiefChat.transcript, /Worker says the number is 42\./);
   assert.equal(chiefChat.title, 'Find out the number from Worker.');
   const linkState = await api('GET', '/life-link');
   assert.equal(linkState.hasKey, true);
-  assert.equal(JSON.stringify(linkState).includes('test-service-key'), false, 'the service key must never be sent back');
-  pass(`Marion Life link copies chats (${supabaseRows.size}) and never returns the key`);
+  assert.equal(JSON.stringify(linkState).includes(LIFE_KEY), false, 'the Marion Life key must never be sent back');
+  pass(`Marion Life link copies chats (${lifeRows.size}) and never returns the key`);
 
   console.log(`\n${results.length} feature checks passed.`);
 } finally {
   child.kill();
   await stopped;
-  await Promise.all([fakeModel, fakeSupabase].map(server => new Promise(resolve => server.close(resolve))));
+  await Promise.all([fakeModel, fakeLife].map(server => new Promise(resolve => server.close(resolve))));
   await rm(workDir, { recursive: true, force: true });
 }

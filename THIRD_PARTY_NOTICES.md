@@ -58,4 +58,4 @@ The model selector includes Codex, Gemini, Claude, and Qwen marks from [Lobe Ico
 
 ## Original artwork
 
-The bot avatar characters (`web/src/avatar/`), the favicon and `assets/icon.svg` were made for this project. They are drawn from basic geometry and covered by the project's MIT license.
+The bot avatar characters (`web/src/avatar/`), the favicon and `assets/icon.svg` were made for this project.

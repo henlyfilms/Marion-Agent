@@ -143,7 +143,7 @@ function memberPrompt(botId: string, member: TeamMember, members: TeamMember[], 
 type MemberResult = { member: TeamMember; text: string; handoffs: string[]; failed?: boolean };
 
 /** Run a task on a member; on a usage limit or failure, hand it to the next member. */
-async function runMember(botId: string, members: TeamMember[], first: TeamMember, prompt: (m: TeamMember) => string, signal: AbortSignal): Promise<MemberResult> {
+async function runMember(members: TeamMember[], first: TeamMember, prompt: (m: TeamMember) => string, signal: AbortSignal): Promise<MemberResult> {
   const tried = new Set<string>();
   const handoffs: string[] = [];
   let member: TeamMember | undefined = first;
@@ -212,14 +212,14 @@ export async function teamDelegate(botId: string, args: any, signal: AbortSignal
     // Pass the baton: each member sees what the previous one produced (e.g. write → review → fix).
     for (const step of plan) {
       working(botId, [step.member.label]);
-      const result = await runMember(botId, settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task), signal);
+      const result = await runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task), signal);
       show(botId, result);
       results.push(result);
     }
   } else {
     working(botId, plan.map(step => step.member.label));
     const settled = await Promise.all(plan.map(step =>
-      runMember(botId, settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task), signal)));
+      runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task), signal)));
     for (const result of settled) { show(botId, result); results.push(result); }
   }
   setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() } });
@@ -251,7 +251,7 @@ export async function teamDiscuss(botId: string, args: any, signal: AbortSignal)
       const extra = `This is a team discussion, round ${round} of ${rounds}.${said ? `\nThe discussion so far:\n${said}` : ''}\n${round === rounds
         ? 'Final round: settle on one recommendation. Agree where the team is right, and correct anything wrong.'
         : 'Give your view, respond directly to what teammates said, and keep it short.'}`;
-      const result = await runMember(botId, settings.members, speaker, m => memberPrompt(botId, m, settings.members, topic, extra), signal);
+      const result = await runMember(settings.members, speaker, m => memberPrompt(botId, m, settings.members, topic, extra), signal);
       show(botId, result);
       results.push(result);
       if (!result.failed) thread.push({ name: result.member.label, text: result.text.slice(0, BOARD_CHARS) });
