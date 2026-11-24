@@ -1,0 +1,10 @@
+data/
+.env*
+!.env.example
+node_modules/
+server/dist/
+web/dist/
+.DS_Store
+*.zip
+from scratch/
+Marion Agent Installer/payload/Resources/marion/node_modules/
