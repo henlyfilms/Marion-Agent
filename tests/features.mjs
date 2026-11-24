@@ -36,6 +36,16 @@ function decide(request) {
     return call('send_to_bot', { bot_name: 'Worker', message: 'What is the number?' });
   }
   if (who === 'Worker') return say('The number is 42.');
+  if (who === 'Boss') {
+    if (last.type === 'function_call_output') return say('Asked Asker.');
+    if (user.includes('[Reply from Asker')) return say('Asker is waiting on the user.');
+    return call('send_to_bot', { bot_name: 'Asker', message: 'Which account should I use?' });
+  }
+  if (who === 'Asker') return call('ask_user', { question: 'Personal or work account?', options: ['Personal', 'Work'] });
+  if (who === 'Builder') {
+    if (last.type === 'function_call_output') return say('Created Helper.');
+    return call('create_bot', { name: 'Helper', job: 'Helps', description: 'Helps.', instructions: 'Help.', avatar_color: 'green', avatar_shape: 'blueberry', executive: false, integrations: [], memories: [], skills: [], routines: [{ name: 'Hourly', prompt: 'ping', schedule: '0 * * * *', timezone: 'UTC', enabled: true }] });
+  }
   if (who === 'Pinger' || who === 'Ponger') {
     if (last.type === 'function_call_output') return say('ok');
     return call('send_to_bot', { bot_name: who === 'Pinger' ? 'Ponger' : 'Pinger', message: `ping from ${who} #${calls.length}` });
@@ -156,6 +166,22 @@ try {
   assert.equal(calls.filter(c => c.who === 'Worker').length, 1, 'the auto-reply must not trigger another worker turn');
   pass('executive delegates, the worker answers once and the reply routes back automatically');
 
+  // A bot that answers another bot with a question for the user still tells the asker it is waiting.
+  const boss = await createBot('Boss');
+  await createBot('Asker');
+  await sendText(boss.id, 'Get the account.');
+  await waitFor(async () => (await messages(boss.id)).some(m => m.text === 'Asker is waiting on the user.'), 'asker never told the boss it was waiting');
+  const note = (await messages(boss.id)).find(m => m.from?.name === 'Asker');
+  assert.match(note.text, /Personal or work account\?/);
+  pass('a delegated bot that needs the user tells the asking bot instead of going silent');
+
+  // Bots created by a bot get paused routines.
+  const builder = await createBot('Builder');
+  await sendText(builder.id, 'Make me a helper.');
+  const helper = await waitFor(async () => (await api('GET', '/bots')).bots.find(b => b.name === 'Helper'), 'create_bot did not create the bot');
+  assert.equal((await api('GET', `/bots/${helper.id}/profile`)).profile.routines[0].enabled, false);
+  pass('create_bot creates the bot with its routines paused');
+
   // Two bots that keep messaging each other must stop on their own.
   const pinger = await createBot('Pinger');
   await createBot('Ponger');
@@ -214,7 +240,9 @@ try {
   const setAuto = await api('PATCH', `/bots/${viewer.id}`, { compactAtTokens: 50_000 });
   assert.equal(setAuto.bot.compactAtTokens, 50_000);
   assert.equal((await api('PATCH', `/bots/${viewer.id}`, { compactAtTokens: -5 })).status, 400);
-  pass('context is tracked per chat (0–1M), manual compaction works, auto-compact size is saved and validated');
+  await api('POST', `/bots/${worker.id}/fresh`);
+  assert.equal((await api('GET', '/bots')).bots.find(b => b.id === worker.id).contextTokens, null, 'Start fresh must reset the context size');
+  pass('context is tracked per chat (0–1M), manual compaction works, auto-compact size is saved and validated, Start fresh resets it');
 
   // Self-improvement: lessons land in the "Lessons learned" skill.
   const improved = await api('POST', `/bots/${viewer.id}/improve`);

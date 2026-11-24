@@ -125,6 +125,7 @@ export async function syncLife(userId: string, opts: { force?: boolean } = {}) {
   if (!settings.enabled || !key || !settings.lifeUserId || syncing.has(userId)) return { synced: 0 };
   syncing.add(userId);
   let synced = 0;
+  const errorBefore = settings.lastError;
   try {
     const chats = pendingChats(userId, Boolean(opts.force));
     for (let i = 0; i < chats.length; i += 20) {
@@ -155,7 +156,8 @@ export async function syncLife(userId: string, opts: { force?: boolean } = {}) {
     throw error;
   } finally {
     syncing.delete(userId);
-    hub.emit(userId, { type: 'model-settings' });
+    // Only tell open windows when something visible changed (avoid a refetch every minute).
+    if (synced || lifeLinkSettings(userId).lastError !== errorBefore) hub.emit(userId, { type: 'connections' });
   }
 }
 

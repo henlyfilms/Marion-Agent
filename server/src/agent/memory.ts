@@ -304,6 +304,7 @@ export async function consolidateBot(botId: string, opts: { upTo?: number } = {}
 }
 
 const consolidating = new Set<string>();
+const backgroundCooldown = new Map<string, number>();
 
 /** Bots whose newest message is older than the idle window and newer than their last consolidation. */
 export function botsDueForConsolidation(idleMs: number, at = now()): { botId: string; lastAt: number }[] {
@@ -321,12 +322,14 @@ export function startMemoryConsolidation() {
   const sweep = async () => {
     for (const { botId, lastAt } of botsDueForConsolidation(idleMs)) {
       if (consolidating.has(botId) || getLive(botId).isRunning) continue;
+      if ((backgroundCooldown.get(botId) ?? 0) > now()) continue;
       if (db.prepare('SELECT 1 FROM pending_turns WHERE bot_id=?').get(botId)) continue;
       consolidating.add(botId);
+      // A failure (signed-out CLI, quota, model offline) waits 30 minutes instead of retrying every sweep.
       try { await consolidateBot(botId, { upTo: lastAt }); }
-      catch (e: any) { console.warn(`[memory] consolidation failed for ${botId}: ${e?.message ?? e}`); }
+      catch (e: any) { backgroundCooldown.set(botId, now() + 30 * 60_000); console.warn(`[memory] consolidation failed for ${botId}: ${e?.message ?? e}`); continue; }
       try { const { reflectBot } = await import('../features/improve.js'); await reflectBot(botId); }
-      catch (e: any) { console.warn(`[improve] reflection failed for ${botId}: ${e?.message ?? e}`); }
+      catch (e: any) { backgroundCooldown.set(botId, now() + 30 * 60_000); console.warn(`[improve] reflection failed for ${botId}: ${e?.message ?? e}`); }
       finally { consolidating.delete(botId); }
     }
   };

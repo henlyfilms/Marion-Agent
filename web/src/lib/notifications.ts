@@ -37,7 +37,7 @@ export function showNotification(notification: AppNotification) {
   if (!canNotify() || Notification.permission !== 'granted') return;
   try {
     const banner = new Notification(notification.title, {
-      body: notification.body, tag: `${notification.botId ?? 'marion'}:${notification.kind}`, icon: '/app-192.png', silent: !soundOn,
+      body: notification.body, tag: `${notification.botId ?? 'marion'}:${notification.kind}`, icon: '/app-192.png', silent: true,
     });
     banner.onclick = () => {
       window.focus();

@@ -142,7 +142,7 @@ export function chatTranscript(botId: string, generation: number, title: string)
 
 export function clearConversation(botId: string) {
   const b = getBotRow(botId);
-  db.prepare('UPDATE bots SET generation = generation + 1, next_seq = 1, completed_at=NULL WHERE id=?').run(botId);
+  db.prepare('UPDATE bots SET generation = generation + 1, next_seq = 1, completed_at=NULL, context_tokens=NULL WHERE id=?').run(botId);
   db.prepare('DELETE FROM pending_turns WHERE bot_id=?').run(botId);
   hub.emit(b.user_id, { type: 'cleared', botId, generation: b.generation + 1 });
 }

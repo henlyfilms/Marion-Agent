@@ -41,7 +41,7 @@ const KEEP_IMAGES = 3;
 /** Images handed to a subscription CLI in one turn (a screen-recording lesson sends up to 12 frames). */
 const MAX_PROVIDER_IMAGES = 16;
 /** Conversation items replayed to subscription CLIs each turn (older context lives in the compaction summary). */
-const SUBSCRIPTION_WINDOW = 40;
+const SUBSCRIPTION_WINDOW = 26;
 
 // ---------- per-bot serial queue ----------
 
@@ -87,6 +87,14 @@ function replyTextSince(botId: string, generation: number, afterSeq: number) {
     .map(body => String(body.text).trim())
     .filter(Boolean)
     .join('\n\n');
+}
+
+/** A question or approval card this turn left for the user, if any. */
+function waitingOnUser(botId: string, generation: number, afterSeq: number) {
+  const card = (db.prepare("SELECT body FROM rows WHERE bot_id=? AND generation=? AND kind='card' AND seq>? ORDER BY seq DESC LIMIT 1").get(botId, generation, afterSeq) as any);
+  if (!card) return '';
+  const body = JSON.parse(card.body);
+  return String(body.question ?? body.title ?? '').slice(0, 300);
 }
 
 /** Save what the bot will send the model, so the chat list and details panel can show it. */
@@ -242,7 +250,8 @@ function afterTurn(botId: string, bot: any, trigger: Trigger, turn: { completed:
     // A bot asked this bot for something: send the answer back automatically unless it already
     // messaged the asker itself. Auto-replies never trigger another auto-reply, so two bots can't loop.
     if (trigger.type === 'bot' && !trigger.autoReply && !turn.messaged.has(trigger.fromBotId) && getBotRow(trigger.fromBotId)) {
-      const text = turn.completed ? reply : turn.failure ? `I couldn't finish: ${turn.failure}` : '';
+      const waiting = !reply && !turn.failure ? waitingOnUser(botId, bot.generation, turn.startSeq) : '';
+      const text = turn.failure ? `I couldn't finish: ${turn.failure}` : reply || (waiting ? `I need the user's answer first: ${waiting}. I'll reply once they answer.` : '');
       if (text) {
         try { enqueueBotMessage(botId, trigger.fromBotId, text.slice(0, 12_000), turn.depth + 1, { autoReply: true }); }
         catch (error) { appendRow(botId, 'notice', { type: 'notice', text: `Couldn't reply to ${trigger.fromName}: ${(error as Error).message}`, tone: 'warn' }); }
@@ -349,7 +358,10 @@ async function finishPending(ctx: ToolCtx, st: PendingState, _reason: string) {
 // Subscription CLIs stay in their restricted chat mode. Only Marion can execute a tool request.
 async function callSubscriptionModel(ctx: ToolCtx, selection: SubscriptionSelection, tools: any[], signal: AbortSignal) {
   const stored = await maybeCompact(ctx.botId, loadHistory(ctx.botId)).catch(() => loadHistory(ctx.botId));
-  const history = pruneImages(repairHistory(stored)).slice(-SUBSCRIPTION_WINDOW);
+  const repaired = pruneImages(repairHistory(stored));
+  // Keep the compaction summary (always the first item after a compaction) even when the window cuts older items.
+  const summary = repaired[0]?.role === 'user' && typeof repaired[0].content === 'string' && repaired[0].content.startsWith('[Automatic summary') ? repaired[0] : null;
+  const history = repaired.length > SUBSCRIPTION_WINDOW && summary ? [summary, ...repaired.slice(-(SUBSCRIPTION_WINDOW - 1))] : repaired.slice(-SUBSCRIPTION_WINDOW);
   const images: UploadedAttachment[] = [];
   // The current message (with any attached text files) gets a larger budget than older turns.
   const textContent = (content: any, budget = 20_000) => {

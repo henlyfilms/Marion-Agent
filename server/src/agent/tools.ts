@@ -10,6 +10,7 @@ import { appendRow, getBotRow, getLive, listRoutines, toRoutine, describeCron } 
 import { teamRoster } from '../features/coordination.js';
 import { createBotRecord } from '../features/bots.js';
 import { saveLearnedSkill } from '../features/improve.js';
+import { notify } from '../features/notify.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
 import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes } from '../triggers.js';
@@ -412,7 +413,8 @@ export const TOOLS: ToolDef[] = [
         name, label: a.job, description: a.description, instructions: a.instructions,
         avatarColor: a.avatar_color, avatarShape: a.avatar_shape, role: a.executive ? 'executive' : null,
         integrations: Array.isArray(a.integrations) ? a.integrations : [], memories: Array.isArray(a.memories) ? a.memories : [],
-        skills: Array.isArray(a.skills) ? a.skills : [], routines: Array.isArray(a.routines) ? a.routines : [], templateId: 'bot-builder',
+        // Routines start paused: the user turns them on, so nothing runs (or spends usage) unapproved.
+        skills: Array.isArray(a.skills) ? a.skills : [], routines: Array.isArray(a.routines) ? a.routines.map((r: any) => ({ ...r, enabled: false })) : [], templateId: 'bot-builder',
       });
       appendRow(ctx.botId, 'event', { type: 'event', event: 'bot-message', text: `Created ${bot.name}` });
       return { output: JSON.stringify({ ok: true, name: bot.name, id: bot.id, note: 'It now appears in the user\'s chat list.' }), summary: `Created ${bot.name}` };
@@ -541,6 +543,8 @@ export const TOOLS: ToolDef[] = [
     label: 'Waiting on you',
     impl: async (a, ctx) => {
       appendRow(ctx.botId, 'card', { type: 'card', card: 'question', question: a.question, options: (a.options ?? []).slice(0, 6), status: 'pending' });
+      const asking = getBotRow(ctx.botId);
+      if (!asking.hidden) notify(ctx.userId, { kind: 'question', botId: ctx.botId, title: `${asking.name} has a question`, body: String(a.question ?? '') });
       return { output: 'Question shown to the user. Stop here and wait for their answer.', endTurn: true };
     },
   },
