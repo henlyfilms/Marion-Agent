@@ -2,6 +2,7 @@ import { db, now } from '../db.js';
 import { hub } from '../lib/hub.js';
 import { newId } from '../lib/ids.js';
 import { getBotRow } from '../store.js';
+import { agentSkills } from '../agent/skills.js';
 import { backgroundText, parseJsonObject } from '../agent/background-model.js';
 import { similar } from '../agent/memory.js';
 import { notify } from './notify.js';
@@ -47,7 +48,7 @@ export function addLessons(botId: string, lessons: string[]) {
 
 const REFLECT_PROMPT = `You help an AI assistant ("Bot") improve itself from its recent work.
 Read the conversation and the Bot's current skills. Find:
-1. lessons: concrete, reusable rules the Bot should follow next time, learned from user corrections, complaints, repeated requests, failures, or things that worked well. Each under 200 characters, written as an instruction ("Always...", "When X, do Y"). Skip one-off facts about the user (memory handles those) and anything already covered by the skills.
+1. lessons: concrete, reusable rules the Bot should follow next time, learned from user corrections, complaints, repeated requests, failures, or things that worked well. Prefer explicit corrections and repeatable results. Keep each under 200 characters, written as an instruction ("Always...", "When X, do Y"). Skip one-off facts about the user (memory handles those) and anything already covered by the skills.
 2. skills: only when the conversation shows a multi-step process the Bot will clearly repeat (or the user taught one), a playbook of 3-12 numbered steps. Reuse an existing skill's exact name to improve it.
 Return JSON only: {"lessons": ["..."], "skills": [{"name": "...", "description": "...", "body": "..."}]}. Return empty lists when nothing qualifies. At most 4 lessons and 2 skills.`;
 
@@ -60,15 +61,14 @@ export async function reflectBot(botId: string, opts: { force?: boolean } = {}) 
   const since = bot.last_reflected_at ?? 0;
   const rows = (db.prepare("SELECT body, created_at FROM rows WHERE bot_id=? AND kind='message' AND created_at>? ORDER BY created_at DESC LIMIT 80").all(botId, since) as any[]).reverse();
   const messages = rows.map(row => ({ ...JSON.parse(row.body), at: row.created_at })).filter(body => body.text && !body.streaming);
-  const userMessages = messages.filter(body => body.role === 'user' && !body.from).length;
+  const userMessages = messages.filter(body => body.role === 'user' && (!body.from || body.from.kind === 'voice')).length;
   if (!opts.force && userMessages < 3) return { lessons: 0, skills: 0 };
   if (!messages.length) return { lessons: 0, skills: 0 };
   reflecting.add(botId);
   try {
     let transcript = messages.map(m => `${m.role === 'user' ? (m.from ? `${m.from.name}` : 'User') : bot.name}: ${String(m.text).slice(0, 1500)}`).join('\n');
     if (transcript.length > 20_000) transcript = transcript.slice(-20_000);
-    const skills = (db.prepare('SELECT name, body FROM skills WHERE bot_id=?').all(botId) as any[]).map(s => `### ${s.name}\n${String(s.body).slice(0, 1500)}`).join('\n\n');
-    const reply = await backgroundText(botId, REFLECT_PROMPT, `CURRENT SKILLS:\n${skills || '(none)'}\n\nRECENT CONVERSATION:\n${transcript}`);
+    const reply = await backgroundText(botId, REFLECT_PROMPT, `CURRENT SKILLS:\n${agentSkills(botId)}\n\nRECENT CONVERSATION:\n${transcript}`);
     const parsed = parseJsonObject<{ lessons?: unknown[]; skills?: { name?: string; description?: string; body?: string }[] }>(reply) ?? {};
     const lessons = addLessons(botId, (parsed.lessons ?? []).map(String).slice(0, 4));
     let skillCount = 0;

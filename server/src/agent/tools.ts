@@ -6,7 +6,7 @@ import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { desktop } from '../desktop.js';
 import { BOX_ROOT, screenFor } from '../computer.js';
-import { appendRow, getBotRow, getLive, listRoutines, toRoutine, describeCron } from '../store.js';
+import { appendRow, emitBot, getBotRow, getLive, listRoutines, toRoutine, describeCron } from '../store.js';
 import { teamRoster } from '../features/coordination.js';
 import { createBotRecord } from '../features/bots.js';
 import { saveLearnedSkill } from '../features/improve.js';
@@ -17,6 +17,7 @@ import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes
 import { setCheckins } from '../proactive.js';
 import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
+import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
 import { teamDelegate, teamDiscuss } from './orchestration.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
@@ -32,6 +33,7 @@ export interface ToolCtx {
   replyTo?: string;
   signal?: AbortSignal;
   textScreen?: boolean;
+  allowSubscriptionTeam?: boolean;
 }
 
 export interface ToolResult {
@@ -219,6 +221,46 @@ export const TOOLS: ToolDef[] = [
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
       const text = await subscriptionReply(subscriptionSelection(ctx.userId, provider), prompt, ctx.signal ?? AbortSignal.timeout(180_000));
       return { output: text, summary: `Received a reply from ${provider}` };
+    },
+  },
+  {
+    name: 'team_models',
+    description: 'List available Team mode models with provider, exact model ID, and supported reasoning efforts. Check this before creating a team.',
+    parameters: obj({}),
+    activity: 'working',
+    label: 'Checking team models',
+    impl: async (_args, ctx) => ({
+      output: JSON.stringify({ models: await teamModels(Boolean(ctx.allowSubscriptionTeam)), team: orchestrationForBot(ctx.botId) }),
+      summary: 'Checked available team models',
+    }),
+  },
+  {
+    name: 'team_setup',
+    description: 'Set up or change this chat’s named model team when the user explicitly requests it. The current chat model leads. List available models first. Use team_delegate or team_discuss after setup if the user asked you to run the work.',
+    parameters: obj({
+      members: {
+        type: 'array', minItems: 1, maxItems: 6,
+        items: obj({
+          provider: { type: 'string', enum: ['local', 'codex', 'gemini', 'claude'] },
+          model: { type: 'string' },
+          label: { type: 'string' },
+          role: { type: 'string' },
+        }, ['provider', 'model', 'label', 'role']),
+      },
+    }, ['members']),
+    activity: 'working',
+    label: 'Setting up the team',
+    impl: async (args, ctx) => {
+      const previous = orchestrationForBot(ctx.botId);
+      const settings = await validateTeamSettings({
+        enabled: true, members: args.members, balanceUsage: previous.balanceUsage,
+      }, Boolean(ctx.allowSubscriptionTeam));
+      if (!settings.enabled) throw new Error('Choose at least one team member.');
+      ctx.signal?.throwIfAborted();
+      saveOrchestration(ctx.botId, settings);
+      emitBot(ctx.botId);
+      const names = settings.members.map(member => member.label);
+      return { output: `Team mode enabled with ${names.join(', ')}.`, summary: 'Set up the model team' };
     },
   },
   {

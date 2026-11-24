@@ -157,7 +157,7 @@ try {
   await page.getByRole('button', { name: 'Effort: Extra high' }).waitFor();
 
   const composer = page.getByRole('textbox', { name: 'Message Research' });
-  await page.keyboard.press('Control+Shift+d');
+  await page.keyboard.press('Meta+Shift+d');
   await page.getByRole('button', { name: 'Stop dictation' }).waitFor();
   await page.evaluate(() => {
     window.recognition.onresult({ results: [
@@ -166,7 +166,7 @@ try {
     ] });
   });
   await page.waitForFunction(() => document.querySelector('.composer__input').value === 'Review the research notes');
-  await page.keyboard.press('Control+Shift+d');
+  await page.keyboard.press('Meta+Shift+d');
   assert.equal(await composer.inputValue(), 'Review the research notes');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   await page.locator('main.chat').getByText('Finished the task.', { exact: true }).waitFor();

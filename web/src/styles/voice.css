@@ -69,8 +69,9 @@
 .composer__btn.is-recording { background: var(--color-danger); color: #FFFFFF; animation: breathe 1.2s ease-in-out infinite; }
 .composer__btn.is-recording > * { opacity: 1 !important; }
 .composer__btn.is-transcribing { animation: breathe 0.9s ease-in-out infinite; }
-.composer__cta.is-in-call { background: var(--color-danger); }
-.composer__cta.is-in-call:hover:not(:disabled) { background: #C82532; }
+.call-handset { transform: scaleX(-1); }
+.composer__cta:is(.is-in-call, .is-call) { background: var(--color-danger); color: #fff; }
+.composer__cta:is(.is-in-call, .is-call):hover:not(:disabled) { background: #C82532; }
 
 /* ---------- details panel: voice settings ---------- */
 .mini-select--native { position: relative; cursor: pointer; }
@@ -105,3 +106,5 @@
   pointer-events: none;
 }
 .field-dictation[data-visible="true"] { opacity: 1; transform: translate(-50%, 0); }
+
+.vcall__usage { display: block; margin-top: 2px; color: var(--color-text-secondary); font-size: 11px; }

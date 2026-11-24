@@ -167,3 +167,6 @@
 .cfg-note { margin: 10px 0 0; font-size: 13px; color: var(--color-text-secondary); }
 .cfg-card--form { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
 .cfg-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.model-usage .context-card__label { flex-shrink: 0; }
+.model-usage .context-card__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

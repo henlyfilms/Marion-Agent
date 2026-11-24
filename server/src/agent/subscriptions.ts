@@ -1,3 +1,4 @@
+import { tokenCounts, type TokenCounts } from './response-usage.js';
 import { execFile, spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
@@ -109,7 +110,7 @@ const claudeLoginMessage = 'Run claude auth login --claudeai in Terminal and sig
 const claudePlans = new Set(['free', 'pro', 'max', 'ultra', 'team', 'enterprise']);
 
 type ClaudeAccount = { loggedIn?: boolean; authMethod?: string; apiProvider?: string; subscriptionType?: string };
-type ClaudeResult = { type?: string; subtype?: string; is_error?: boolean; result?: string };
+type ClaudeResult = { type?: string; subtype?: string; is_error?: boolean; result?: string; usage?: { input_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; output_tokens?: number } };
 
 export async function requireClaudeSubscription(program: string, cwd: string, signal: AbortSignal) {
   const status = await runFile(program, [...claudeIsolation, 'auth', 'status', '--json'], {
@@ -250,7 +251,15 @@ async function discoverCodexModels(program: string): Promise<CodexModel[]> {
   }
 }
 
-export async function subscriptionReply(selection: SubscriptionSelection, prompt: string, signal: AbortSignal, images: UploadedAttachment[] = []): Promise<string> {
+interface ReplyOptions {
+  fast?: boolean;
+  onUsage?: (counts: TokenCounts) => void;
+  onModel?: (model: SubscriptionSelection) => void;
+}
+
+export async function subscriptionReply(
+  selection: SubscriptionSelection, prompt: string, signal: AbortSignal, images: UploadedAttachment[] = [], options: ReplyOptions = {},
+): Promise<string> {
   const { provider, model, effort } = selection;
   if (!isDesktop) throw new Error('Subscription chat is available in the Mac app.');
   const program = executable(provider);
@@ -265,7 +274,12 @@ export async function subscriptionReply(selection: SubscriptionSelection, prompt
       : [...providerArgs[provider]];
     if (provider !== 'codex') {
       args.push('--model', model);
-      if (effort) args.push('--effort', effort);
+      const catalog = provider === 'claude' ? claudeModels
+        : geminiCatalog && geminiCatalog.expires > Date.now() ? await geminiCatalog.models.catch(() => []) : [];
+      const fastEffort = catalog.find(option => option.id === model)?.efforts.includes('low') ? 'low' : effort;
+      const selectedEffort = options.fast ? fastEffort : effort;
+      if (selectedEffort) args.push('--effort', selectedEffort);
+      options.onModel?.({ ...selection, effort: selectedEffort });
       if (provider === 'claude' && images.length) args.push('--input-format', 'stream-json');
     }
     const codexImages = provider === 'codex' ? await Promise.all(images.map(async (image, index) => {
@@ -299,7 +313,7 @@ export async function subscriptionReply(selection: SubscriptionSelection, prompt
 
     try {
       if (provider === 'codex') {
-        return await codexReply(lines, write, cwd, prompt, selection, codexImages);
+        return await codexReply(lines, write, cwd, prompt, selection, codexImages, options);
       }
       if (provider === 'claude' && images.length) {
         child.stdin.end(JSON.stringify({
@@ -315,7 +329,16 @@ export async function subscriptionReply(selection: SubscriptionSelection, prompt
         if (provider === 'claude') {
           const message = parseLine<ClaudeResult>(line);
           if (message?.type !== 'result') continue;
-          if (message.subtype === 'success' && !message.is_error && typeof message.result === 'string' && message.result.trim()) return message.result;
+          if (message.subtype === 'success' && !message.is_error && typeof message.result === 'string' && message.result.trim()) {
+            const usage = message.usage;
+            const counts = usage && tokenCounts(
+              typeof usage.input_tokens === 'number'
+                ? usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) : undefined,
+              usage.output_tokens,
+            );
+            if (counts) options.onUsage?.(counts);
+            return message.result;
+          }
           if (/model.+(not found|unavailable|access)|access.+model/i.test(message.result ?? '')) {
             throw new Error(`Claude Code could not use ${model} with this account. Choose another model.`);
           }
@@ -394,10 +417,26 @@ export function parseLine<T = ProviderMessage>(line: string): T | undefined {
 }
 
 async function codexReply(
-  lines: AsyncIterable<string>, write: (value: unknown) => void, cwd: string, prompt: string, selection: SubscriptionSelection, images: { type: string; path: string }[],
+  lines: AsyncIterable<string>, write: (value: unknown) => void, cwd: string, prompt: string, selection: SubscriptionSelection, images: { type: string; path: string }[], options: ReplyOptions,
 ): Promise<string> {
   let threadId: string | undefined;
+  let actualEffort = selection.effort;
+  let counts: TokenCounts | undefined;
   let reply = '';
+  const startThread = (models: CodexModel[]) => {
+    const model = selection.model ? models.find(entry => entry.model === selection.model) : defaultCodexModel(models);
+    if (!model?.model) throw new Error(selection.model
+      ? `Codex model ${selection.model} is unavailable for this account. Choose another model.`
+      : 'No Codex model is available for this ChatGPT account.');
+    const supports = (effort: string) => model.supportedReasoningEfforts?.some(item => item.reasoningEffort === effort);
+    if (options.fast) actualEffort = supports('low') ? 'low' : supports('none') ? 'none' : selection.effort;
+    if (actualEffort && !supports(actualEffort)) throw new Error(`Choose a supported reasoning effort for ${model.model}.`);
+    options.onModel?.({ ...selection, model: model.model, label: model.displayName || selection.label, effort: actualEffort });
+    write({ id: 3, method: 'thread/start', params: {
+      cwd, model: model.model, modelProvider: 'openai', sandbox: 'read-only', approvalPolicy: 'never', ephemeral: true, serviceTier: 'default',
+      baseInstructions: 'Answer as a chat assistant using the messages and attachments the user provides. Use the response format requested by Marion. Do not use native CLI tools.',
+    } });
+  };
   write(initializeCodex);
   for await (const line of lines) {
     const message = parseLine(line);
@@ -418,20 +457,15 @@ async function codexReply(
         break;
       case 2:
         if (result?.account?.type !== 'chatgpt') throw new Error('Run codex login and use your ChatGPT account.');
-        write(listCodexModels);
+        // The app server still checks the account and opens a fresh restricted thread.
+        const cached = codexCatalog && codexCatalog.expires > Date.now() ? await codexCatalog.models.catch(() => []) : [];
+        if (cached.length && (!selection.model || cached.some(model => model.model === selection.model))) startThread(cached);
+        else write(listCodexModels);
         break;
       case 5: {
-        const models = ((result?.data ?? []) as CodexModel[]).filter(model => !model.hidden);
-        const model = selection.model ? models.find(model => model.model === selection.model) : defaultCodexModel(models);
-        if (!model && selection.model) throw new Error(`Codex model ${selection.model} is unavailable for this account. Choose another model.`);
-        if (!model?.model) throw new Error('No Codex model is available for this ChatGPT account.');
-        if (selection.effort && !model.supportedReasoningEfforts?.some(item => item.reasoningEffort === selection.effort)) {
-          throw new Error(`Choose a supported reasoning effort for ${model.model}.`);
-        }
-        write({ id: 3, method: 'thread/start', params: {
-          cwd, model: model.model, modelProvider: 'openai', sandbox: 'read-only', approvalPolicy: 'never', ephemeral: true, serviceTier: 'default',
-          baseInstructions: 'Answer as a chat assistant using the messages and attachments the user provides. Use the response format requested by Marion. Do not use native CLI tools.',
-        } });
+        const models = ((result?.data ?? []) as CodexModel[]).filter(model => model.model && !model.hidden);
+        if (models.length) codexCatalog = { expires: Date.now() + 60_000, models: Promise.resolve(models) };
+        startThread(models);
         break;
       }
       case 3:
@@ -439,7 +473,7 @@ async function codexReply(
         if (!threadId) throw new Error('Codex returned no thread.');
         write({ id: 4, method: 'turn/start', params: {
           threadId, input: [{ type: 'text', text: prompt, textElements: [] }, ...images],
-          ...(selection.effort ? { effort: selection.effort } : {}),
+          ...(actualEffort ? { effort: actualEffort } : {}),
         } });
         break;
     }
@@ -447,7 +481,12 @@ async function codexReply(
     if (method === 'item/completed' && params.item?.type === 'agentMessage' && typeof params.item.text === 'string') {
       if (params.item.phase !== 'commentary') reply = params.item.text;
     }
+    if (method === 'thread/tokenUsage/updated') {
+      const usage = params.tokenUsage?.total;
+      counts = tokenCounts(usage?.inputTokens, usage?.outputTokens) ?? counts;
+    }
     if (method === 'turn/completed') {
+      if (counts) options.onUsage?.(counts);
       if (params.turn?.status === 'completed' && reply.trim()) return reply;
       throw new Error('Codex did not return a reply. Check your ChatGPT plan usage in Codex.');
     }

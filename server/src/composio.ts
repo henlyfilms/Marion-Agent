@@ -54,6 +54,7 @@ export async function updateComposioKey(key: string) {
   void previous?.triggers.unsubscribe().catch(() => console.warn('[composio] Could not close previous trigger subscription'));
   catalogCache = null;
   sessionCache.clear();
+  toolsCache.clear();
   db.exec('DELETE FROM composio_sessions; DELETE FROM app_link_attempts');
   return composioStatus();
 }
@@ -127,11 +128,13 @@ export async function disconnect(userId: string, toolkit: string) {
     if (c.toolkit === toolkit) await composio().connectedAccounts.delete(c.id);
   }
   sessionCache.delete(userId);
+  toolsCache.delete(userId);
 }
 
 // ---------- sessions (tool router) ----------
 
 const sessionCache = new Map<string, any>();
+const toolsCache = new Map<string, { expires: number; tools: Promise<any[]> }>();
 
 export async function sessionFor(userId: string): Promise<any> {
   const revision = credentialRevision;
@@ -162,14 +165,19 @@ export async function startConnect(userId: string, toolkit: string, callbackUrl:
 /** OpenAI-Responses-format function tools for this user's Composio session (meta tools). */
 export async function composioTools(userId: string): Promise<any[]> {
   if (!env.composioKey) return [];
-  try {
-    const session = await sessionFor(userId);
-    const tools = await session.tools();
-    return Array.isArray(tools) ? tools : [];
-  } catch (e) {
-    console.warn('[composio] tools unavailable', (e as Error).message);
+  const cached = toolsCache.get(userId);
+  if (cached && cached.expires > Date.now()) return cached.tools;
+  const revision = credentialRevision;
+  const tools: Promise<any[]> = sessionFor(userId).then(async session => {
+    const result = await session.tools();
+    return revision === credentialRevision && Array.isArray(result) ? result : [];
+  }).catch(error => {
+    if (toolsCache.get(userId)?.tools === tools) toolsCache.delete(userId);
+    console.warn('[composio] tools unavailable', (error as Error).message);
     return [];
-  }
+  });
+  toolsCache.set(userId, { expires: Date.now() + 60_000, tools });
+  return tools;
 }
 
 export async function executeComposio(userId: string, name: string, args: Record<string, unknown>) {

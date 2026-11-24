@@ -21,13 +21,13 @@
 }
 .chat__pill:hover, .chat__pill[aria-expanded="true"] { background: var(--color-bg-elevated-hover); }
 .chat__pill-name { font-size: 14px; font-weight: 500; line-height: 20px; letter-spacing: 0.14px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat__header-right { position: absolute; right: 12px; top: 12px; display: flex; gap: 8px; }
-.share-btn {
-  height: 36px; padding: 8px 16px; border-radius: var(--radius-full);
-  background: var(--color-bg-pane); border: 1px solid var(--color-border-tertiary);
-  font-size: 14px; line-height: 18px; letter-spacing: 0.14px; color: var(--color-ink);
+/* Conversation actions stay at the window edge while the details panel opens. */
+.conversation-actions {
+  position: absolute; z-index: 9; top: calc(var(--native-titlebar-height, 0px) + 9px); right: 14px;
+  display: flex; align-items: center; gap: var(--toolbar-gap);
 }
-.share-btn:hover { background: var(--color-bg-elevated-hover); }
+.conversation-actions__share { position: relative; display: inline-flex; }
+.conversation-actions__share .menu { min-width: 170px; }
 
 /* ---------- transcript ---------- */
 .transcript-wrap { position: relative; flex: 1 1 0; min-height: 0; }
@@ -209,7 +209,7 @@
 .chat { min-width: 0; background: var(--color-bg-pane); }
 .chat__header {
   position: relative; order: -1; height: auto; min-height: 55px; flex-shrink: 0;
-  justify-content: space-between; gap: 8px; padding: 9px 14px 8px;
+  justify-content: space-between; gap: 8px; padding: 9px calc(22px + var(--conversation-actions-width)) 8px 14px;
   background: var(--color-bg-pane); border-bottom: 1px solid var(--color-border-tertiary);
   pointer-events: auto;
 }
@@ -224,13 +224,11 @@
 .chat__pill:is(:hover, [aria-expanded="true"]) { border-color: var(--color-border-tertiary); }
 .chat__pill > .bot-avatar { flex-shrink: 0; }
 .chat__pill-name { font-size: 15px; font-weight: 650; }
-.chat__header-right { position: static; gap: 4px; align-self: flex-start; }
-.chat .chat__details-mobile { display: none; }
-@media (min-width: 701px) {
-  .chat__header-right { margin-right: 38px; transition: margin-right var(--panel-duration) var(--ease-out); }
-}
 @media (min-width: 921px) {
-  .app.has-details .chat__header-right { margin-right: 0; }
+  .app.has-details .chat__header { padding-right: 14px; }
+}
+@media (max-width: 920px) {
+  .app.has-details .conversation-actions { visibility: hidden; }
 }
 .chat-model { position: relative; display: flex; align-items: center; gap: 5px; min-height: 29px; max-width: 100%; }
 .chat-model__anchor { min-width: 0; }
@@ -267,10 +265,10 @@
 .bubble.is-agent { background: var(--color-bubble-agent); }
 
 @media (max-width: 700px) {
-  .chat .chat__details-mobile { display: inline-flex; }
-  .chat__header { min-height: 56px; padding: calc(env(safe-area-inset-top) + 6px) 8px 7px; gap: 5px; }
+  .chat__header { min-height: 56px; padding: calc(env(safe-area-inset-top) + 6px) calc(96px + var(--toolbar-gap)) 7px 8px; gap: 5px; }
   .chat__header .sidebar-back { display: inline-flex; align-self: center; }
-  .chat__header-right .icon-btn { width: 40px; height: 44px; }
+  .conversation-actions { right: calc(env(safe-area-inset-right) + 8px); top: calc(var(--native-titlebar-height, 0px) + env(safe-area-inset-top) + 6px); }
+  .conversation-actions .icon-btn { width: 40px; height: 44px; }
   .chat-model__trigger { min-height: 36px; }
   .transcript { padding: 8px 10px 12px; }
   .bubble-wrap { max-width: 93%; }
@@ -294,11 +292,10 @@
 }
 
 @media (max-width: 700px) {
-  .chat__header { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 3px 5px; }
+  .chat__header { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 3px 5px; }
   .chat__header-main { display: contents; }
   .chat__header .sidebar-back { grid-column: 1; grid-row: 1; }
   .chat__header .chat__pill-anchor { grid-column: 2; grid-row: 1; justify-self: start; align-self: center; }
-  .chat__header-right { grid-column: 3; grid-row: 1; }
   .chat-model__trigger, .chat__header button { -webkit-tap-highlight-color: transparent; }
 }
 
@@ -326,5 +323,5 @@
 }
 .bubble__file > svg { flex: none; }
 
-.chat__share { position: relative; display: inline-flex; }
-.chat__share .menu { min-width: 170px; }
+
+.bubble__usage { display: flex; flex-direction: column; gap: 2px; margin: 4px 5px 0; color: var(--color-text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }

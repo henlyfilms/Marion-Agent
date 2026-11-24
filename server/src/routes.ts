@@ -430,17 +430,15 @@ api.post('/bots/:id/messages', bodyLimit({
     ...(call ? { from: { kind: 'voice' as const, id: call, name: 'Voice call' } } : {}),
     ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),
   }, attachments);
-  // On a call the bot is talking out loud: short spoken replies, no formatting.
-  const prompt = call
-    ? `[Voice call: you are talking out loud with the user right now. Answer in one to three short, natural spoken sentences. No markdown, lists, headings, links, code or emoji. If the request needs real work, do it with your tools first, then say the outcome briefly.]\n${text}`
-    : text;
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, attachments);
-  // Any pending question card is answered by a free-text message.
   else {
+    const voice = call ? { call, seq: row.seq, fast: !override } : undefined;
+    const turn = { type: 'user' as const, text, attachments, generation: row.generation, voice,
+      allowSubscriptionTeam: isDesktop && !remoteAccessFor(c) };
     enqueue(b.id, provider === 'local'
-      ? { type: 'user', text: prompt, attachments, generation: row.generation, local: { model, effort: effort ?? 'medium' } }
-      : { type: 'user', text: prompt, attachments, generation: row.generation, subscription: { provider, model, effort } });
+      ? { ...turn, local: { model, label: selection.label, effort: voice?.fast ? 'low' : effort ?? 'medium' } }
+      : { ...turn, subscription: { ...selection, provider } });
   }
   return c.json({ row });
 });

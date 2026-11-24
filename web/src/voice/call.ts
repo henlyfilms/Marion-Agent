@@ -5,9 +5,11 @@ import { create } from 'zustand';
 import type { Row } from '@shared/types';
 import { sortedRows, useStore } from '../store';
 import { voiceApi, type VoiceSession } from './api';
+import { playConnected, playHangUp } from './sounds';
 import { MicCapture, PcmPlayer, base64ToPcm, createAudioContext, micErrorMessage, openMic, pcmToBase64 } from './audio';
 
-export interface Caption { id: string; role: 'user' | 'assistant'; text: string; final: boolean }
+type VoiceUsage = { input: number; output: number; estimated: false };
+export interface Caption { id: string; role: 'user' | 'assistant'; text: string; final: boolean; usage?: VoiceUsage }
 
 export type CallStatus = 'idle' | 'connecting' | 'live' | 'ending' | 'error';
 
@@ -15,6 +17,8 @@ interface VoiceState {
   status: CallStatus;
   botId: string | null;
   callId: string | null;
+  model?: string;
+  usage?: VoiceUsage;
   muted: boolean;
   /** Bot audio is playing. */
   speaking: boolean;
@@ -94,7 +98,7 @@ class VoiceCall {
   micLevel() { return useVoice.getState().muted ? 0 : this.mic?.level ?? 0; }
 
   async start() {
-    setV({ status: 'connecting', botId: this.botId, callId: null, muted: false, speaking: false, listening: false, thinking: false, working: [], captions: [], error: null, startedAt: null });
+    setV({ status: 'connecting', botId: this.botId, callId: null, model: undefined, usage: undefined, muted: false, speaking: false, listening: false, thinking: false, working: [], captions: [], error: null, startedAt: null });
     window.addEventListener('pagehide', this.onUnload);
     let stream: MediaStream;
     try {
@@ -109,7 +113,7 @@ class VoiceCall {
       await this.mic.start();
       this.sess = await voiceApi.session(this.botId);
       if (this.ended) { void voiceApi.end(this.botId, this.sess.callId, [], 'Cancelled'); return; }
-      setV({ callId: this.sess.callId });
+      setV({ callId: this.sess.callId, model: this.sess.model });
       this.connect(this.sess);
     } catch (e) {
       this.end((e as Error).message || 'Could not start the call');
@@ -155,8 +159,8 @@ class VoiceCall {
           this.ready = true;
           if (this.connectTimer) clearTimeout(this.connectTimer);
           setV({ status: 'live', startedAt: Date.now() });
+          playConnected(this.ctx);
           this.watchTranscript();
-          this.send({ type: 'response.create' }); // the bot greets first
         }
         return;
 
@@ -231,7 +235,16 @@ class VoiceCall {
       case 'response.done': {
         this.responseActive = false;
         setV({ thinking: false });
-        for (const o of (ev.response?.output ?? []) as Json[]) if (o?.type === 'function_call') this.startTool(o.call_id, o.name, o.arguments);
+        const outputs = (ev.response?.output ?? []) as Json[];
+        const captionId = outputs.findLast(item => item?.type === 'message' && item.role === 'assistant')?.id;
+        const { input_tokens: input, output_tokens: output } = ev.response?.usage ?? {};
+        if (typeof input === 'number' && typeof output === 'number' && Number.isFinite(input) && Number.isFinite(output)
+            && input >= 0 && output >= 0) {
+          const usage: VoiceUsage = { input, output, estimated: false };
+          const captions = useVoice.getState().captions.map(caption => caption.id === captionId ? { ...caption, usage } : caption);
+          setV({ usage, captions });
+        }
+        for (const o of outputs) if (o?.type === 'function_call') this.startTool(o.call_id, o.name, o.arguments);
         if (this.inflight.size) void this.finishTools(this.responseSpoke);
         else this.flushNotes();
         return;
@@ -415,7 +428,8 @@ class VoiceCall {
     try { this.ws?.close(1000, 'call ended'); } catch { /* ignore */ }
     this.mic?.stop();
     this.player.dispose();
-    void this.ctx.close().catch(() => {});
+    if (!error) playHangUp(this.ctx);
+    setTimeout(() => void this.ctx.close().catch(() => {}), 250);
     const transcript = this.transcript();
     if (this.sess) void voiceApi.end(this.botId, this.sess.callId, transcript, error).catch((e) => console.warn('[voice] end failed', e));
     if (current === this) current = null;

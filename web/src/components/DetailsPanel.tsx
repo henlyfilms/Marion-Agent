@@ -17,6 +17,7 @@ import { useContextMenu } from './ContextMenu';
 import { botMenuItems } from './botMenuItems';
 import { setDetailsOpen } from '../lib/layout';
 import { featuresApi, useFeatureUI } from '../lib/featuresApi';
+import { ModelUsage } from './features/ModelUsage';
 import { ContextCard } from './features/ContextCard';
 
 export function computerStatusText(c: ComputerState | null): string {
@@ -153,7 +154,7 @@ function ComputerCard({ bot, open }: { bot: Bot; open: boolean }) {
   );
 }
 
-export function DetailsPanel({ open, compact }: { open: boolean; compact: boolean }) {
+export function DetailsPanel({ open }: { open: boolean }) {
   const bot = useSelectedBot();
   const routines = useStore((s) => (bot ? s.routines[bot.id] : undefined));
   const [tab, setTab] = useState<'activity' | 'tasks' | 'library'>('activity');
@@ -173,14 +174,14 @@ export function DetailsPanel({ open, compact }: { open: boolean; compact: boolea
         <button type="button" className="icon-btn icon-btn--bordered details__gear" onClick={() => useConfigUI.getState().openBotSettings(bot.id)} aria-label="Bot settings" title="Bot settings">
           <Glyph name="gear" size={16} opacity={0.7} />
         </button>
-        {compact && <button type="button" className="icon-btn icon-btn--bordered" onClick={() => {
+        <button type="button" className="icon-btn icon-btn--bordered details__close" onClick={() => {
           setDetailsOpen(false);
-          document.querySelector<HTMLButtonElement>('.chat__details-mobile')?.focus();
+          requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.details-toggle')?.focus());
         }} aria-label="Close details">
           <Icon name="close" opacity={0.92} />
-        </button>}
+        </button>
       </div>
-      <div className="details__scroll">
+      <div className="details__navigation">
         <div className="details__identity" tabIndex={0} role="button" title="View profile"
           onClick={() => bot.kind !== 'room' && useFeatureUI.getState().set({ profile: { kind: 'bot', id: bot.id } })}
           {...identityMenu}
@@ -190,19 +191,24 @@ export function DetailsPanel({ open, compact }: { open: boolean; compact: boolea
         </div>
         <div className="details__tabs">
           <div className="segmented">
-            <button type="button" className={tab === 'activity' ? 'is-active' : ''} onClick={() => setTab('activity')}>Activity</button>
-            <button type="button" className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')}>Tasks</button>
-            <button type="button" className={tab === 'library' ? 'is-active' : ''} onClick={() => setTab('library')}>Library</button>
+            <button type="button" className={tab === 'activity' ? 'is-active' : ''} onClick={() => setTab('activity')} aria-pressed={tab === 'activity'}>Activity</button>
+            <button type="button" className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')} aria-pressed={tab === 'tasks'}>Tasks</button>
+            <button type="button" className={tab === 'library' ? 'is-active' : ''} onClick={() => setTab('library')} aria-pressed={tab === 'library'}>Library</button>
           </div>
         </div>
+      </div>
+      <div className="details__scroll" key={`${bot.id}:${tab}`}>
         {tab === 'activity' ? (
           <div className="details__sections">
-            {bot.kind !== 'room' && <section>
-              <ComputerCard bot={bot} open={open} />
-            </section>}
-            {bot.kind !== 'room' && <section>
-              <ContextCard bot={bot} />
-            </section>}
+            {bot.kind !== 'room' && <>
+              <section>
+                <ContextCard key={bot.id} bot={bot} />
+                <ModelUsage key={`usage-${bot.id}`} bot={bot} open={open} />
+              </section>
+              <section>
+                <ComputerCard bot={bot} open={open} />
+              </section>
+            </>}
             <section>
               <div className="section-label section-label--row">
                 <span>Routines</span>

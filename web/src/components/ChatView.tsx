@@ -11,14 +11,13 @@ import { botMenuItems } from './botMenuItems';
 import { Transcript } from './Transcript';
 import { CallStage } from './CallStage';
 import { VoiceCallBar } from './VoiceCallBar';
-import { setDetailsOpen, showChatList } from '../lib/layout';
+import { showChatList } from '../lib/layout';
 
 export function ChatView() {
   const bot = useSelectedBot();
   const transcript = useStore((s) => (bot ? s.transcripts[bot.id] : undefined));
   const live = useStore((s) => (bot ? s.live[bot.id] : undefined));
   const [menu, setMenu] = useState(false);
-  const [share, setShare] = useState(false);
   const toastTimer = useRef<number>();
   useEffect(() => () => clearTimeout(toastTimer.current), []);
   const contextMenu = useContextMenu();
@@ -37,28 +36,6 @@ export function ChatView() {
     clearTimeout(toastTimer.current);
     setToast(message);
     toastTimer.current = window.setTimeout(() => setToast(null), 2300);
-  };
-  const transcriptUrl = `/api/bots/${encodeURIComponent(bot.id)}/transcript.txt`;
-  const copyTranscript = async () => {
-    try {
-      if (!navigator.clipboard) throw new Error('Clipboard unavailable.');
-      const text = fetch(transcriptUrl).then(response => {
-        if (!response.ok) throw new Error('Could not load this conversation.');
-        return response.text();
-      });
-      if (navigator.clipboard.write && typeof ClipboardItem !== 'undefined') {
-        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': text.then(value => new Blob([value], { type: 'text/plain' })) })]);
-      } else await navigator.clipboard.writeText(await text);
-      flash('Conversation copied');
-    } catch {
-      flash('Could not copy the conversation. Try downloading it.');
-    }
-  };
-  const downloadTranscript = () => {
-    const link = document.createElement('a');
-    link.href = transcriptUrl;
-    link.download = `${displayName(bot)} transcript.txt`;
-    link.click();
   };
 
   return (
@@ -84,20 +61,6 @@ export function ChatView() {
             />
           )}
           </span>
-        </div>
-        <div className="chat__header-right">
-          <span className="chat__share">
-            <button type="button" className="icon-btn icon-btn--bordered" aria-haspopup="menu" aria-expanded={share}
-              aria-label="Share" title="Share" onClick={() => { setMenu(false); setShare(!share); }}><Icon name="share" /></button>
-            {share && <Menu align="right" label="Share conversation" onClose={() => setShare(false)} items={[
-              { label: 'Copy conversation', onSelect: copyTranscript },
-              { label: 'Download transcript', onSelect: downloadTranscript },
-            ]} />}
-          </span>
-          <button type="button" className="icon-btn icon-btn--bordered chat__details-mobile" onClick={() => setDetailsOpen(true)}
-            aria-label="Show details" aria-controls="conversation-details" title="Show details">
-            <Icon name="sidebar" opacity={0.66} style={{ transform: 'scaleX(-1)' }} />
-          </button>
         </div>
       </header>
       <CallStage bot={bot} />

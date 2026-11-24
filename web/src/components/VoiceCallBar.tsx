@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Mic, MicOff, PhoneOff } from 'lucide-react';
 import { BotAvatarFor } from '../avatar/BotAvatar';
+import { usageLabel } from '../lib/modelUsage';
 import { botVars } from '../lib/colors';
 import { useStore } from '../store';
 import { callLevels, endCall, toggleMute, useVoice } from '../voice/call';
@@ -9,8 +10,12 @@ function MicGlyph({ off }: { off?: boolean }) {
   return off ? <MicOff size={16} aria-hidden /> : <Mic size={16} aria-hidden />;
 }
 
+function CaptionUsage({ usage }: { usage: ReturnType<typeof useVoice.getState>['usage'] }) {
+  return usage ? <small className="vcall__usage">{usageLabel(usage)}</small> : null;
+}
+
 function HangUpGlyph() {
-  return <PhoneOff size={17} aria-hidden />;
+  return <PhoneOff className="call-handset" size={17} aria-hidden />;
 }
 
 const fmt = (ms: number) => {
@@ -113,14 +118,14 @@ export function VoiceCallBar() {
         expanded ? (
           <div className="vcall__log" ref={logRef}>
             {lines.length ? lines.map((c) => (
-              <div key={c.id} className={`vcall__line is-${c.role}`}><b>{c.role === 'user' ? 'You' : bot.name}</b> {c.text}</div>
+              <div key={c.id} className={`vcall__line is-${c.role}`}><b>{c.role === 'user' ? 'You' : bot.name}</b> {c.text}<CaptionUsage usage={c.usage} /></div>
             )) : <div className="vcall__line is-empty">Nothing said yet.</div>}
             <button type="button" className="vcall__toggle" onClick={() => setExpanded(false)}>Hide transcript</button>
           </div>
         ) : (
           <button type="button" className="vcall__captions" onClick={() => setExpanded(true)} title="Show full transcript">
             {last.length ? last.map((c) => (
-              <span key={c.id} className={`vcall__caption is-${c.role}${c.final ? '' : ' is-partial'}`}>{c.text}</span>
+              <span key={c.id} className={`vcall__caption is-${c.role}${c.final ? '' : ' is-partial'}`}>{c.text}<CaptionUsage usage={c.usage} /></span>
             )) : <span className="vcall__caption is-empty">{v.muted ? 'You’re muted.' : `Say hi to ${bot.name}.`}</span>}
           </button>
         )

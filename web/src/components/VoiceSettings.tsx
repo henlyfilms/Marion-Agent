@@ -87,7 +87,7 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
     const modelOptions = [{ value: '', label: `Same as chat` }, ...models.map(m => ({ value: key({ provider: m.provider, model: m.id }), label: m.label }))];
     const pick = (value: string, all: boolean) => {
       const m = models.find(option => key({ provider: option.provider, model: option.id }) === value);
-      const selection = m ? { provider: m.provider, model: m.id, effort: m.defaultEffort ?? (m.provider === 'local' ? 'medium' : null), label: m.label } : null;
+      const selection = m ? { provider: m.provider, model: m.id, effort: m.efforts.includes('low') ? 'low' : m.defaultEffort, label: m.label } : null;
       if (all) setDefaultCallModel(selection); else setChatCallModel(bot.id, selection);
     };
     const fallback = defaultCallModel();

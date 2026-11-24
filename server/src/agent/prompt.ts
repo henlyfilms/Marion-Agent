@@ -1,10 +1,11 @@
+import { agentSkills } from './skills.js';
 import { teamPromptSection } from './orchestration.js';
 import { db } from '../db.js';
 import { getBotRow, listRoutines } from '../store.js';
 import { connectedToolkits } from '../composio.js';
 import { memoriesForPrompt } from './memory.js';
 
-export async function systemPrompt(userId: string, botId: string): Promise<string> {
+export async function systemPrompt(userId: string, botId: string, voice = false): Promise<string> {
   const bot = getBotRow(botId);
   const user = db.prepare('SELECT * FROM users WHERE id=?').get(userId) as any;
   const team = (db.prepare("SELECT name, label, is_primary, role FROM bots WHERE user_id=? AND id<>? AND COALESCE(hidden,0)=0 AND COALESCE(kind,'agent')<>'room'").all(userId, botId) as any[])
@@ -13,10 +14,11 @@ export async function systemPrompt(userId: string, botId: string): Promise<strin
   // Bounded: most relevant to the last few user messages, then most recent, within a character budget.
   const mem = memoriesForPrompt(botId);
   const memories = mem.lines.length ? mem.lines.join('\n') + (mem.omitted ? `\n(${mem.omitted} older memories not shown; use recall to search them.)` : '') : '';
-  const skills = (db.prepare('SELECT name, body FROM skills WHERE bot_id=?').all(botId) as any[]).map((s) => `### ${s.name}\n${s.body}`).join('\n\n');
   const routines = listRoutines(botId).map((r) => `- ${r.name} (${r.id}): ${r.enabled ? r.description : 'paused'}; ${r.prompt.slice(0, 120)}`).join('\n');
   let apps = '';
-  try { apps = [...(await connectedToolkits(userId))].join(', '); } catch { apps = '(unavailable)'; }
+  if (!voice) {
+    try { apps = [...(await connectedToolkits(userId))].join(', '); } catch { apps = '(unavailable)'; }
+  }
 
   return `You are ${bot.name}, a Bot on ${user?.name ?? 'the user'}'s team: an always-on AI teammate that does real work, not just chat.
 ${bot.label ? `Your job: ${bot.label}.` : ''}${bot.description ? `\nAbout you: ${bot.description}` : ''}${bot.is_primary ? "\nYou are the user's primary Bot: their first stop for anything. You send scheduled check-ins and hand work to the other Bots." : ''}
@@ -42,10 +44,11 @@ You coordinate the team. Break requests into pieces, hand each piece to the Bot 
 ## Context
 - Current time: ${new Date().toISOString()}
 - User: ${user?.name ?? ''} <${user?.email ?? ''}>
-- Connected apps: ${apps || 'none yet'}
+${voice ? '- Use app discovery tools when the user asks to work with a connected app.' : `- Connected apps: ${apps || 'none yet'}`}
 ${team ? `- Other Bots on the team:\n${team}` : '- You are the only Bot on the team so far.'}
 ${routines ? `\n## Your routines\n${routines}` : ''}
 ${memories ? `\n## What you remember\n${memories}` : ''}
-${skills ? `\n## Your skills\n${skills}` : ''}
+
+${agentSkills(botId)}
 ${bot.instructions ? `\n## Instructions from the user\n${bot.instructions}` : ''}`;
 }

@@ -25,6 +25,33 @@ function decide(request) {
   calls.push({ who, request });
   const say = (t) => ({ type: 'message', id: 'm' + calls.length, role: 'assistant', content: [{ type: 'output_text', text: t, annotations: [] }] });
   const call = (name, args) => ({ type: 'function_call', id: 'fc' + calls.length, call_id: 'call' + calls.length, name, arguments: JSON.stringify(args) });
+  if (who === 'Coordinator') {
+    const toolNames = request.tools.map(tool => tool.name);
+    assert.match(system, /Token optimizer/);
+    if (last.type !== 'function_call_output') {
+      assert.ok(toolNames.includes('team_setup'));
+      assert.ok(!toolNames.includes('team_delegate'));
+      return call('team_models', {});
+    }
+    if (String(last.output).includes('"models"')) {
+      const catalog = JSON.parse(last.output);
+      const model = catalog.models.find(entry => entry.id === 'team-fixture');
+      assert.ok(model, 'team model discovery omitted a reachable model');
+      return call('team_setup', { members: [
+        { provider: model.provider, model: model.id, label: 'Draft', role: 'Draft a plan' },
+        { provider: model.provider, model: model.id, label: 'Review', role: 'Review the draft' },
+      ] });
+    }
+    assert.ok(toolNames.includes('team_delegate'));
+    if (String(last.output).includes('Team mode enabled')) {
+      return call('team_delegate', { mode: 'chain', assignments: [
+        { member: 'Draft', task: 'Write a plan' },
+        { member: 'Review', task: 'Review the plan' },
+      ] });
+    }
+    assert.match(last.output, /Reviewed the plan/);
+    return say('The team is set up and finished the run.');
+  }
   if (who === 'background') {
     if (system.includes('You compress')) return say('- Summary: the user and the bot talked about numbers.');
     if (system.includes('improve itself')) return say('{"lessons":["When the user asks for a number, answer with digits."],"skills":[]}');
@@ -57,9 +84,23 @@ function decide(request) {
   return say('Hello.');
 }
 const fakeModel = createServer(async (req, res) => {
+  if (req.url === '/v1/models') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: 'team-fixture' }] }));
+    return;
+  }
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const request = JSON.parse(Buffer.concat(chunks).toString());
+  if (request.model === 'team-fixture') {
+    assert.match(request.input, /Reuse verified results/);
+    const reviewing = request.input.includes('Review the plan');
+    if (reviewing) assert.match(request.input, /Earlier steps in this assignment.*\n.*A plan from Draft/);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ output_text: reviewing ? 'Reviewed the plan' : 'A plan from Draft',
+      usage: { input_tokens: 100, output_tokens: 12 } }));
+    return;
+  }
   const item = decide(request);
   if (request.stream) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -67,7 +108,7 @@ const fakeModel = createServer(async (req, res) => {
       res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: item.content[0].text })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'response.output_item.done', item })}\n\n`);
     }
-    res.end(`data: ${JSON.stringify({ type: 'response.completed', response: { output: [item], usage: { input_tokens: 1234 } } })}\n\n`);
+    res.end(`data: ${JSON.stringify({ type: 'response.completed', response: { output: [item], usage: { input_tokens: 1234, output_tokens: 20 } } })}\n\n`);
   } else {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ id: 'r', object: 'response', output: [item], output_text: item.content?.[0]?.text ?? '' }));
@@ -187,6 +228,19 @@ try {
   const helper = await waitFor(async () => (await api('GET', '/bots')).bots.find(b => b.name === 'Helper'), 'create_bot did not create the bot');
   assert.equal((await api('GET', `/bots/${helper.id}/profile`)).profile.routines[0].enabled, false);
   pass('create_bot creates the bot with its routines paused');
+
+  const coordinator = await createBot('Coordinator');
+  assert.equal(coordinator.orchestration.enabled, false);
+  await sendText(coordinator.id, 'Create a model team to draft and review a plan, then run those steps.');
+  await waitFor(async () => (await messages(coordinator.id)).some(m => m.text === 'The team is set up and finished the run.' && m.usage?.length),
+    'the Bot did not configure and run the requested model team');
+  const team = await api('GET', `/bots/${coordinator.id}/orchestration`);
+  assert.equal(team.settings.enabled, true);
+  assert.deepEqual(team.settings.members.map(member => member.label), ['Draft', 'Review']);
+  const teamRows = await messages(coordinator.id);
+  assert.deepEqual(teamRows.filter(row => row.from?.kind === 'model').map(row => row.usage[0].input), [100, 100]);
+  assert.equal(teamRows.at(-1).usage[0].input, 4 * 1234);
+  pass('chat creates a model team, chains results between members and records token usage');
 
   // Two bots that keep messaging each other must stop on their own.
   const pinger = await createBot('Pinger');

@@ -10,6 +10,10 @@ import { chromium } from 'playwright';
 const dir = await mkdtemp(join(tmpdir(), 'marion-settings-audio-'));
 const recordings = [];
 const modelsUsed = [];
+const prompts = [];
+const spokenInputs = [];
+let releaseFirstReply;
+const firstReply = new Promise(resolve => { releaseFirstReply = resolve; });
 const inference = createServer(async (request, response) => {
   if (request.url === '/v1/models') {
     response.setHeader('Content-Type', 'application/json');
@@ -22,19 +26,21 @@ const inference = createServer(async (request, response) => {
   if (request.url === '/v1/audio/transcriptions') {
     recordings.push(data);
     response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify({ text: 'Hello from the microphone' }));
+    response.end(JSON.stringify({ text: spokenInputs.shift() ?? 'Hello from the microphone' }));
     return;
   }
   const body = JSON.parse(data.toString());
   modelsUsed.push(body.model);
-  await new Promise(resolve => setTimeout(resolve, 500));
-  const text = 'I heard you.';
+  const user = body.input.filter(item => item.role === 'user').at(-1)?.content;
+  prompts.push({ user, effort: body.reasoning?.effort });
+  if (prompts.length === 1) await firstReply;
+  const text = prompts.length === 1 ? 'This reply arrived during the follow-up.' : 'I heard you.';
   const item = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] };
   response.writeHead(200, { 'Content-Type': 'text/event-stream' });
   for (const event of [
     { type: 'response.output_text.delta', delta: text },
     { type: 'response.output_item.done', item },
-    { type: 'response.completed', response: { output: [item] } },
+    { type: 'response.completed', response: { output: [item], usage: { input_tokens: 1200, output_tokens: 15 } } },
   ]) response.write(`data: ${JSON.stringify(event)}\n\n`);
   response.end();
 });
@@ -59,7 +65,7 @@ globalThis.fetch = (input, init) => {
 `);
 
 const child = spawn(process.execPath, ['--import', mock, 'dist/index.js'], {
-  cwd: new URL('../server/', import.meta.url),
+  cwd: process.env.MARION_TEST_RUNTIME ? join(process.env.MARION_TEST_RUNTIME, 'server') : new URL('../server/', import.meta.url),
   env: {
     ...process.env, DB_PATH: join(dir, 'test.db'),
     PORT: port, HOST: '127.0.0.1', APP_URL: origin, SERVER_URL: origin,
@@ -92,6 +98,9 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
     window.spokenReplies = [];
+    if (!localStorage.getItem('marion-agent.dictationShortcut.v2')) {
+      localStorage.setItem('marion-agent.dictationShortcut', 'Control+Shift+D');
+    }
     window.testMicrophoneLevel = 0;
     // Drive voice activity deterministically while Chrome records from its fake microphone.
     Object.defineProperty(AnalyserNode.prototype, 'getFloatTimeDomainData', {
@@ -130,7 +139,7 @@ try {
   await sounds.uncheck();
   assert.equal(await sounds.isChecked(), false);
   await settings.getByRole('button', { name: 'Shortcuts', exact: true }).click();
-  await settings.getByRole('button', { name: 'Change dictation shortcut' }).getByText('Control+Shift+D').waitFor();
+  await settings.getByRole('button', { name: 'Change dictation shortcut' }).getByText('Command+Shift+D').waitFor();
   await settings.getByRole('button', { name: 'Audio', exact: true }).click();
   assert.equal(await sounds.isChecked(), false);
   const selector = settings.getByLabel('Microphone input');
@@ -167,10 +176,10 @@ try {
   await page.keyboard.press('Control+k');
   const search = page.getByRole('textbox', { name: 'Search', exact: false }).last();
   await search.focus();
-  await page.keyboard.press('Control+Shift+d');
+  await page.keyboard.press('Meta+Shift+d');
   await page.locator('.field-dictation[data-visible="true"]').getByText('Listening…').waitFor();
   await page.waitForTimeout(600);
-  await page.keyboard.press('Control+Shift+d');
+  await page.keyboard.press('Meta+Shift+d');
   await page.waitForFunction(() => document.activeElement?.value === 'Hello from the microphone');
   await page.keyboard.press('Escape');
   const dictate = page.getByRole('button', { name: 'Dictate', exact: true });
@@ -179,22 +188,42 @@ try {
   await microphoneMenu.getByRole('menuitemradio', { name: 'System default' }).waitFor();
   const testMic = microphoneMenu.getByRole('menuitemradio').nth(1);
   await testMic.click();
-  await page.keyboard.press('Control+Shift+d');
+  await page.keyboard.press('Meta+Shift+d');
   await page.getByRole('button', { name: 'Stop dictation' }).waitFor();
   await page.waitForTimeout(600);
-  await page.keyboard.press('Control+Shift+d');
+  await page.keyboard.press('Meta+Shift+d');
   await page.waitForFunction(() => document.querySelector('.composer__input')?.value === 'Hello from the microphone');
   await composer.fill('');
 
+  spokenInputs.push('So, basically, I want to.', 'build a project.', 'Also, make it blue.');
   await page.locator('.composer').getByRole('button', { name: 'Call Barry', exact: true }).click();
   const call = page.getByRole('region', { name: 'Call with Barry', exact: true });
   await call.getByText('Listening', { exact: true }).waitFor();
-  await page.evaluate(() => { window.testMicrophoneLevel = 0.2; });
-  await call.getByText('Listening…', { exact: true }).waitFor();
-  await page.waitForTimeout(600);
-  await page.evaluate(() => { window.testMicrophoneLevel = 0; });
+  const speak = async () => {
+    await page.evaluate(() => { window.testMicrophoneLevel = 0.2; });
+    await call.getByText('Listening…', { exact: true }).waitFor();
+    await page.waitForTimeout(420);
+    await page.evaluate(() => { window.testMicrophoneLevel = 0; });
+  };
+  await speak();
+  await call.getByText('Listening for you to continue', { exact: true }).waitFor();
+  assert.equal(prompts.length, 0, 'an unfinished thought was sent to the model');
+  assert.equal(await page.locator('.bubble').count(), 0, 'an unfinished thought appeared in chat');
+  await speak();
+  await call.getByText('Thinking…', { exact: true }).waitFor();
+  const followUp = page.waitForResponse(response =>
+    response.request().method() === 'POST' && response.url().endsWith('/messages')
+    && response.request().postDataJSON().text === 'Also, make it blue.');
+  await speak();
+  assert.ok((await followUp).ok(), 'follow-up was not accepted while the first reply was pending');
+  releaseFirstReply();
   await call.getByText('I heard you.', { exact: true }).waitFor();
-  assert.deepEqual(await page.evaluate(() => window.spokenReplies.slice(-1)), ['I heard you.']);
+  assert.deepEqual(await page.evaluate(() => window.spokenReplies), ['I heard you.']);
+  assert.deepEqual(prompts, [
+    { user: 'So, basically, I want to build a project.', effort: 'low' },
+    { user: 'Also, make it blue.', effort: 'low' },
+  ]);
+  await page.getByText('qwen-alternate · 1,200 in · 15 out tokens').last().waitFor();
   await call.getByRole('button', { name: 'End call' }).click();
   await call.waitFor({ state: 'hidden' });
   await page.locator('.completion-notice[data-visible="true"]').getByText('Barry finished').waitFor();
@@ -203,38 +232,81 @@ try {
   await page.getByRole('menuitem', { name: 'Download transcript' }).click();
   const shared = await download;
   const transcript = await readFile(await shared.path(), 'utf8');
-  assert.match(transcript, /Hello from the microphone/);
+  assert.match(transcript, /So, basically, I want to build a project/);
   assert.match(transcript, /I heard you\./);
 
-  assert.deepEqual(modelsUsed, ['qwen-alternate']);
-  assert.equal(recordings.length, 3);
+  assert.deepEqual(modelsUsed, ['qwen-alternate', 'qwen-alternate']);
+  assert.equal(recordings.length, 5);
   assert.ok(recordings.every(recording => recording.length > 1000));
   assert.deepEqual(errors, []);
   if (process.env.MARION_CAPTURE_VOICE) await page.screenshot({ path: process.env.MARION_CAPTURE_VOICE });
   console.log('PASS: app manifest, refresh, model selection, Composio key lifecycle, microphone, dictation and local voice.');
+
+  const actions = page.getByRole('group', { name: 'Conversation actions' });
+  const detailsButton = actions.getByRole('button', { name: /^(Show|Close) details$/ });
+  const gap = async (left, right) => {
+    const a = await left.boundingBox();
+    const b = await right.boundingBox();
+    assert.ok(a && b);
+    return b.x - a.x - a.width;
+  };
+  const toolbarGap = await gap(page.getByRole('button', { name: 'Sort chats' }), page.getByRole('button', { name: 'New Bot' }));
+  const shareButton = actions.getByRole('button', { name: 'Share', exact: true });
+  assert.equal(await gap(shareButton, detailsButton), toolbarGap);
+  if (await detailsButton.getAttribute('aria-expanded') === 'false') await detailsButton.click();
+  const details = page.getByRole('complementary', { name: 'Conversation details' });
+  const usage = details.locator('.context-card + .model-usage');
+  await usage.getByText('Model usage', { exact: true }).waitFor();
+  await usage.getByText(/Last response.*tokens/).waitFor();
+  await details.evaluate(el => Promise.all(el.parentElement.getAnimations().map(animation => animation.finished)));
+  assert.equal(await gap(shareButton, detailsButton), toolbarGap);
+  await page.setViewportSize({ width: 1410, height: 475 });
+  await details.locator('.details__scroll').evaluate(el => { el.scrollTop = el.scrollHeight; });
+  const tabs = details.locator('.details__tabs');
+  const positions = () => tabs.locator('button').evaluateAll(buttons => buttons.map(button => {
+    const { x, y, width } = button.getBoundingClientRect();
+    return { x, y, width };
+  }));
+  const activityTabs = await positions();
+  for (const name of ['Tasks', 'Library', 'Activity']) {
+    const tab = tabs.getByRole('button', { name, exact: true });
+    await tab.click();
+    assert.equal(await tab.getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(await positions(), activityTabs);
+  }
+  await page.setViewportSize({ width: 1410, height: 890 });
 
   let sawAudio = false;
   let ended = false;
   await page.route('**/api/voice/status', route => route.fulfill({ json: { realtime: true, localSpeech: false } }));
   await page.route('**/api/voice/session', route => route.fulfill({ json: {
     callId: 'realtime-test', clientSecret: 'fixture', websocketUrl: 'ws://127.0.0.1/realtime-fixture',
-    sampleRate: 24000, session: {},
+    model: 'grok-voice-latest', sampleRate: 24000, session: {},
   }}));
   await page.route('**/api/voice/end', route => { ended = true; return route.fulfill({ json: { ok: true } }); });
   await page.routeWebSocket('ws://127.0.0.1/realtime-fixture', socket => {
     socket.onMessage(message => {
       const event = JSON.parse(message);
       if (event.type === 'session.update') socket.send(JSON.stringify({ type: 'session.updated' }));
-      if (event.type === 'response.create') socket.send(JSON.stringify({
-        type: 'response.output_audio_transcript.done', item_id: 'realtime-reply', transcript: 'Realtime fixture response.',
-      }));
-      if (event.type === 'input_audio_buffer.append' && event.audio.length > 100) sawAudio = true;
+      if (event.type === 'input_audio_buffer.append' && event.audio.length > 100 && !sawAudio) {
+        sawAudio = true;
+        socket.send(JSON.stringify({
+          type: 'response.output_audio_transcript.done', item_id: 'realtime-reply', transcript: 'Realtime fixture response.',
+        }));
+        socket.send(JSON.stringify({
+          type: 'response.done', response: {
+            output: [{ id: 'realtime-reply', type: 'message', role: 'assistant' }],
+            usage: { input_tokens: 120, output_tokens: 25 },
+          },
+        }));
+      }
     });
   });
   await page.reload();
   await page.locator('.composer').getByRole('button', { name: 'Call Barry', exact: true }).click();
   const realtime = page.getByRole('region', { name: 'Voice call with Barry' });
   await realtime.getByText('Realtime fixture response.').waitFor();
+  await realtime.getByText('120 in · 25 out tokens', { exact: true }).waitFor();
   for (let i = 0; i < 20 && !sawAudio; i++) await new Promise(resolve => setTimeout(resolve, 50));
   assert.ok(sawAudio, 'realtime WebSocket received no microphone PCM');
   await realtime.getByRole('button', { name: 'Mute' }).click();
@@ -246,6 +318,7 @@ try {
   assert.deepEqual(errors, []);
   console.log('PASS: realtime call UI, microphone PCM, mute and hangup over a simulated WebSocket.');
 } finally {
+  releaseFirstReply();
   await browser?.close();
   child.kill();
   await exit;

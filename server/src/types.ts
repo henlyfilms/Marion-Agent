@@ -108,6 +108,12 @@ export interface OrchestrationSettings {
   balanceUsage: boolean;
 }
 
+export interface ResponseUsage extends ChatModelSelection {
+  input: number;
+  output: number;
+  estimated: boolean;
+}
+
 export interface ChatModelSettings {
   selection: ChatModelSelection;
   models: ChatModel[];
@@ -147,6 +153,7 @@ export interface MessageBody {
   /** Set when a message came from another bot, a routine or a voice call rather than the user typing. */
   from?: { kind: 'bot' | 'routine' | 'voice' | 'model'; id: string; name: string; provider?: ChatProvider };
   citations?: { url: string; title?: string }[];
+  usage?: ResponseUsage[];
 }
 
 export interface ToolCallBody {
@@ -233,6 +240,9 @@ export type ActivityKind =
 
 export interface LiveState {
   botId: string;
+  activeModel?: ChatModelSelection;
+  modelUsage?: ResponseUsage[];
+  voiceReply?: { call: string; seq: number; generation: number; text: string };
   isRunning: boolean;
   activity: { kind: ActivityKind; detail?: string; since: number } | null;
   awaiting: { reason: string; since: number } | null;

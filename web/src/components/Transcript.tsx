@@ -10,6 +10,7 @@ import { ActivityLine } from './ActivityLine';
 import { CardRow } from './cards/Cards';
 import { Icon } from './Icon';
 import { Markdown } from './Markdown';
+import { usageLabel } from '../lib/modelUsage';
 import { useContextMenu } from './ContextMenu';
 
 type Item =
@@ -90,6 +91,13 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
           </div>
         )}
       </div>
+      {side === 'left' && !b.streaming && !!b.usage?.length && (
+        <div className="bubble__usage" aria-label="Response usage">
+          {b.usage.map(usage => <span key={`${usage.provider}:${usage.model}`} title={usage.model}>
+            {usage.label || usage.model || usage.provider} · {usageLabel(usage)}
+          </span>)}
+        </div>
+      )}
       <span className="bubble__time">{clock(row.createdAt)}</span>
     </div>
   );

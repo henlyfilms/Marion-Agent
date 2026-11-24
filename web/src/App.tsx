@@ -12,6 +12,7 @@ import { ChatView } from './components/ChatView';
 import { ComputerViewer } from './components/ComputerViewer';
 import { FieldDictation } from './components/FieldDictation';
 import { DetailsPanel } from './components/DetailsPanel';
+import { ConversationActions } from './components/ConversationActions';
 import { Icon } from './components/Icon';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
@@ -88,7 +89,7 @@ function Shell() {
   const modal = useStore((s) => s.modal);
   const viewerOpen = useStore((s) => s.viewerOpen);
   const collapsed = useStore((s) => s.sidebarCollapsed);
-  const hasBot = useStore((s) => !!s.selectedBotId);
+  const selectedBotId = useStore(s => s.selectedBotId);
   const mobileChatOpen = useStore((s) => s.mobileChatOpen);
   const view = useConfigUI((s) => s.view);
 
@@ -152,21 +153,15 @@ function Shell() {
     return () => window.removeEventListener('keydown', k);
   }, [compact]);
 
-  const hasDetails = hasBot && view === 'chat' && (!compact || mobileChatOpen);
+  const hasDetails = Boolean(selectedBotId) && view === 'chat' && (!compact || mobileChatOpen);
   return (
     <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${mobileChatOpen || view === 'tasks' ? ' has-mobile-chat' : ''}${detailsOpen && hasDetails ? ' has-details' : ''}`}>
       <Sidebar />
       {view === 'tasks' ? <TasksView /> : <ChatView />}
-      {hasDetails && !compact && (
-        <button type="button" className="icon-btn icon-btn--bordered details-toggle" onClick={() => setDetailsOpen(!detailsOpen)}
-          aria-label={detailsOpen ? 'Close details' : 'Show details'} aria-expanded={detailsOpen}
-          aria-controls="conversation-details" title={detailsOpen ? 'Close details' : 'Show details'}>
-          <Icon name="sidebar" opacity={0.66} style={{ transform: 'scaleX(-1)' }} />
-        </button>
-      )}
+      {hasDetails && <ConversationActions key={selectedBotId} detailsOpen={detailsOpen} />}
       {hasDetails && (
         <div className="details-slot" aria-hidden={!detailsOpen} ref={node => { if (node) node.inert = !detailsOpen; }}>
-          <DetailsPanel open={detailsOpen} compact={compact} />
+          <DetailsPanel open={detailsOpen} />
         </div>
       )}
       {modal === 'create' && <CreateBotModal />}

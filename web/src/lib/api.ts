@@ -39,8 +39,8 @@ export const api = {
   markRead: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/read`),
   rows: (id: string) => req<{ generation: number; rows: Row[] }>('GET', `/bots/${id}/rows`),
   /** A message spoken on a voice call (optionally to a different model than the chat's). */
-  sendCall: (id: string, text: string, call: string, model?: ChatModelSelection | null) =>
-    req<{ row: Row }>('POST', `/bots/${id}/messages`, { text, call, ...(model ? { model } : {}) }),
+  sendCall: (id: string, text: string, call: string, model?: ChatModelSelection | null, signal?: AbortSignal) =>
+    req<{ row: Row }>('POST', `/bots/${id}/messages`, { text, call, ...(model ? { model } : {}) }, signal),
   send: (id: string, text: string, files: File[] = []) => {
     const path = `/bots/${id}/messages`;
     if (!files.length) return req<{ row: Row }>('POST', path, { text });

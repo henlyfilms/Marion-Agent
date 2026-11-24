@@ -14,7 +14,7 @@ import { Glyph } from './glyphs';
 import { AudioSettings, ComposioSettings, LocalModelSettings, SubscriptionSettings } from './LocalSettings';
 import { ConfirmButton } from './ui';
 import { LifeLinkSection, NotificationsSection } from '../features/FeatureSettings';
-import { DEFAULT_DICTATION_SHORTCUT, dictationShortcut, setDictationShortcut, shortcutFor } from '../../voice/shortcut';
+import { DEFAULT_DICTATION_SHORTCUT, dictationShortcut, setDictationShortcut, shortcutFor, shortcutLabel } from '../../voice/shortcut';
 
 const SECTIONS: { id: AppSection; label: string }[] = [
   { id: 'general', label: 'General' },
@@ -186,7 +186,7 @@ function ShortcutsSection() {
             } else choose(next);
           }}
           onBlur={() => setRecording(false)}>
-          {recording ? 'Press new shortcut…' : shortcut}
+          {recording ? 'Press new shortcut…' : shortcutLabel(shortcut)}
         </button>
         <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => choose(DEFAULT_DICTATION_SHORTCUT)} disabled={shortcut === DEFAULT_DICTATION_SHORTCUT && !recording}>Reset</button>
       </div>

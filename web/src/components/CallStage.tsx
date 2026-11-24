@@ -3,7 +3,7 @@ import { Mic, MicOff, PhoneOff } from 'lucide-react';
 import type { Bot } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { botVars } from '../lib/colors';
-import { endLocalCall, interruptLocalCall, localCallLevel, toggleLocalMute, useLocalCall, type LocalCallStatus } from '../voice/localCall';
+import { endLocalCall, interruptLocalCall, localCallLevel, sendLocalCallDraft, toggleLocalMute, useLocalCall, type LocalCallStatus } from '../voice/localCall';
 
 const labels: Record<LocalCallStatus, string> = {
   idle: '', ringing: 'Calling…', speaking: 'Speaking', listening: 'Listening', hearing: 'Listening…',
@@ -54,7 +54,7 @@ export function CallStage({ bot }: { bot: Bot }) {
   }, [mine]);
 
   if (!shown) return null;
-  const status = call.status === 'error' ? call.error ?? 'Call ended' : call.muted && call.status === 'listening' ? 'Muted' : labels[call.status];
+  const status = call.draft && call.status === 'listening' && !call.muted ? 'Listening for you to continue' : call.status === 'error' ? call.error ?? 'Call ended' : call.muted && call.status === 'listening' ? 'Muted' : labels[call.status];
   const live = call.status !== 'error' && call.status !== 'ringing';
   return (
     <section className={`call-stage is-${call.status}${leaving ? ' is-leaving' : ''}${call.muted ? ' is-muted' : ''}`} style={botVars(bot.avatarColor)} aria-label={`Call with ${bot.name}`}>
@@ -72,9 +72,10 @@ export function CallStage({ bot }: { bot: Bot }) {
         </div>
         <div className="call-stage__status" aria-live="polite">
           {(call.status === 'thinking' || call.status === 'transcribing') && <span className="call-stage__dots" aria-hidden><i /><i /><i /></span>}
-          {status}{call.modelLabel && live ? <span className="call-stage__model"> · {call.modelLabel}</span> : null}
+          <span>{status}</span>{call.modelLabel && live ? <span className="call-stage__model"> · {call.modelLabel}</span> : null}
         </div>
         {call.caption && <p className={`call-stage__caption is-${call.caption.role}`} key={call.caption.text}>{call.caption.text}</p>}
+        {call.draft && call.status === 'listening' && <button type="button" className="link-btn link-btn--small" onClick={sendLocalCallDraft}>Send now</button>}
       </div>
       <div className="call-stage__actions">
         {call.status !== 'error' && (
@@ -85,7 +86,7 @@ export function CallStage({ bot }: { bot: Bot }) {
         )}
         <button type="button" className="call-stage__btn call-stage__btn--end" onClick={() => call.status === 'error' ? useLocalCall.setState({ status: 'idle', botId: null, error: null }) : endLocalCall()}
           aria-label={call.status === 'error' ? 'Dismiss' : 'End call'} title={call.status === 'error' ? 'Dismiss' : 'End call'}>
-          <PhoneOff size={18} />
+          <PhoneOff className="call-handset" size={18} />
         </button>
       </div>
     </section>

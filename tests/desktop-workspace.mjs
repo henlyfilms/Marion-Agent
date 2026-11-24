@@ -58,7 +58,7 @@ assert.equal(args[args.indexOf('--model') + 1], 'claude-opus-5-5');
 assert.equal(args[args.indexOf('--effort') + 1], 'xhigh');
 assert.equal(mode, 'subscription');
 appendFileSync(${JSON.stringify(claudeRequests)}, readFileSync(0, 'utf8') + '\\n');
-console.log(JSON.stringify({type: 'result', subtype: 'success', is_error: false, result: 'Claude test reply'}));
+console.log(JSON.stringify({type: 'result', subtype: 'success', is_error: false, result: 'Claude test reply', usage: { input_tokens: 100, cache_read_input_tokens: 20, output_tokens: 10 }}));
 `, { mode: 0o700 });
 await writeFile(join(work, 'agy'), `#!/usr/bin/env node
 const assert = require('node:assert/strict');
@@ -93,6 +93,7 @@ lines.on('line', line => {
     assert.equal(params.effort, 'xhigh');
     writeFileSync(${JSON.stringify(codexRequests)}, JSON.stringify(params));
     send({ method: 'item/completed', params: { threadId: 'thread_test', item: { type: 'agentMessage', text: 'Codex test reply' } } });
+    send({ method: 'thread/tokenUsage/updated', params: { threadId: 'thread_test', tokenUsage: { total: { inputTokens: 210, outputTokens: 14 } } } });
     send({ method: 'turn/completed', params: { threadId: 'thread_test', turn: { status: 'completed' } } });
   }
 });
@@ -255,7 +256,7 @@ try {
   const second = await fetch(origin + '/api/bots', {
     method: 'POST', headers: signedIn, body: '{"name":"Second chat"}',
   }).then(response => response.json());
-  async function chat(mode, text, expected) {
+  async function chat(mode, text, expected, usage) {
     await writeFile(claudeMode, mode);
     const message = await fetch(bot + '/messages', {
       method: 'POST', headers: signedIn, body: JSON.stringify({ text }),
@@ -264,7 +265,16 @@ try {
     const { row: sent } = await message.json();
     for (let attempt = 0; attempt < 50; attempt++) {
       const { rows } = await fetch(bot + '/rows', { headers: signedIn }).then(response => response.json());
-      if (rows.some(row => row.seq > sent.seq && row.body.text?.includes(expected))) return;
+      const response = rows.find(row => row.seq > sent.seq && row.body.text?.includes(expected));
+      if (response && (!usage || response.body.usage)) {
+        if (usage) {
+          const count = response.body.usage[0];
+          assert.equal(count.estimated, usage.estimated);
+          if (usage.input) assert.equal(count.input, usage.input);
+          if (usage.output) assert.equal(count.output, usage.output);
+        }
+        return;
+      }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert.fail('Expected Claude authentication warning or reply to be saved in the transcript.');
@@ -273,13 +283,13 @@ try {
   await chat('api', 'API check', 'claude auth login');
   await chat('missing-plan', 'Missing plan check', 'claude auth login');
   await assert.rejects(readFile(claudeRequests), { code: 'ENOENT' });
-  await chat('subscription', 'Subscription check', 'Claude test reply');
+  await chat('subscription', 'Subscription check', 'Claude test reply', { estimated: false, input: 120, output: 10 });
   assert.match(await readFile(claudeRequests, 'utf8'), /Current user message:\nSubscription check/);
   assert.equal((await update({ provider: 'gemini', model: 'gemini-4-neon', effort: 'xhigh' })).status, 200);
-  await chat('subscription', 'Gemini routing check', 'Gemini test reply');
+  await chat('subscription', 'Gemini routing check', 'Gemini test reply', { estimated: true });
   assert.match(await readFile(agyRequests, 'utf8'), /gemini-4-neon/);
   assert.equal((await update({ provider: 'codex', model: 'gpt-6.2-sol', effort: 'xhigh' })).status, 200);
-  await chat('subscription', 'Codex routing check', 'Codex test reply');
+  await chat('subscription', 'Codex routing check', 'Codex test reply', { estimated: false, input: 210, output: 14 });
   assert.match(await readFile(codexRequests, 'utf8'), /"effort":"xhigh"/);
   const secondSelection = await fetch(origin + '/api/bots/' + second.bot.id + '/chat-model', { headers: signedIn }).then(response => response.json());
   assert.equal(secondSelection.selection.provider, 'claude');

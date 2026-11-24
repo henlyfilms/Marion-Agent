@@ -1,6 +1,9 @@
+import { availableLocalModels } from './models.js';
+import { subscriptionModels } from './subscriptions.js';
+import { env } from '../env.js';
 import { db } from '../db.js';
 import { newId } from '../lib/ids.js';
-import { chatProviders, type OrchestrationSettings, type TeamMember } from '../types.js';
+import { chatProviders, localEfforts, type ChatModel, type OrchestrationSettings, type TeamMember } from '../types.js';
 
 /** Settings only: kept apart from the engine so store.ts can read them without import cycles. */
 
@@ -54,4 +57,50 @@ export function normalizeMembers(input: unknown): TeamMember[] {
 
 export function saveOrchestration(botId: string, settings: OrchestrationSettings) {
   db.prepare('UPDATE bots SET orchestration=? WHERE id=?').run(JSON.stringify(settings), botId);
+}
+
+export async function teamModels(subscriptionAllowed: boolean): Promise<ChatModel[]> {
+  const local = availableLocalModels().catch((): string[] => []).then(models =>
+    [...new Set([env.localModelName, ...models])].map((id): ChatModel =>
+      ({ provider: 'local', id, label: id, efforts: [...localEfforts], defaultEffort: 'medium' })));
+  const subscribed = subscriptionAllowed ? ['codex', 'gemini', 'claude'] as const : [];
+  const available = await Promise.all([
+    local,
+    ...subscribed.map(provider => subscriptionModels(provider).then(catalog => catalog.models).catch((): ChatModel[] => [])),
+  ]);
+  return available.flat();
+}
+
+export class TeamSettingsError extends Error {
+  constructor(message: string, readonly status: 400 | 403 | 503) { super(message); }
+}
+
+export async function validateTeamSettings(
+  input: { enabled?: unknown; members?: unknown; balanceUsage?: unknown }, subscriptionAllowed: boolean,
+): Promise<OrchestrationSettings> {
+  const members = normalizeMembers(input.members ?? []);
+  const catalogs = new Map<TeamMember['provider'], ChatModel[]>();
+  let localModels: string[] | undefined;
+  for (const member of members) {
+    if (member.provider === 'local') {
+      if (member.effort && !localEfforts.some(option => option === member.effort)) throw new TeamSettingsError(`Choose a supported effort for ${member.label}.`, 400);
+      if (member.model !== env.localModelName) {
+        localModels ??= await availableLocalModels().catch((): string[] => []);
+        if (!localModels.includes(member.model)) throw new TeamSettingsError(`${member.model} isn't on your local model server.`, 400);
+      }
+      continue;
+    }
+    if (!subscriptionAllowed) throw new TeamSettingsError('Configure subscription team members from the local Mac workspace.', 403);
+    let models = catalogs.get(member.provider);
+    if (!models) {
+      models = (await subscriptionModels(member.provider).catch(() => null))?.models;
+      if (!models) throw new TeamSettingsError(`The ${member.provider} model list is unavailable. Check its CLI and sign-in.`, 503);
+      catalogs.set(member.provider, models);
+    }
+    const option = models.find(entry => entry.id === member.model);
+    if (!option) throw new TeamSettingsError(`${member.model} isn't available for ${member.label}.`, 400);
+    member.effort ??= option.defaultEffort;
+    if (member.effort ? !option.efforts.includes(member.effort) : option.efforts.length > 0) throw new TeamSettingsError(`Choose a supported effort for ${member.label}.`, 400);
+  }
+  return { enabled: Boolean(input.enabled) && members.length > 0, members, balanceUsage: input.balanceUsage !== false };
 }

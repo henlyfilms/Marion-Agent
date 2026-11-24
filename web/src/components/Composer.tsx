@@ -15,7 +15,7 @@ import { playDictationSound } from '../voice/sounds';
 import { useDictation } from '../voice/dictation';
 import { appendDictation, supportsLiveDictation, useLiveDictation } from '../voice/liveDictation';
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../voice/audio';
-import { dictationShortcut, shortcutFor } from '../voice/shortcut';
+import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
 import { useConfigUI } from '../configStore';
 import { useCompactLayout } from '../lib/layout';
 
@@ -381,7 +381,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             className={`composer__btn${state === 'recording' ? ' is-recording' : state === 'transcribing' ? ' is-transcribing' : ''}`}
             aria-label={state === 'recording' ? 'Stop dictation' : 'Dictate'}
             aria-pressed={state === 'recording'} aria-keyshortcuts={dictationShortcut()}
-            title={state === 'recording' ? 'Tap to stop · Esc cancels' : `Dictate (${dictationShortcut()}) · Right-click for audio input`}
+            title={state === 'recording' ? 'Tap to stop · Esc cancels' : `Dictate (${shortcutLabel(dictationShortcut())}) · Right-click for audio input`}
             disabled={state === 'transcribing'}
             onPointerDown={pressMic}
             onPointerUp={releaseMic}
@@ -400,7 +400,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           </span>
           {(inCall || localCall) && !hasMessage ? (
             <button type="button" className={`composer__cta is-in-call${ringing ? ' is-call-ringing' : ''}`} onClick={() => localCall ? endLocalCall() : endCall()} aria-label="End call" title="End call">
-              <PhoneOff size={16} aria-hidden />
+              <PhoneOff className="call-handset" size={16} aria-hidden />
             </button>
           ) : running && !hasMessage ? (
             <button type="button" className="composer__cta" onClick={stop} aria-label="Stop" title="Stop">
@@ -410,7 +410,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             <span className="composer__call-anchor">
               <button
                 type="button"
-                className="composer__cta"
+                className={`composer__cta${hasMessage ? '' : ' is-call'}`}
                 onClick={hasMessage ? send : openCall}
                 onContextMenu={hasMessage ? undefined : event => { event.preventDefault(); event.stopPropagation(); showCallMenu(); }}
                 onKeyDown={hasMessage ? undefined : event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); showCallMenu(); } }}
@@ -418,7 +418,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
                 aria-label={hasMessage ? 'Send' : `Call ${bot.name}`}
                 title={hasMessage ? 'Send (Enter)' : `Call ${bot.name} · Right-click to choose the call model`}
               >
-                {hasMessage ? <Icon name="arrow_up" size={16} /> : <Phone size={16} aria-hidden />}
+                {hasMessage ? <Icon name="arrow_up" size={16} /> : <Phone className="call-handset" size={16} aria-hidden />}
               </button>
               {callMenu && <Menu label="Call model" placement="above" align="right" className="chat-model__menu" onClose={() => setCallMenu(false)} items={[
                 { label: `Same as chat · ${bot.chatModel?.label ?? bot.chatModel?.model ?? 'chat model'}`, checked: !callModelFor(bot.id), onSelect: () => setChatCallModel(bot.id, null) },
@@ -427,7 +427,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
                   return {
                     group: ({ local: 'Local models', codex: 'Codex', gemini: 'Gemini', claude: 'Claude' } as const)[model.provider],
                     label: model.label, checked: chosen?.provider === model.provider && chosen.model === model.id,
-                    onSelect: () => setChatCallModel(bot.id, { provider: model.provider, model: model.id, effort: model.defaultEffort ?? (model.provider === 'local' ? 'medium' : null), label: model.label }),
+                    onSelect: () => setChatCallModel(bot.id, { provider: model.provider, model: model.id, effort: model.efforts.includes('low') ? 'low' : model.defaultEffort, label: model.label }),
                   };
                 })),
                 ...(chatCallModel(bot.id) ? [{ label: 'Use this model for all chats’ calls', separator: true, onSelect: () => setDefaultCallModel(chatCallModel(bot.id)) }] : []),
