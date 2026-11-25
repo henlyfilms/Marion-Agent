@@ -25,6 +25,18 @@ function decide(request) {
   calls.push({ who, request });
   const say = (t) => ({ type: 'message', id: 'm' + calls.length, role: 'assistant', content: [{ type: 'output_text', text: t, annotations: [] }] });
   const call = (name, args) => ({ type: 'function_call', id: 'fc' + calls.length, call_id: 'call' + calls.length, name, arguments: JSON.stringify(args) });
+  if (user === 'Add Turn on the lights to the Marian Agent project under Work.') {
+    assert.equal(request.tools.filter(t => t.name.startsWith('marion_life_')).length, 9);
+    assert.ok(system.includes('Marion Life (also spelled Marian Life) is connected'));
+    assert.ok(!JSON.stringify(request).includes(LIFE_KEY));
+    if (last.type !== 'function_call_output') return call('marion_life_add_task', { project: 'Marian Agent', divider: 'Work', title: 'Turn on the lights', date: '2026-11-25' });
+    assert.equal(JSON.parse(last.output).task.title, 'Turn on the lights');
+    return say('Added the task to Marion Agent.');
+  }
+  if (user === 'Can you reach my planner?') {
+    const has = request.tools.some(t => t.name.startsWith('marion_life_'));
+    return say(has ? 'Planner tools are on.' : system.includes('turned off for you') ? 'Planner access is off for me.' : 'Planner access is paused.');
+  }
   if (who === 'Coordinator') {
     const toolNames = request.tools.map(tool => tool.name);
     assert.match(system, /Token optimizer/);
@@ -118,6 +130,7 @@ const fakeModel = createServer(async (req, res) => {
 
 // ---------- fake Marion Life API ----------
 const lifeRows = new Map();
+const lifeTasks = [];
 const LIFE_KEY = 'mb_test_marion_life_key';
 const LIFE_EMAIL = 'owner@example.com';
 const fakeLife = createServer(async (req, res) => {
@@ -130,6 +143,9 @@ const fakeLife = createServer(async (req, res) => {
   const reply = { jsonrpc: '2.0', id };
   if (method === 'tools/call' && params.name === 'whoami') {
     reply.result = { structuredContent: { ok: true, email: LIFE_EMAIL } };
+  } else if (method === 'tools/call' && params.name === 'add_task') {
+    lifeTasks.push(params.arguments);
+    reply.result = { content: [{ type: 'text', text: JSON.stringify({ added: true, task: params.arguments }) }] };
   } else if (method === 'tools/call' && params.name === 'save_agent_chats') {
     for (const chat of params.arguments.chats) lifeRows.set(chat.id, chat);
     reply.result = { structuredContent: { ok: true } };
@@ -362,6 +378,26 @@ try {
   assert.equal(linkState.hasKey, true);
   assert.equal(JSON.stringify(linkState).includes(LIFE_KEY), false, 'the Marion Life key must never be sent back');
   pass(`Marion Life link copies chats (${lifeRows.size}) and never returns the key`);
+
+  // Every bot can use Marion Life by default, without an approval card or listing projects first.
+  await sendText(chief.id, 'Add Turn on the lights to the Marian Agent project under Work.');
+  await waitFor(async () => (await messages(chief.id)).some(m => m.text === 'Added the task to Marion Agent.'), 'Marion Life task write');
+  assert.deepEqual(lifeTasks, [{ title: 'Turn on the lights', project: 'Marian Agent', divider: 'Work', date: '2026-11-25' }]);
+  assert.ok(!(await rows(chief.id)).some(r => r.body.card === 'approval' && r.body.tool?.startsWith('marion_life_')));
+  const ask = async (expect) => {
+    await sendText(chief.id, 'Can you reach my planner?');
+    await waitFor(async () => (await messages(chief.id)).filter(m => m.text === expect).length > 0, expect);
+  };
+  // Turning one bot off removes its tools; turning all back on restores them.
+  const blocked = await api('PUT', '/life-link', { blockedBots: [chief.id] });
+  assert.deepEqual(blocked.settings.blockedBots, [chief.id]);
+  await ask('Planner access is off for me.');
+  assert.deepEqual((await api('PUT', '/life-link', { blockedBots: [] })).settings.blockedBots, []);
+  await ask('Planner tools are on.');
+  assert.equal((await api('PUT', '/life-link', { blockedBots: 'nope' })).status, 400);
+  assert.equal((await api('PUT', '/life-link', { enabled: false })).status, 200);
+  await ask('Planner access is paused.');
+  pass('bots add Marion Life tasks directly; per-bot and pause switches remove the tools');
 
   console.log(`\n${results.length} feature checks passed.`);
 } finally {

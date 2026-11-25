@@ -50,6 +50,25 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
   );
 }
 
+/** Quick switch for the "in · out tokens" line under replies (same setting as Settings → General). */
+function TokenCountsRow() {
+  const on = useConfigUI(s => s.showTokenStats);
+  const set = useConfigUI(s => s.setShowTokenStats);
+  const contextMenu = useContextMenu();
+  return (
+    <div className="panel-card">
+      <div className="panel-row" tabIndex={0}
+        {...contextMenu('Token counts', () => [{ label: on ? 'Hide token counts' : 'Show token counts', onSelect: () => set(!on) }])}>
+        <span className="panel-row__text">
+          <span className="panel-row__title">Token counts</span>
+          <span className="panel-row__sub">{on ? 'Shown under each reply' : 'Hidden'}</span>
+        </span>
+        <Toggle on={on} onChange={set} label={`Token counts ${on ? 'on' : 'off'}`} />
+      </div>
+    </div>
+  );
+}
+
 function RoutineRow({ r }: { r: Routine }) {
   const [enabled, setEnabled] = useState(r.enabled);
   const contextMenu = useContextMenu();
@@ -213,6 +232,7 @@ export function DetailsPanel({ open }: { open: boolean }) {
               <section>
                 <ContextCard key={bot.id} bot={bot} />
                 <ModelUsage key={`usage-${bot.id}`} bot={bot} open={open} />
+                <TokenCountsRow />
               </section>
               <section>
                 <ComputerCard bot={bot} open={open} />

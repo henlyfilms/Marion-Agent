@@ -19,6 +19,7 @@ import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
 import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
 import { teamDelegate, teamDiscuss } from './orchestration.js';
+import { lifePlannerTools, lifeToolsEnabled, runLifePlannerTool, type LifePlannerTool } from '../features/life-link.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
 
@@ -649,10 +650,36 @@ if (grok) {
   });
 }
 
+// Marion Life planner tools: every bot gets them while the Life connection is on (Settings → Marion Life),
+// unless that bot's access is switched off there. They use the saved key; it never reaches a model.
+const lifeTools = new Set<string>();
+for (const name of Object.keys(lifePlannerTools) as LifePlannerTool[]) {
+  const tool = lifePlannerTools[name];
+  const toolName = `marion_life_${name}`;
+  lifeTools.add(toolName);
+  TOOLS.push({
+    name: toolName,
+    description: `Marion Life: ${tool.description}`,
+    parameters: obj(
+      Object.fromEntries(('fields' in tool ? Object.entries(tool.fields) : []).map(([key, type]) => [key, { type }])),
+      'required' in tool ? tool.required : [],
+    ),
+    activity: 'connecting_service',
+    label: 'Using Marion Life',
+    impl: async (args, ctx) => ({
+      output: await runLifePlannerTool(ctx.userId, ctx.botId, name, args, ctx.signal),
+      summary: 'write' in tool ? 'Marion Life saved it' : 'Marion Life responded',
+    }),
+  });
+}
+
 export const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
 
-export function functionSchemas() {
-  return TOOLS.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
+/** Tool schemas for a bot. Marion Life tools appear only when that bot may use the Life connection. */
+export function functionSchemas(userId?: string, botId?: string) {
+  const life = userId ? lifeToolsEnabled(userId, botId) : false;
+  return TOOLS.filter(t => life || !lifeTools.has(t.name))
+    .map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
 }
 
 // ---------- approvals policy ----------

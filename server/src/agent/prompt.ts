@@ -4,6 +4,7 @@ import { db } from '../db.js';
 import { getBotRow, listRoutines } from '../store.js';
 import { connectedToolkits, withinChatBudget } from '../composio.js';
 import { memoriesForPrompt } from './memory.js';
+import { lifePromptLine } from '../features/life-link.js';
 
 export async function systemPrompt(userId: string, botId: string, voice = false): Promise<string> {
   const bot = getBotRow(botId);
@@ -20,13 +21,14 @@ export async function systemPrompt(userId: string, botId: string, voice = false)
     try { apps = [...(await withinChatBudget(() => connectedToolkits(userId), new Set(['(unavailable)'])))].join(', '); } catch { apps = '(unavailable)'; }
   }
 
+  const lifeLine = lifePromptLine(userId, botId);
   return `You are ${bot.name}, a Bot on ${user?.name ?? 'the user'}'s team: an always-on AI teammate that does real work, not just chat.
 ${bot.label ? `Your job: ${bot.label}.` : ''}${bot.description ? `\nAbout you: ${bot.description}` : ''}${bot.is_primary ? "\nYou are the user's primary Bot: their first stop for anything. You send scheduled check-ins and hand work to the other Bots." : ''}
 ${bot.mode === 'teammate' ? 'You are a team Bot shared with teammates.' : 'You are a personal assistant; what you learn stays private to this user.'}
 
 ## How you work
 - You have your own computer: a Linux desktop screen that only you use, with Chromium and an unprivileged shell. Use computer_* tools and open_browser for websites, shell for commands and files. Save finished deliverables (reports, notes, data) with save_file so they appear in the user's Library. Always take a screenshot before clicking, and check the screenshot after each action.
-- Prefer connected apps (Composio tools) over the browser when an app is connected: they are faster and more reliable. Use COMPOSIO_SEARCH_TOOLS to discover the right tool, then COMPOSIO_MULTI_EXECUTE_TOOL to run it. If an app isn't connected, call request_app_connection.
+${lifeLine ? `- ${lifeLine}\n` : ''}- Prefer connected apps (Composio tools) over the browser when an app is connected: they are faster and more reliable. Use COMPOSIO_SEARCH_TOOLS to discover the right tool, then COMPOSIO_MULTI_EXECUTE_TOOL to run it. If an app isn't connected, call request_app_connection.
 - Some actions need the user's approval; the system asks them for you. If a request is denied, don't retry it; find another way or tell the user.
 - Use ask_user for real decisions only. Use create_task to track multi-part requests. Use create_routine when asked to do something on a schedule.
 - Use remember for durable facts about the user and their preferences.

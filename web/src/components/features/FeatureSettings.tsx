@@ -7,6 +7,8 @@ import {
 } from '../../lib/notifications';
 import { relativeShort } from '../../lib/time';
 import { Switch } from '../config/ui';
+import { useStore } from '../../store';
+import { BotAvatarFor } from '../../avatar/BotAvatar';
 
 const EVENTS: { kind: NotificationKind; title: string; sub: string }[] = [
   { kind: 'finished', title: 'A Bot replied', sub: 'When a Bot finishes answering you' },
@@ -187,7 +189,7 @@ export function LifeLinkSection() {
     <>
       <div className="app-settings__head">
         <h1>Marion Life</h1>
-        <p>Copy every Marion Agent chat into Marion Life, so your Second Brain can find them. Chats update about a minute after each reply.</p>
+        <p>Your bots can add and update Marion Life tasks, projects and events, and every chat is copied to your Second Brain about a minute after each reply.</p>
       </div>
       <section className="cfg-section">
         <div className="cfg-card">
@@ -218,25 +220,64 @@ export function LifeLinkSection() {
           )}
         </div>
       </section>
+      {s && <LifeBotAccess blocked={s.blockedBots ?? []} busy={busy === 'access'}
+        onChange={blockedBots => {
+          setLink(current => current && { ...current, settings: { ...current.settings, blockedBots } });
+          void run('access', () => featuresApi.saveLifeLink({ blockedBots }));
+        }} />}
       <section className="cfg-section">
         <div className="cfg-section__label">Connection</div>
         <div className="cfg-card cfg-card--form">
           <label className="cfg-field">
             <span className="cfg-field__label">Marion Life key</span>
             <input className="text-input" type="password" autoComplete="off" value={key} placeholder={link?.hasKey ? 'Saved on this Mac. Paste a new one to replace it.' : 'mb_…'} onChange={e => setKey(e.target.value)} />
-            <span className="cfg-field__hint">This key only lets Marion Agent save chat copies to your own Life account, and you can revoke it in Marion Life. It stays on this Mac and is never sent to an AI model. No database keys needed.</span>
+            <span className="cfg-field__hint">This key lets your bots use the planner in your own Life account and copy chats there. It stays on this Mac, is never sent to an AI model, and you can revoke it in Marion Life.</span>
           </label>
           <div className="cfg-actions">
             <button type="button" className="cfg-btn cfg-btn--primary" disabled={!!busy || (!key && !link?.hasKey)}
               onClick={() => void run('save', async () => { await featuresApi.saveLifeLink({ linkKey: key || undefined }); setKey(''); }, 'Linked. Copying your chats now.')}>
               {busy === 'save' ? 'Checking…' : s?.enabled ? 'Save' : 'Link Marion Life'}
             </button>
-            {s?.enabled && <button type="button" className="cfg-btn cfg-btn--secondary" disabled={!!busy} onClick={() => void run('pause', () => featuresApi.saveLifeLink({ enabled: false }), 'Paused. Nothing new is copied.')}>Pause</button>}
+            {s?.enabled && <button type="button" className="cfg-btn cfg-btn--secondary" disabled={!!busy} onClick={() => void run('pause', () => featuresApi.saveLifeLink({ enabled: false }), 'Paused. Bots can’t use Marion Life and nothing new is copied.')}>Pause</button>}
             {(s?.enabled || link?.hasKey) && <button type="button" className="cfg-btn cfg-btn--ghost-danger" disabled={!!busy} onClick={() => void run('remove', featuresApi.removeLifeLink, 'Unlinked. Chats already copied stay in Marion Life.')}>Unlink</button>}
           </div>
           {note && <p className={note.error ? 'cfg-error' : 'cfg-note'} role={note.error ? 'alert' : 'status'}>{note.text}</p>}
         </div>
       </section>
     </>
+  );
+}
+
+/** Which bots may use the Marion Life planner tools. Every bot can by default; new bots start allowed. */
+function LifeBotAccess({ blocked, busy, onChange }: { blocked: string[]; busy: boolean; onChange: (blockedBots: string[]) => void }) {
+  const bots = useStore(s => s.bots).filter(bot => bot.kind !== 'room');
+  if (!bots.length) return null;
+  const off = new Set(blocked);
+  const allOn = bots.every(bot => !off.has(bot.id));
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Bot access</div>
+      <div className="cfg-card">
+        <div className="cfg-row">
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">All bots</div>
+            <div className="cfg-row__sub">Bots that are on can add and update your Marion Life tasks, projects and events. New bots start on.</div>
+          </div>
+          <Switch on={allOn} disabled={busy} label="Let every bot use Marion Life"
+            onChange={on => onChange(on ? [] : bots.map(bot => bot.id))} />
+        </div>
+        {bots.map(bot => (
+          <div className="cfg-row cfg-row--divided" key={bot.id}>
+            <BotAvatarFor bot={bot} size={24} />
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">{bot.name}</div>
+              {bot.label && <div className="cfg-row__sub">{bot.label}</div>}
+            </div>
+            <Switch on={!off.has(bot.id)} disabled={busy} label={`Let ${bot.name} use Marion Life`}
+              onChange={on => onChange(on ? blocked.filter(id => id !== bot.id) : [...blocked, bot.id])} />
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

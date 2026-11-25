@@ -22,10 +22,12 @@ export interface LifeLinkSettings {
   lastSyncAt: number | null;
   lastError: string | null;
   syncedChats: number;
+  /** Bots that may NOT use the Marion Life planner tools. Empty = every bot (the default). */
+  blockedBots: string[];
 }
 
 const DEFAULT_ENDPOINT = 'https://marionberry.app/api/mcp';
-const DEFAULTS: LifeLinkSettings = { enabled: false, autoSync: true, endpoint: DEFAULT_ENDPOINT, lifeEmail: '', lastSyncAt: null, lastError: null, syncedChats: 0 };
+const DEFAULTS: LifeLinkSettings = { enabled: false, autoSync: true, endpoint: DEFAULT_ENDPOINT, lifeEmail: '', lastSyncAt: null, lastError: null, syncedChats: 0, blockedBots: [] };
 const keyName = (userId: string) => `life_link_key:${userId}`;
 const legacyKeyName = (userId: string) => `life_service_key:${userId}`;
 /** Life's limits: a batch of chats must fit in 64 KB; a single chat may be up to 640 KB. */
@@ -47,6 +49,92 @@ export const lifeLinkSettings = (userId: string) => {
 };
 export const hasLifeKey = (userId: string) => Boolean(getSecret(keyName(userId)));
 
+/** True when the saved Life connection is on and this bot (if given) is allowed to use it. */
+export function lifeToolsEnabled(userId: string, botId?: string) {
+  const settings = lifeLinkSettings(userId);
+  if (!settings.enabled || !hasLifeKey(userId)) return false;
+  return !botId || !(settings.blockedBots ?? []).includes(botId);
+}
+
+/** Marion Life planner tools every allowed bot gets as marion_life_* (Life resolves project and divider names itself). */
+export const lifePlannerTools = {
+  get_today: { description: 'Get today’s local date, time zone, tasks and events.' },
+  list_tasks: {
+    description: 'List tasks by date, date range or project (ID or name). With a project and no dates, list all its tasks. Set include_done to include completed tasks.',
+    fields: { date: 'string', from: 'string', to: 'string', project: 'string', include_done: 'boolean' },
+  },
+  list_projects: { description: 'List projects with their IDs, names, status and dividers. Only needed when add_task reports that a project name did not match.' },
+  list_events: {
+    description: 'List calendar events between two local dates (YYYY-MM-DD).',
+    fields: { from: 'string', to: 'string' }, required: ['from', 'to'],
+  },
+  search: {
+    description: 'Search tasks, projects and events.',
+    fields: { query: 'string' }, required: ['query'],
+  },
+  add_task: {
+    description: 'Add a task. Pass the project and divider by name as the user said them (Life matches names); leave project out for the Planner. Date defaults to today and can be YYYY-MM-DD or "none". Notes are for Planner tasks. Call this directly: no need to list projects first.',
+    fields: { title: 'string', project: 'string', divider: 'string', date: 'string', notes: 'string' }, required: ['title'],
+    write: true,
+  },
+  update_task: {
+    description: 'Update a task by ID. Use YYYY-MM-DD or "none" for date. Planner tasks support notes and low, normal or high priority. Use project to move a project task.',
+    fields: { id: 'string', title: 'string', date: 'string', notes: 'string', priority: 'string', project: 'string' }, required: ['id'],
+    write: true,
+  },
+  complete_task: {
+    description: 'Mark a task done by ID, or reopen it with done: false.',
+    fields: { id: 'string', done: 'boolean' }, required: ['id'],
+    write: true,
+  },
+  add_event: {
+    description: 'Add a calendar event. Start and optional end use local YYYY-MM-DDTHH:MM, or YYYY-MM-DD for an all-day event.',
+    fields: { title: 'string', start: 'string', end: 'string', all_day: 'boolean' }, required: ['title', 'start'],
+    write: true,
+  },
+} satisfies Record<string, { description: string; fields?: Record<string, string>; required?: string[]; write?: boolean }>;
+
+/** One prompt line so every bot knows whether it can reach Marion Life right now. */
+export function lifePromptLine(userId: string, botId: string) {
+  if (lifeToolsEnabled(userId, botId)) {
+    return 'Marion Life (also spelled Marian Life) is connected for you: use the marion_life_* tools for its tasks, projects, dividers and calendar events. Pass project and divider names as the user said them; Life matches them, so you rarely need to list projects first. Confirm changes from the tool result.';
+  }
+  const settings = lifeLinkSettings(userId);
+  if (settings.enabled && hasLifeKey(userId)) return 'Marion Life access is turned off for you in Settings → Marion Life. If asked to use Marion Life, say the owner can turn it on there.';
+  return '';
+}
+
+export type LifePlannerTool = keyof typeof lifePlannerTools;
+
+export async function runLifePlannerTool(userId: string, botId: string, name: LifePlannerTool, args: Record<string, unknown>, signal?: AbortSignal) {
+  const settings = lifeLinkSettings(userId);
+  const key = getSecret(keyName(userId));
+  if (!settings.enabled || !key) throw new Error('Marion Life is paused or has no saved key in Settings → Marion Life.');
+  if ((settings.blockedBots ?? []).includes(botId)) throw new Error('This bot’s Marion Life access is turned off in Settings → Marion Life.');
+  const tool = lifePlannerTools[name];
+  const input: Record<string, unknown> = {};
+  for (const [field, type] of 'fields' in tool ? Object.entries(tool.fields) : []) {
+    const value = args?.[field];
+    if (value === undefined || value === null || value === '') continue;
+    if (typeof value !== type) throw new Error(`Marion Life requires ${field} to be a ${type}.`);
+    input[field] = value;
+  }
+  for (const field of 'required' in tool ? tool.required : []) {
+    if (typeof input[field] !== 'string' || !String(input[field]).trim()) throw new Error(`Marion Life requires ${field}.`);
+  }
+  try {
+    const result = await lifeTool(settings.endpoint, key, name, input, signal);
+    return JSON.stringify(result).replaceAll(key, '[redacted]').slice(0, 60_000);
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    if (error instanceof LifeToolMissing) throw new Error(`The connected Marion Life server does not provide ${name}.`);
+    if (error instanceof LifeResponseUncertain && 'write' in tool) {
+      throw new Error('Marion Life did not confirm the change. Check the task or calendar before retrying to avoid duplicates.');
+    }
+    throw error;
+  }
+}
+
 function normalizeEndpoint(raw: string) {
   const url = new URL(raw.trim());
   const local = ['localhost', '127.0.0.1'].includes(url.hostname);
@@ -55,16 +143,26 @@ function normalizeEndpoint(raw: string) {
 }
 
 class LifeToolMissing extends Error {}
+class LifeResponseUncertain extends Error {}
 let rpcId = 0;
 
 /** Call one Marion Life tool through the key door. */
-async function lifeTool<T>(endpoint: string, key: string, name: string, args: Record<string, unknown>): Promise<T> {
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/call', params: { name, arguments: args } }),
-    signal: AbortSignal.timeout(20_000),
-  });
+async function lifeTool<T>(endpoint: string, key: string, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const timeout = AbortSignal.timeout(20_000);
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/call', params: { name, arguments: args } }),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+  } catch {
+    signal?.throwIfAborted();
+    throw new LifeResponseUncertain('Marion Life did not respond. Try again shortly.');
+  }
+  if (response.status >= 500) throw new LifeResponseUncertain(`Marion Life is temporarily unavailable (HTTP ${response.status}).`);
   if (response.status === 401 || response.status === 403) throw new Error('Marion Life refused the key. Make a new one in Life → Settings → Connections → Marion Agent.');
   if (response.status === 413) throw new Error('That chat is too big for Marion Life to accept.');
   if (response.status === 429) throw new Error('Marion Life is rate-limiting the link. It will retry in a minute.');
@@ -91,9 +189,18 @@ async function lifeTool<T>(endpoint: string, key: string, name: string, args: Re
 const missingSync = 'Connected, but Marion Life hasn’t turned on chat sync yet. Chats will copy over once it does.';
 
 /** Save the key, check it with Life (whoami), and start copying chats. */
-export async function connectLife(userId: string, input: { endpoint?: string; linkKey?: string; enabled?: boolean; autoSync?: boolean }) {
+export async function connectLife(userId: string, input: { endpoint?: string; linkKey?: string; enabled?: boolean; autoSync?: boolean; blockedBots?: unknown }) {
   const current = lifeLinkSettings(userId);
   const next: LifeLinkSettings = { ...current };
+  // Which bots may use Life is a local preference: no key check or network call needed.
+  if (input.blockedBots !== undefined) {
+    if (!Array.isArray(input.blockedBots) || input.blockedBots.some(id => typeof id !== 'string')) throw new Error('Pick bots by ID.');
+    next.blockedBots = [...new Set(input.blockedBots as string[])].slice(0, 500);
+    if (input.endpoint === undefined && !input.linkKey && input.enabled === undefined && input.autoSync === undefined) {
+      setSetting(userId, 'life-link', next);
+      return next;
+    }
+  }
   // Turning auto sync on or off is a local preference: no key check or network call needed.
   if (typeof input.autoSync === 'boolean' && input.endpoint === undefined && !input.linkKey && input.enabled === undefined) {
     next.autoSync = input.autoSync;

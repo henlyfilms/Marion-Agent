@@ -94,7 +94,11 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
         )}
       </div>
       {side === 'left' && showTokens && !b.streaming && !!b.usage?.length && (
-        <div className="bubble__usage" aria-label="Response usage">
+        <div className="bubble__usage" aria-label="Response usage" tabIndex={-1}
+          {...contextMenu('Token counts', () => [
+            { label: 'Copy token counts', onSelect: () => navigator.clipboard.writeText(b.usage!.map(u => `${u.label || u.model || u.provider} · ${usageLabel(u)}`).join('\n')) },
+            { label: 'Hide token counts', onSelect: () => useConfigUI.getState().setShowTokenStats(false) },
+          ])}>
           {b.usage.map(usage => <span key={`${usage.provider}:${usage.model}`} title={usage.model}>
             {usage.label || usage.model || usage.provider} · {usageLabel(usage)}
           </span>)}
