@@ -260,7 +260,7 @@ try {
   await settings.getByText(/host RAM available/).waitFor();
   await settings.getByRole('button', { name: 'Audio' }).click();
   await settings.getByRole('heading', { name: 'Audio' }).waitFor();
-  await settings.getByRole('button', { name: 'Close settings' }).click();
+  await settings.getByRole('button', { name: 'Done', exact: true }).click();
 
   let finishUsage;
   const loadingUsage = new Promise(resolve => { finishUsage = resolve; });
@@ -348,6 +348,9 @@ try {
   await mobile.getByRole('button', { name: 'Show details' }).tap();
   await mobile.getByRole('button', { name: 'Close details' }).tap();
   await mobile.getByRole('button', { name: 'Back to chats' }).tap();
+  // The chat list slides back in (iOS-style); swipe once it has landed.
+  await mobile.locator('.sidebar').evaluate(sidebar => Promise.allSettled(sidebar.getAnimations().map(animation => animation.finished)));
+  await mobile.waitForTimeout(50);
 
   await swipe(mobileResearch, -1);
   await mobile.getByRole('button', { name: 'Delete Research' }).tap();

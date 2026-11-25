@@ -126,8 +126,8 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.desktopWindow = 'true'; });
   await page.keyboard.press('Control+,');
   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-  const back = await settings.getByRole('button', { name: 'Back to Bots' }).boundingBox();
-  assert.ok(back && back.y >= 48, 'Settings navigation should clear the native titlebar');
+  const done = await settings.getByRole('button', { name: 'Done', exact: true }).boundingBox();
+  assert.ok(done && done.y >= 48, 'Settings should clear the native titlebar');
   await settings.getByRole('button', { name: 'Models', exact: true }).click();
   await settings.getByLabel('Default local model', { exact: true }).selectOption('qwen-alternate');
   await settings.getByRole('button', { name: 'Refresh models' }).click();
@@ -167,7 +167,7 @@ try {
   await settings.getByRole('button', { name: 'Remove local key' }).click();
   await settings.getByText('Local project key removed.').waitFor();
   await assert.rejects(readFile(join(dir, 'composio.key')), { code: 'ENOENT' });
-  await settings.getByRole('button', { name: 'Close settings' }).click();
+  await settings.getByRole('button', { name: 'Done', exact: true }).click();
 
   const navigation = page.waitForEvent('framenavigated', frame => frame === page.mainFrame());
   await page.keyboard.press('Control+r');
@@ -226,7 +226,8 @@ try {
   await page.getByText('qwen-alternate · 1,200 in · 15 out tokens').last().waitFor();
   await call.getByRole('button', { name: 'End call' }).click();
   await call.waitFor({ state: 'hidden' });
-  await page.locator('.completion-notice[data-visible="true"]').getByText('Barry finished').waitFor();
+  // The chat you're reading doesn't banner its own reply; the sidebar avatar shows the completion check instead.
+  await page.locator('.completion-mark').first().waitFor({ state: 'attached' });
   await page.getByRole('button', { name: 'Share', exact: true }).click();
   const download = page.waitForEvent('download');
   await page.getByRole('menuitem', { name: 'Download transcript' }).click();

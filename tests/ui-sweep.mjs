@@ -49,7 +49,7 @@ try {
           if (box.width && box.right > innerWidth + 2 && style.position !== 'fixed' && !inStrip && !el.closest('[aria-hidden="true"], .chat-swipe, .bot-list')) {
             out.push(`${el.tagName.toLowerCase()}.${String(el.className).split(' ')[0]} sticks out on the right (${Math.round(box.right)} > ${innerWidth})`);
           }
-          if (['auto', 'scroll'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 2 && !el.matches('.bot-profile__nav, .app-settings__nav, textarea')) {
+          if (['auto', 'scroll'].includes(style.overflowX) && el.scrollWidth > el.clientWidth + 2 && !el.matches('.bot-profile__nav, .settings-home, textarea')) {
             out.push(`${el.tagName.toLowerCase()}.${String(el.className).split(' ')[0]} scrolls sideways`);
           }
         }
@@ -103,9 +103,10 @@ try {
 
     for (const section of ['Notifications', 'Marion Life']) {
       await page.keyboard.press('Meta+Comma');
-      await page.waitForSelector('.app-settings');
-      await page.locator('.cfg-nav__item', { hasText: section }).click();
-      await page.waitForTimeout(300);
+      await page.waitForSelector('.settings-sheet');
+      await page.locator('.sheet-row', { hasText: section }).click();
+      // Pages push in from the right on a phone; measure once they've landed.
+      await page.locator('.settings-page').evaluate(el => Promise.allSettled(el.getAnimations().map(a => a.finished)));
       await check(`settings: ${section}`);
       await page.keyboard.press('Escape');
     }

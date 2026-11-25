@@ -7,21 +7,23 @@ import { useStore } from './store';
 /** UI state for bot settings, app settings, the Tasks view and the theme. Kept apart from store.ts on purpose. */
 
 export type BotSettingsTab = 'general' | 'skills' | 'memories' | 'routines';
-export type AppSection = 'general' | 'models' | 'audio' | 'notifications' | 'shortcuts' | 'computer' | 'permissions' | 'apps' | 'life' | 'account';
+export type AppSection = 'general' | 'models' | 'audio' | 'notifications' | 'shortcuts' | 'computer' | 'permissions' | 'apps' | 'life' | 'account' | 'updates';
+/** 'home' is the grouped list on a phone; on a wider window it shows General next to that list. */
+export type AppSettingsPage = AppSection | 'home';
 
 interface ConfigUI {
   botSettings: { botId: string; tab: BotSettingsTab; showAppearance?: boolean } | null;
-  appSettings: AppSection | null;
-  view: 'chat' | 'tasks';
+  appSettings: AppSettingsPage | null;
+  view: 'chat' | 'tasks' | 'sessions';
   theme: Theme;
   /** Bumped by server events (tasks, memories) so open views refetch. Keys: 'tasks', 'memories:<botId>'. */
   versions: Record<string, number>;
   openBotSettings(botId: string, tab?: BotSettingsTab): void;
   openBotAppearance(botId: string): void;
   closeBotSettings(): void;
-  openAppSettings(section?: AppSection): void;
+  openAppSettings(section?: AppSettingsPage): void;
   closeAppSettings(): void;
-  setView(v: 'chat' | 'tasks'): void;
+  setView(v: 'chat' | 'tasks' | 'sessions'): void;
   setTheme(t: Theme): void;
   bump(key: string): void;
 }
@@ -47,7 +49,7 @@ export const useConfigUI = create<ConfigUI>((set, get) => ({
   openBotSettings: (botId, tab = 'general') => set({ botSettings: { botId, tab } }),
   openBotAppearance: (botId) => set({ botSettings: { botId, tab: 'general', showAppearance: true } }),
   closeBotSettings: () => set({ botSettings: null }),
-  openAppSettings: (section = 'general') => set({ appSettings: section }),
+  openAppSettings: (section = 'home') => set({ appSettings: section }),
   closeAppSettings: () => set({ appSettings: null }),
   setView: (view) => set({ view }),
   setTheme: (theme) => {

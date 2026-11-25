@@ -115,3 +115,7 @@
   .usage-dashboard, .usage-card, .usage-card__content, .usage-window, .usage-skeleton__line, .usage-check.is-loading { animation: none; }
   .usage-bar > span { transition: none; }
 }
+
+/* Real provider marks sit on a neutral tile, the same logos as the model picker. */
+.usage-card__mark { background: var(--color-bg-pane); border: 0.5px solid var(--color-border-tertiary); }
+.usage-dashboard__symbol { color: var(--color-ink); }

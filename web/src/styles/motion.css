@@ -1,0 +1,80 @@
+/*
+ * Motion system. One set of curves for the whole app so everything moves the same way:
+ * - --ease-ios: the iOS sheet / navigation curve (fast start, long soft landing).
+ * - --ease-spring: a gentle spring with a ~2% settle, for things that pop in (menus, banners, buttons).
+ * - --ease-out stays the quick UI curve for hovers and colour changes.
+ * Durations: fast for hover/press, base for panels, sheet for anything that travels across the screen.
+ * See the motion-graphics skill (~/.claude/skills/motion-graphics/SKILL.md) for when to use which.
+ */
+:root {
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring: linear(0, 0.063 2.6%, 0.247 5.9%, 0.512 10.4%, 0.739 15.2%, 0.886 20%, 0.968 25%, 1.009 30.4%, 1.024 36%, 1.022 43%, 1.011 52%, 1.003 64%, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --dur-press: 110ms;
+  --dur-fast: 180ms;
+  --dur-base: 280ms;
+  --dur-sheet: 460ms;
+}
+@supports not (transition-timing-function: linear(0, 1)) {
+  :root { --ease-spring: cubic-bezier(0.2, 0.9, 0.25, 1.02); }
+}
+
+/* While the window is being resized, layout follows the edge instantly instead of easing behind it. */
+:root[data-resizing] :is(.sidebar, .details-slot, .sidebar__search-slot, .chat, .details, .sheet, .sheet-root *) {
+  transition: none !important;
+  animation-duration: 0s !important;
+}
+
+/* The shell never scrolls sideways, even when focus lands in an off-screen panel. */
+.app { overflow: clip; }
+
+/* Buttons press in a touch, like iOS controls. */
+:is(.icon-btn, .btn, .cfg-btn, .account__btn, .sheet-row, .sheet-done, .update-pill, .session-filter button, .bot-row):active:not(:disabled) {
+  transform: scale(0.97);
+}
+:is(.icon-btn, .btn, .cfg-btn, .account__btn, .sheet-row, .sheet-done, .update-pill, .session-filter button) {
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+.bot-row { transition: background-color 150ms var(--ease-out), transform var(--dur-press) var(--ease-out); }
+
+/* Shared entrances. */
+@keyframes rise { from { opacity: 0; transform: translateY(4px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: scale(0.96) translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+.menu { animation: rise 220ms var(--ease-spring); transform-origin: top left; }
+.menu.is-right { transform-origin: top right; }
+.menu.is-above { transform-origin: bottom left; }
+.menu.is-above.is-right { transform-origin: bottom right; }
+.modal { animation: pop 340ms var(--ease-spring); }
+.modal-scrim { animation: fade 240ms var(--ease-out); }
+
+/* Desktop panels: one curve for sidebar and details so they move together. */
+.sidebar { transition: width var(--dur-base) var(--ease-ios); }
+.details-slot { transition: width var(--dur-base) var(--ease-ios), visibility 0s var(--dur-base); }
+.app.has-details .details-slot { transition: width var(--dur-base) var(--ease-ios), visibility 0s 0s; }
+
+/* Phone: opening a chat pushes it in from the right while the list slides back, like UINavigationController. */
+@media (max-width: 700px) {
+  .app.has-mobile-chat .chat {
+    position: relative; z-index: 2;
+    animation: mobile-push-in 420ms var(--ease-ios) both;
+    box-shadow: -12px 0 32px -16px #0000008c;
+  }
+  .app.has-mobile-chat .sidebar { animation: mobile-list-out 420ms var(--ease-ios); }
+  .app.is-popping .sidebar { animation: mobile-list-in 380ms var(--ease-ios) both; }
+  @keyframes mobile-push-in { from { transform: translateX(100%); } to { transform: none; } }
+  @keyframes mobile-list-out {
+    from { visibility: visible; transform: none; opacity: 1; }
+    to { visibility: visible; transform: translateX(-28%); opacity: 0.4; }
+  }
+  @keyframes mobile-list-in { from { transform: translateX(-28%); opacity: 0.4; } to { transform: none; opacity: 1; } }
+  .details-slot .details { transition: transform var(--dur-sheet) var(--ease-ios); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

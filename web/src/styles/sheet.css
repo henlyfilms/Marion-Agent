@@ -1,0 +1,170 @@
+/* ---------- Sheets (Settings): iOS-style grouped lists, "Done" pill, grabber ---------- */
+.sheet-root { position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; padding: 28px; }
+:root[data-desktop-window] .sheet-root { inset-block-start: var(--native-titlebar-height); }
+.sheet-scrim {
+  position: absolute; inset: 0; background: color-mix(in srgb, #000 42%, transparent);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  animation: fade var(--dur-base) var(--ease-out) both;
+}
+.sheet {
+  position: relative; display: flex; flex-direction: column; overflow: hidden;
+  width: min(900px, 100%); height: min(680px, 100%);
+  background: var(--color-bg-chrome); border-radius: 28px;
+  border: 0.5px solid var(--color-border-secondary);
+  box-shadow: 0 30px 80px -24px #0000008c, 0 8px 24px -12px #00000040;
+  animation: sheet-pop 420ms var(--ease-spring) both;
+}
+@keyframes sheet-pop { from { opacity: 0; transform: translateY(16px) scale(0.965); } to { opacity: 1; transform: none; } }
+.sheet-root.is-closing { pointer-events: none; }
+.sheet-root.is-closing .sheet { animation: sheet-pop-out 260ms var(--ease-exit) both; }
+.sheet-root.is-closing .sheet-scrim { animation: fade 260ms var(--ease-exit) reverse both; }
+@keyframes sheet-pop-out { to { opacity: 0; transform: translateY(10px) scale(0.975); } }
+
+.sheet__header {
+  position: relative; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  min-height: 64px; padding: 12px 14px 10px; flex-shrink: 0;
+}
+.sheet__header h1 {
+  grid-column: 2; margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.3px; color: var(--color-ink);
+  animation: sheet-title 260ms var(--ease-out) both;
+}
+@keyframes sheet-title { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.sheet__grabber { display: none; }
+.sheet-back {
+  grid-column: 1; justify-self: start; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%;
+  background: var(--color-bg-tertiary); color: var(--color-ink);
+}
+.sheet-done {
+  grid-column: 3; justify-self: end; height: 40px; padding: 0 18px; border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary); color: var(--color-ink); font-size: 15px; font-weight: 600;
+}
+.sheet-done:hover, .sheet-back:hover { background: var(--color-bg-secondary-hover); }
+
+.settings-sheet__body { position: relative; display: flex; flex: 1 1 0; min-height: 0; }
+.settings-home {
+  display: flex; flex-direction: column; gap: 18px; width: 290px; flex-shrink: 0; overflow-y: auto;
+  padding: 4px 16px 24px; scrollbar-width: none;
+}
+.settings-page {
+  flex: 1 1 0; min-width: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-gutter: stable;
+  background: var(--color-bg-pane); border-top-left-radius: 22px; border-top: 0.5px solid var(--color-border-tertiary); border-left: 0.5px solid var(--color-border-tertiary);
+  animation: settings-page-in 320ms var(--ease-ios) both;
+}
+@keyframes settings-page-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+.settings-page .app-settings__page { padding: 28px 32px 56px; animation: none; }
+.settings-page .cfg-card { background: var(--color-bg-chrome); }
+
+/* Grouped rows: one rounded card per group, hairlines inset past the icon (like iOS). */
+.sheet-group, .sheet-account {
+  display: flex; flex-direction: column; border-radius: 20px; overflow: hidden;
+  background: color-mix(in srgb, var(--color-bg-elevated) 70%, var(--color-bg-tertiary));
+  border: 0.5px solid var(--color-border-tertiary);
+}
+.sheet-row, .sheet-account {
+  position: relative; display: flex; align-items: center; gap: 14px; width: 100%; min-height: 50px; padding: 0 14px;
+  text-align: left; color: var(--color-ink); font-size: 15px;
+}
+.sheet-account { flex-direction: row; min-height: 72px; padding: 12px 14px; }
+.sheet-account .account__initials { width: 46px; height: 46px; font-size: 17px; color: var(--color-ink); background: var(--color-bg-pane); }
+.sheet-account .sheet-row__label { display: flex; flex-direction: column; gap: 1px; }
+.sheet-account strong { font-size: 16px; font-weight: 600; }
+.sheet-account small { font-size: 13px; color: var(--color-text-tertiary); }
+.sheet-row + .sheet-row::before {
+  content: ''; position: absolute; top: 0; left: 50px; right: 0; height: 0.5px; background: var(--color-border-secondary);
+}
+.sheet-row:hover, .sheet-account:hover { background: var(--color-bg-hover); }
+.sheet-row.is-active, .sheet-account.is-active { background: var(--color-bg-active); }
+.sheet-row__icon { display: grid; place-items: center; width: 22px; flex: none; color: var(--color-text-secondary); }
+.sheet-row__label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-row__value { flex: none; font-size: 14px; color: var(--color-text-tertiary); }
+.sheet-row__chev { flex: none; color: var(--color-text-quaternary); opacity: 0.7; }
+.sheet-badge {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: var(--radius-full);
+  background: var(--color-primary); color: var(--color-on-primary); font-size: 12px; font-weight: 650;
+}
+.settings-home > * { flex-shrink: 0; }
+.sheet-version { margin: 2px 0 0; text-align: center; font-size: 12px; color: var(--color-text-quaternary); }
+
+/* ---------- Update pill, card and sidebar prompt ---------- */
+.update-pill {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: none;
+  height: 36px; padding: 0 16px; border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary); color: var(--color-ink); font-size: 14px; font-weight: 600; white-space: nowrap;
+}
+.update-pill:hover:not(:disabled) { background: var(--color-bg-secondary-hover); }
+.update-pill.is-primary { background: var(--color-primary); color: var(--color-on-primary); }
+.update-pill.is-primary:hover:not(:disabled) { background: var(--color-bg-primary-hover); }
+.update-pill:disabled { opacity: 0.7; }
+.update-pill .is-spinning { animation: usage-spin 900ms linear infinite; }
+.update-pill__spinner {
+  width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+  animation: usage-spin 800ms linear infinite;
+}
+.update-card {
+  display: flex; align-items: center; gap: 16px; padding: 18px; border-radius: 22px;
+  background: var(--color-bg-chrome); border: 0.5px solid var(--color-border-tertiary);
+}
+.update-card.is-available { background: linear-gradient(135deg, color-mix(in srgb, var(--palette-accent) 14%, var(--color-bg-chrome)), var(--color-bg-chrome) 70%); }
+.update-card__icon { flex: none; border-radius: 14px; }
+.update-card.is-busy .update-card__icon { animation: update-breathe 1.6s var(--ease-out) infinite; }
+@keyframes update-breathe { 50% { transform: scale(0.94); opacity: 0.8; } }
+.update-card__text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.update-card__text strong { font-size: 16px; }
+.update-card__text span { font-size: 12px; color: var(--color-text-tertiary); }
+.update-card__text .update-card__state { font-size: 13px; color: var(--color-text-secondary); }
+.update-changes { margin: 0; padding: 12px 14px 12px 30px; border-radius: 16px; background: var(--color-bg-chrome); border: 0.5px solid var(--color-border-tertiary); font-size: 13px; line-height: 20px; color: var(--color-text-secondary); }
+
+.update-pill--sidebar {
+  margin: 4px 13px 8px; height: 38px; justify-content: flex-start; padding: 0 12px;
+  background: color-mix(in srgb, var(--palette-accent) 16%, transparent); color: var(--color-ink);
+  font-size: 13px; animation: rise 420ms var(--ease-spring) both;
+}
+.update-pill--sidebar svg { color: var(--palette-accent); }
+.update-pill--sidebar small { margin-left: auto; font-size: 11px; font-weight: 650; color: var(--color-text-tertiary); }
+.update-pill--sidebar:hover:not(:disabled) { background: color-mix(in srgb, var(--palette-accent) 24%, transparent); }
+:root[data-color-scheme='dark'] .update-pill--sidebar svg { color: color-mix(in srgb, var(--palette-accent) 50%, white); }
+.account__btn { position: relative; }
+.account__update-dot {
+  position: absolute; left: 27px; top: 0; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--palette-accent); border: 2px solid var(--color-bg-sidebar);
+}
+
+/* ---------- Phone: a real bottom sheet with a grabber, pages push in from the right ---------- */
+@media (max-width: 700px) {
+  .sheet-root { place-items: end stretch; padding: 0; }
+  .sheet {
+    width: 100%; height: calc(100dvh - env(safe-area-inset-top) - 10px); border-radius: 30px 30px 0 0;
+    border-bottom: 0; animation: sheet-up var(--dur-sheet) var(--ease-ios) both;
+    transition: transform 380ms var(--ease-ios);
+  }
+  .sheet.is-dragging { transition: none; }
+  @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+  .sheet-root.is-closing .sheet { animation: sheet-down 300ms var(--ease-ios) both; }
+  @keyframes sheet-down { from { transform: translateY(var(--drag, 0)); } to { transform: translateY(100%); } }
+  .sheet__header { touch-action: none; padding-top: 18px; min-height: 70px; }
+  .sheet__grabber {
+    display: block; position: absolute; top: 7px; left: 50%; width: 38px; height: 5px; margin-left: -19px;
+    border-radius: 3px; background: var(--color-border-primary);
+  }
+  .sheet-done { height: 44px; padding: 0 18px; font-size: 16px; }
+  .sheet-back { width: 44px; height: 44px; }
+  .settings-sheet__body { overflow: hidden; }
+  .settings-home {
+    width: 100%; padding: 6px 16px calc(env(safe-area-inset-bottom) + 24px); gap: 22px;
+    transition: transform var(--dur-sheet) var(--ease-ios), opacity var(--dur-sheet) var(--ease-ios);
+  }
+  .settings-sheet.is-pushed .settings-home { transform: translateX(-30%); opacity: 0; pointer-events: none; }
+  .settings-page {
+    position: absolute; inset: 0; border-radius: 0; border: 0; background: var(--color-bg-chrome);
+    animation: settings-push 440ms var(--ease-ios) both;
+  }
+  @keyframes settings-push { from { transform: translateX(100%); } to { transform: none; } }
+  .settings-page .app-settings__page { padding: 8px 16px calc(env(safe-area-inset-bottom) + 32px); gap: 22px; }
+  .settings-page .app-settings__head { display: none; }
+  .settings-page .cfg-card { background: color-mix(in srgb, var(--color-bg-elevated) 70%, var(--color-bg-tertiary)); border-radius: 20px; }
+  .sheet-row { min-height: 54px; font-size: 17px; }
+  .sheet-row + .sheet-row::before { left: 52px; }
+  .sheet-account { min-height: 76px; }
+  .update-card { flex-wrap: wrap; }
+  .update-card .update-pill { width: 100%; height: 44px; }
+}

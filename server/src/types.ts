@@ -297,6 +297,10 @@ export interface AppNotification {
   id: string;
   kind: NotificationKind;
   botId?: string;
+  /** Display name of the bot this is about, so banners can lead with who it is. */
+  botName?: string;
+  /** One-line status for the banner, e.g. "Has a question" or "Needs your OK". */
+  status?: string;
   title: string;
   body: string;
   at: number;

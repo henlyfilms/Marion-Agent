@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Activity, ArrowUpRight, CircleAlert, Code2, RefreshCw, Sparkles, Sun, X } from 'lucide-react';
+import { ArrowUpRight, CircleAlert, RefreshCw, X } from 'lucide-react';
+import { MeterIcon } from '../MeterIcon';
+import { ProviderLogo } from '../ProviderLogo';
 import type { SubscriptionUsage, UsageWindow } from '@shared/types';
 import { api } from '../../lib/api';
 import { useStore } from '../../store';
@@ -7,9 +9,9 @@ import { Modal } from './Modal';
 
 type ProviderId = SubscriptionUsage['provider'];
 const providers = [
-  { id: 'codex', name: 'Codex', account: 'ChatGPT', icon: Code2, url: 'https://chatgpt.com/codex/settings/usage' },
-  { id: 'claude', name: 'Claude Code', account: 'Anthropic', icon: Sun, url: 'https://claude.ai/settings/usage' },
-  { id: 'gemini', name: 'Gemini', account: 'Google Antigravity', icon: Sparkles, url: 'https://antigravity.google/docs/cli/commands/usage' },
+  { id: 'codex', name: 'Codex', account: 'ChatGPT', url: 'https://chatgpt.com/codex/settings/usage' },
+  { id: 'claude', name: 'Claude Code', account: 'Anthropic', url: 'https://claude.ai/settings/usage' },
+  { id: 'gemini', name: 'Gemini', account: 'Google Antigravity', url: 'https://antigravity.google/docs/cli/commands/usage' },
 ] as const;
 
 const statusLabels = { ready: 'Available', unavailable: 'Unavailable', 'sign-in': 'Sign in required', missing: 'CLI missing', stale: 'Last reading' };
@@ -111,7 +113,7 @@ export function UsageDashboard() {
     <Modal onClose={close} className="usage-dashboard" label="Subscription usage">
       <header className="usage-dashboard__header">
         <div className="usage-dashboard__title">
-          <div className="usage-dashboard__symbol"><Activity size={21} aria-hidden="true" /></div>
+          <div className="usage-dashboard__symbol"><MeterIcon size={22} /></div>
           <div><h1>Subscription usage</h1><p>Account limits and resets for your AI subscriptions.</p></div>
         </div>
         <button type="button" className="icon-btn usage-dashboard__close" onClick={close} aria-label="Close"><X size={19} /></button>
@@ -129,14 +131,14 @@ export function UsageDashboard() {
         </div>
         {error && <p className="usage-dashboard__error" role="alert"><CircleAlert size={16} /> Couldn’t reach the usage service. Try refreshing.</p>}
         <div className="usage-dashboard__grid">
-          {providers.map(({ id, name, account, icon: Mark, url }, cardIndex) => {
+          {providers.map(({ id, name, account, url }, cardIndex) => {
             const item = data?.find(subscription => subscription.provider === id);
             const busy = pendingIds.has(id);
             const plan = plans?.plans[id] ?? item?.plan;
             return (
               <section className={`usage-card usage-card--${id}${busy ? ' is-busy' : ''}`} key={id} aria-label={name} style={{ animationDelay: `${cardIndex * 50}ms` }}>
                 <header className="usage-card__header">
-                  <span className="usage-card__mark"><Mark size={20} aria-hidden="true" /></span>
+                  <span className="usage-card__mark"><ProviderLogo provider={id} size={22} /></span>
                   <div>
                     <h2>{name}</h2>
                     {plans ? (

@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { ArrowDownToLine, ArrowUpRight, Bell, ChevronLeft, ChevronRight, Cpu, History, Keyboard, LayoutGrid, Link2, Mic, Monitor, RefreshCw, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import { BUILD, updateAvailable, updateBusy, useAppUpdate } from '../../lib/appUpdate';
+import { useCompactLayout } from '../../lib/layout';
+import { MeterIcon } from '../MeterIcon';
 import { createPortal } from 'react-dom';
 import type { Toolkit } from '@shared/types';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
@@ -8,70 +12,204 @@ import { useConfigUI, type AppSection } from '../../configStore';
 import { THEME_OPTIONS, THEME_PRESETS, themeStyle, type Theme } from '../../lib/themes';
 import { useStore } from '../../store';
 import { computerStatusText } from '../DetailsPanel';
-import { Icon } from '../Icon';
 import { ToolkitLogo } from '../ToolkitLogo';
-import { Glyph } from './glyphs';
 import { AudioSettings, ComposioSettings, LocalModelSettings, SubscriptionSettings } from './LocalSettings';
 import { ConfirmButton } from './ui';
 import { LifeLinkSection, NotificationsSection } from '../features/FeatureSettings';
 import { DEFAULT_DICTATION_SHORTCUT, dictationShortcut, setDictationShortcut, shortcutFor, shortcutLabel } from '../../voice/shortcut';
 
-const SECTIONS: { id: AppSection; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'models', label: 'Models' },
-  { id: 'audio', label: 'Audio' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'shortcuts', label: 'Shortcuts' },
-  { id: 'computer', label: 'Computer' },
-  { id: 'permissions', label: 'Permissions' },
-  { id: 'apps', label: 'Connected apps' },
-  { id: 'life', label: 'Marion Life' },
-  { id: 'account', label: 'Account' },
-];
+type Row = { id: AppSection | 'usage' | 'sessions'; label: string; icon: ReactNode; value?: ReactNode };
 
-/** Full-window settings page, opened from the account menu. */
+/** Full-window on a phone, a centered sheet on a Mac: grouped rows like the iOS Settings app. */
 export function AppSettings() {
   const localWorkspace = useStore((s) => s.localWorkspace);
-  const section = useConfigUI((s) => s.appSettings);
-  const close = useConfigUI((s) => s.closeAppSettings);
+  const mobilePaired = useStore((s) => s.mobilePaired);
+  const user = useStore((s) => s.user);
+  const storePage = useConfigUI((s) => s.appSettings);
+  const closeNow = useConfigUI((s) => s.closeAppSettings);
+  // Keep showing the last page while the sheet animates away; reopening mid-exit cancels the exit.
+  const [shownPage, setShownPage] = useState(storePage);
+  const page = storePage ?? shownPage;
+  const closing = !storePage && !!shownPage;
   const open = useConfigUI((s) => s.openAppSettings);
+  const compact = useCompactLayout();
+  const update = useAppUpdate((s) => s.status);
+  const [drag, setDrag] = useState<number | null>(null);
+  const gesture = useRef<{ id: number; y: number; t: number } | null>(null);
+  const sheet = useRef<HTMLDivElement>(null);
+  const isLocalMac = localWorkspace && !mobilePaired;
+
   useEffect(() => {
-    if (!section) return;
+    if (storePage) { setShownPage(storePage); setDrag(null); return; }
+    const timer = window.setTimeout(() => setShownPage(null), 300);
+    return () => clearTimeout(timer);
+  }, [storePage]);
+  const close = closeNow;
+
+  useEffect(() => {
+    if (!storePage) return;
     const k = (e: KeyboardEvent) => { if (!e.defaultPrevented && e.key === 'Escape' && !document.querySelector('.modal-root')) { e.preventDefault(); close(); } };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  }, [close, section]);
-  if (!section) return null;
+  }, [close, storePage]);
+  useEffect(() => { if (storePage && isLocalMac) void useAppUpdate.getState().check(); }, [storePage === null, isLocalMac]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!page) return null;
+  const section: AppSection | null = page === 'home' ? (compact ? null : 'general') : page;
+
+  const groups: Row[][] = [
+    [
+      { id: 'general', label: 'General', icon: <SlidersHorizontal size={19} /> },
+      { id: 'models', label: 'Models', icon: <Cpu size={19} /> },
+      { id: 'audio', label: 'Audio', icon: <Mic size={19} /> },
+      { id: 'notifications', label: 'Notifications', icon: <Bell size={19} /> },
+      { id: 'shortcuts', label: 'Shortcuts', icon: <Keyboard size={19} /> },
+    ],
+    [
+      { id: 'computer', label: 'Computer', icon: <Monitor size={19} /> },
+      { id: 'permissions', label: 'Permissions', icon: <ShieldCheck size={19} /> },
+      { id: 'apps', label: 'Connected apps', icon: <LayoutGrid size={19} /> },
+      { id: 'life', label: 'Marion Life', icon: <Link2 size={19} /> },
+    ],
+    [
+      { id: 'usage', label: 'Subscription usage', icon: <MeterIcon size={19} /> },
+      { id: 'sessions', label: 'Sessions', icon: <History size={19} /> },
+      ...(isLocalMac ? [{ id: 'updates' as const, label: 'Updates', icon: <ArrowDownToLine size={19} />,
+        value: updateBusy(update) ? 'Updating…' : updateAvailable(update) ? <span className="sheet-badge">Update</span> : update?.supported ? 'Up to date' : undefined }] : []),
+    ],
+  ];
+  const choose = (id: Row['id']) => {
+    if (id === 'usage') { closeNow(); useStore.getState().setModal('usage'); return; }
+    if (id === 'sessions') { closeNow(); useConfigUI.getState().setView('sessions'); return; }
+    open(id);
+  };
+  const title = compact && section ? labelFor(section) : 'Settings';
+
+  // Phone: drag the header down to dismiss, like an iOS sheet.
+  const down = (e: React.PointerEvent) => {
+    if (!compact || (e.target as HTMLElement).closest('button')) return;
+    gesture.current = { id: e.pointerId, y: e.clientY, t: performance.now() };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const move = (e: React.PointerEvent) => {
+    if (gesture.current?.id !== e.pointerId) return;
+    const dy = e.clientY - gesture.current.y;
+    setDrag(dy > 0 ? dy : dy / 6);
+  };
+  const up = (e: React.PointerEvent) => {
+    const g = gesture.current;
+    gesture.current = null;
+    if (!g) return;
+    const dy = e.clientY - g.y;
+    const velocity = dy / Math.max(1, performance.now() - g.t);
+    setDrag(null);
+    if (dy > 140 || velocity > 0.6) close();
+  };
+
   return createPortal(
-    <div className="app-settings" role="dialog" aria-modal="true" aria-label="Settings">
-      <aside className="app-settings__nav">
-        <button type="button" className="app-settings__back" onClick={close}><Glyph name="arrow_left" size={14} /> Back to Bots</button>
-        <div className="app-settings__heading">Marion Agent Settings</div>
-        {SECTIONS.map((s) => (
-          <button key={s.id} type="button" className={`cfg-nav__item${section === s.id ? ' is-active' : ''}`} onClick={() => open(s.id)} aria-current={section === s.id || undefined}>
-            {s.label}
-          </button>
-        ))}
-      </aside>
-      <div className="app-settings__main">
-        <button type="button" className="app-settings__close icon-btn" onClick={close} aria-label="Close settings" title="Close (Esc)"><Icon name="close" opacity={0.8} /></button>
-        <div className="app-settings__scroll" key={section}>
-          <div className="app-settings__page">
-            {section === 'general' && <GeneralSection />}
-            {section === 'models' && <><PageHead title="Models" />{localWorkspace && <SubscriptionSettings />}<LocalModelSettings /></>}
-            {section === 'audio' && <><PageHead title="Audio" /><AudioSettings /></>}
-            {section === 'shortcuts' && <><PageHead title="Shortcuts" /><ShortcutsSection /></>}
-            {section === 'computer' && <ComputerSection />}
-            {section === 'permissions' && <PermissionsSection />}
-            {section === 'apps' && <AppsSection />}
-            {section === 'notifications' && <NotificationsSection />}
-            {section === 'life' && <LifeLinkSection />}
-            {section === 'account' && <AccountSection />}
-          </div>
+    <div className={`sheet-root${closing ? ' is-closing' : ''}`} aria-hidden={closing || undefined} ref={node => { if (node) node.inert = closing; }}>
+      <div className="sheet-scrim" onClick={close} style={drag !== null ? { opacity: Math.max(0, 1 - drag / 500) } : undefined} />
+      <div ref={sheet} className={`sheet settings-sheet${drag !== null ? ' is-dragging' : ''}${section && compact ? ' is-pushed' : ''}`}
+        role="dialog" aria-modal="true" aria-label="Settings" style={drag !== null ? { transform: `translateY(${drag}px)` } : undefined}>
+        <header className="sheet__header" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+          <span className="sheet__grabber" aria-hidden />
+          {compact && section && <button type="button" className="sheet-back" onClick={() => open('home')} aria-label="Back to Settings"><ChevronLeft size={22} /></button>}
+          <h1 key={title}>{title}</h1>
+          <button type="button" className="sheet-done" onClick={close}>Done</button>
+        </header>
+        <div className="settings-sheet__body">
+          <nav className="settings-home" aria-label="Settings sections" aria-hidden={compact && !!section}>
+            <button type="button" className={`sheet-account${section === 'account' ? ' is-active' : ''}`} onClick={() => open('account')}>
+              <span className="account__initials">{(user?.name ?? '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase()}</span>
+              <span className="sheet-row__label"><strong>{user?.name ?? 'Account'}</strong><small>{user?.email || (isLocalMac ? 'This Mac' : 'Paired device')}</small></span>
+              <ChevronRight size={18} className="sheet-row__chev" />
+            </button>
+            {groups.map((rows, i) => (
+              <div className="sheet-group" key={i}>
+                {rows.map(row => (
+                  <button key={row.id} type="button" className={`sheet-row${section === row.id ? ' is-active' : ''}`} onClick={() => choose(row.id)}
+                    aria-current={section === row.id || undefined}>
+                    <span className="sheet-row__icon">{row.icon}</span>
+                    <span className="sheet-row__label">{row.label}</span>
+                    {row.value && <span className="sheet-row__value">{row.value}</span>}
+                    {(row.id === 'usage' || row.id === 'sessions') ? <ArrowUpRight size={16} className="sheet-row__chev" /> : <ChevronRight size={18} className="sheet-row__chev" />}
+                  </button>
+                ))}
+              </div>
+            ))}
+            <p className="sheet-version">Marion Agent · build {BUILD}</p>
+          </nav>
+          {section && (
+            <div className="settings-page" key={section}>
+              <div className="app-settings__page">
+                {section === 'general' && <GeneralSection />}
+                {section === 'models' && <><PageHead title="Models" />{localWorkspace && <SubscriptionSettings />}<LocalModelSettings /></>}
+                {section === 'audio' && <><PageHead title="Audio" /><AudioSettings /></>}
+                {section === 'shortcuts' && <><PageHead title="Shortcuts" /><ShortcutsSection /></>}
+                {section === 'computer' && <ComputerSection />}
+                {section === 'permissions' && <PermissionsSection />}
+                {section === 'apps' && <AppsSection />}
+                {section === 'notifications' && <NotificationsSection />}
+                {section === 'life' && <LifeLinkSection />}
+                {section === 'account' && <AccountSection />}
+                {section === 'updates' && <UpdatesSection />}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>,
     document.body,
+  );
+}
+
+const LABELS: Record<AppSection, string> = {
+  general: 'General', models: 'Models', audio: 'Audio', notifications: 'Notifications', shortcuts: 'Shortcuts', computer: 'Computer',
+  permissions: 'Permissions', apps: 'Connected apps', life: 'Marion Life', account: 'Account', updates: 'Updates',
+};
+const labelFor = (section: AppSection) => LABELS[section];
+
+function UpdatesSection() {
+  const { status, checking, error, check, install } = useAppUpdate();
+  const busy = updateBusy(status);
+  const available = updateAvailable(status);
+  return (
+    <>
+      <PageHead title="Updates" />
+      <section className={`update-card${available ? ' is-available' : ''}${busy ? ' is-busy' : ''}`}>
+        <img src="/favicon.svg" width="56" height="56" alt="" className="update-card__icon" />
+        <div className="update-card__text">
+          <strong>Marion Agent</strong>
+          <span>Build {BUILD}{status?.latest && status.latest !== BUILD ? ` · latest ${status.latest}` : ''}</span>
+          <span className="update-card__state" role="status">
+            {busy ? status!.install.message
+              : status?.install.state === 'failed' ? status.install.message
+              : checking && !status ? 'Checking for updates…'
+              : !status ? '' : !status.supported ? status.reason
+              : available ? `${status.behind} new change${status.behind === 1 ? '' : 's'} ready to install`
+              : 'You’re up to date'}
+          </span>
+        </div>
+        {available || busy ? (
+          <button type="button" className="update-pill is-primary" disabled={busy || checking || (!busy && status?.dirty)} onClick={() => void install()}>
+            {busy ? <><span className="update-pill__spinner" aria-hidden />Updating</> : <><ArrowDownToLine size={15} />Update now</>}
+          </button>
+        ) : (
+          <button type="button" className="update-pill" disabled={checking} onClick={() => void check()}>
+            <RefreshCw size={14} className={checking ? 'is-spinning' : undefined} />{checking ? 'Checking' : 'Check now'}
+          </button>
+        )}
+      </section>
+      {error && <p role="alert" className="cfg-error">{error}</p>}
+      {available && status!.changes.length > 0 && (
+        <section className="cfg-section">
+          <div className="cfg-section__label">What’s new</div>
+          <ul className="update-changes">{status!.changes.map((c, i) => <li key={i}>{c}</li>)}</ul>
+        </section>
+      )}
+      {available && status?.dirty && <p className="cfg-field__hint">Another chat has unsaved changes in the source folder. The update waits until that work is committed.</p>}
+      <p className="cfg-field__hint">Updating builds the new version on this Mac, then Marion Agent quits, installs it, and reopens. Your chats and settings stay as they are.</p>
+    </>
   );
 }
 

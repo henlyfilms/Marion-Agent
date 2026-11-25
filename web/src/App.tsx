@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import type { AppNotification, Bot } from '@shared/types';
+import { useEffect, useRef, useState } from 'react';
 import { BotProfile, TemplateGallery } from './components/features/BotProfile';
 import { TeachRecorder } from './components/features/TeachRecorder';
 import { featuresApi, useFeatureUI } from './lib/featuresApi';
@@ -7,13 +6,12 @@ import { registerServiceWorker, setNotificationSound } from './lib/notifications
 import { openBotChat } from './components/botMenuItems';
 import { api, isConnectedMessage } from './lib/api';
 import { startEvents } from './lib/events';
-import { displayName, useStore } from './store';
+import { useStore } from './store';
 import { ChatView } from './components/ChatView';
 import { ComputerViewer } from './components/ComputerViewer';
 import { FieldDictation } from './components/FieldDictation';
 import { DetailsPanel } from './components/DetailsPanel';
 import { ConversationActions } from './components/ConversationActions';
-import { Icon } from './components/Icon';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
 import { UsageDashboard } from './components/modals/UsageDashboard';
@@ -24,50 +22,11 @@ import { CreateGroupModal } from './components/modals/CreateGroupModal';
 import { SearchModal } from './components/modals/SearchModal';
 import { ConfigLayer } from './components/config/ConfigLayer';
 import { TasksView } from './components/config/TasksView';
+import { SessionsView } from './components/sessions/SessionsView';
+import { NotificationBanners } from './components/NotificationBanners';
 import { ContextMenuProvider } from './components/ContextMenu';
 import { useConfigUI } from './configStore';
 import { setDetailsOpen, useCompactLayout, useDetailsOpen } from './lib/layout';
-
-function CompletionNotice() {
-  const [message, setMessage] = useState('');
-  useEffect(() => {
-    let timer: number;
-    const notify = (event: Event) => {
-      const bot = (event as CustomEvent<Bot>).detail;
-      setMessage(`${displayName(bot)} finished`);
-      clearTimeout(timer);
-      timer = window.setTimeout(() => setMessage(''), 3600);
-    };
-    window.addEventListener('marion-agent:completion', notify);
-    return () => { clearTimeout(timer); window.removeEventListener('marion-agent:completion', notify); };
-  }, []);
-  return <div className="completion-notice" data-visible={Boolean(message)} role="status">{message}</div>;
-}
-
-/** Approval / problem / learned notices while the window is in front (background ones become system banners). */
-function NotificationToast() {
-  const [notice, setNotice] = useState<AppNotification | null>(null);
-  useEffect(() => {
-    let timer: number;
-    const show = (event: Event) => {
-      setNotice((event as CustomEvent<AppNotification>).detail);
-      clearTimeout(timer);
-      timer = window.setTimeout(() => setNotice(null), 6000);
-    };
-    window.addEventListener('marion-agent:toast', show);
-    return () => { clearTimeout(timer); window.removeEventListener('marion-agent:toast', show); };
-  }, []);
-  if (!notice) return null;
-  const open = () => { if (notice.botId) openBotChat(notice.botId); setNotice(null); };
-  return (
-    <div className={`notify-toast is-${notice.kind}`} role="status">
-      <button type="button" className="notify-toast__body" onClick={open}>
-        <strong>{notice.title}</strong>{notice.body && <span>{notice.body}</span>}
-      </button>
-      <button type="button" className="notify-toast__close" onClick={() => setNotice(null)} aria-label="Dismiss"><Icon name="close" size={13} /></button>
-    </div>
-  );
-}
 
 function FeatureLayer() {
   const gallery = useFeatureUI(s => s.gallery);
@@ -78,7 +37,7 @@ function FeatureLayer() {
       {gallery && <TemplateGallery />}
       {profile && <BotProfile key={`${profile.kind}:${profile.id}`} target={profile} />}
       {teachBotId && <TeachRecorder botId={teachBotId} />}
-      <NotificationToast />
+      <NotificationBanners />
     </>
   );
 }
@@ -92,6 +51,19 @@ function Shell() {
   const selectedBotId = useStore(s => s.selectedBotId);
   const mobileChatOpen = useStore((s) => s.mobileChatOpen);
   const view = useConfigUI((s) => s.view);
+  // Phone: when you go back to the chat list, slide it back in (the reverse of opening a chat).
+  const showingChat = mobileChatOpen || view !== 'chat';
+  const wasShowingChat = useRef(showingChat);
+  const [popping, setPopping] = useState(false);
+  useEffect(() => {
+    if (wasShowingChat.current && !showingChat && compact) {
+      setPopping(true);
+      const timer = window.setTimeout(() => setPopping(false), 400);
+      wasShowingChat.current = showingChat;
+      return () => clearTimeout(timer);
+    }
+    wasShowingChat.current = showingChat;
+  }, [showingChat, compact]);
 
   useEffect(() => {
     const st = useStore.getState();
@@ -155,9 +127,9 @@ function Shell() {
 
   const hasDetails = Boolean(selectedBotId) && view === 'chat' && (!compact || mobileChatOpen);
   return (
-    <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${mobileChatOpen || view === 'tasks' ? ' has-mobile-chat' : ''}${detailsOpen && hasDetails ? ' has-details' : ''}`}>
+    <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${showingChat ? ' has-mobile-chat' : ''}${popping ? ' is-popping' : ''}${detailsOpen && hasDetails ? ' has-details' : ''}`}>
       <Sidebar />
-      {view === 'tasks' ? <TasksView /> : <ChatView />}
+      {view === 'tasks' ? <TasksView /> : view === 'sessions' ? <SessionsView /> : <ChatView />}
       {hasDetails && <ConversationActions key={selectedBotId} detailsOpen={detailsOpen} />}
       {hasDetails && (
         <div className="details-slot" aria-hidden={!detailsOpen} ref={node => { if (node) node.inert = !detailsOpen; }}>
@@ -173,7 +145,6 @@ function Shell() {
       {viewerOpen && <ComputerViewer />}
       <ConfigLayer />
       <FieldDictation />
-      <CompletionNotice />
       <FeatureLayer />
     </div>
   );

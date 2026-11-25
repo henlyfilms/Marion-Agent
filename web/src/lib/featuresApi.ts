@@ -54,7 +54,19 @@ export interface LifeLink {
   hasKey: boolean;
 }
 
+export type SessionProvider = 'claude' | 'codex' | 'gemini';
+export interface CodingSession { id: string; provider: SessionProvider; title: string; project: string; path: string; updatedAt: number; active: boolean; steps?: number }
+export interface SessionMessage { role: 'user' | 'assistant'; text: string; at?: number }
+export interface UpdateStatus {
+  supported: boolean; current: string | null; latest: string | null; behind: number; changes: string[]; dirty: boolean; reason?: string;
+  install: { state: 'idle' | 'building' | 'installing' | 'failed'; message: string; at: number };
+}
+
 export const featuresApi = {
+  sessions: (provider?: SessionProvider) => req<{ sessions: CodingSession[] }>('GET', `/sessions${provider ? `?provider=${provider}` : ''}`),
+  sessionMessages: (id: string) => req<{ messages: SessionMessage[] }>('GET', `/sessions/${encodeURIComponent(id)}/messages`),
+  updateStatus: (current: string) => req<UpdateStatus>('GET', `/app/update?current=${encodeURIComponent(current)}`),
+  installUpdate: () => req<{ ok: true }>('POST', '/app/update', {}),
   templates: () => req<{ templates: BotProfileData[] }>('GET', '/templates'),
   importTemplate: (id: string) => req<{ bot: Bot }>('POST', `/templates/${encodeURIComponent(id)}/import`, {}),
   profile: (botId: string) => req<{ profile: BotProfileData }>('GET', `/bots/${botId}/profile`),

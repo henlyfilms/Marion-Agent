@@ -16,11 +16,14 @@ import { notificationSettings, notify, pushToDevices, saveNotificationSettings }
 import { vapidPublicKey } from './features/webpush.js';
 import { connectLife, disconnectLife, hasLifeKey, lifeLinkSettings, syncLife } from './features/life-link.js';
 import { reflectBot } from './features/improve.js';
+import { codingSessionMessages, listCodingSessions, type SessionProvider } from './features/sessions.js';
+import { startUpdate, updateStatus } from './features/app-update.js';
+import { remoteAccessFor } from './lib/auth.js';
 
 /** Templates, bot profiles, context and compaction, computer sleep, teaching, notifications and the Marion Life link. */
 export const featuresApi = new Hono<AuthVars>();
 // Scope the auth check to these paths only: a '*' here would also run for sign-in routes mounted after it.
-for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*']) featuresApi.use(path, requireUser);
+for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/app/update']) featuresApi.use(path, requireUser);
 
 const ownBot = (userId: string, botId: string) =>
   db.prepare('SELECT * FROM bots WHERE id=? AND user_id=?').get(botId, userId) as any;
@@ -282,3 +285,30 @@ featuresApi.post('/life-link/sync', async (c) => {
   }
 });
 
+
+// ---------- coding sessions (Claude Code, Codex, Gemini on this Mac) ----------
+
+featuresApi.get('/sessions', (c) => {
+  const provider = c.req.query('provider');
+  const valid = provider === 'claude' || provider === 'codex' || provider === 'gemini' ? provider as SessionProvider : undefined;
+  return c.json({ sessions: listCodingSessions(valid) });
+});
+
+featuresApi.get('/sessions/:id/messages', (c) => c.json({ messages: codingSessionMessages(c.req.param('id')) }));
+
+// ---------- app updates (Mac app only, never from a paired phone or browser) ----------
+
+featuresApi.get('/app/update', async (c) => {
+  if (remoteAccessFor(c)) return c.json({ supported: false, reason: 'Check for updates on the Mac.' });
+  const current = c.req.query('current') ?? null;
+  return c.json(await updateStatus(current && /^[0-9a-f]{7,40}$|^dev$/.test(current) ? current : null));
+});
+
+featuresApi.post('/app/update', async (c) => {
+  if (remoteAccessFor(c)) return c.json({ error: 'Install updates on the Mac.' }, 403);
+  const status = await updateStatus(null);
+  if (!status.supported) return c.json({ error: status.reason ?? 'Updates aren’t available here.' }, 400);
+  if (status.dirty) return c.json({ error: 'The source folder has unsaved changes from another chat. Update once that work is committed.' }, 409);
+  const result = startUpdate();
+  return 'error' in result ? c.json(result, 409) : c.json(result);
+});

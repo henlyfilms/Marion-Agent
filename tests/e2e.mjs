@@ -181,12 +181,11 @@ await step('details tabs: library + tasks', async () => {
 });
 
 await step('app settings: computer screens + permissions', async () => {
-  await page.locator('.account__btn').click();
-  await page.getByText('Settings', { exact: true }).first().click();
-  await page.locator('.cfg-nav__item', { hasText: 'Computer' }).click();
+  await page.locator('.account__btn').first().click();
+  await page.locator('.sheet-row', { hasText: 'Computer' }).click();
   await page.getByText(/screens in use/i).first().waitFor({ timeout: 10000 });
   await shot('10-settings-computer');
-  await page.locator('.cfg-nav__item', { hasText: 'Permissions' }).click();
+  await page.locator('.sheet-row', { hasText: 'Permissions' }).click();
   await page.waitForTimeout(500);
   await page.keyboard.press('Escape');
 });

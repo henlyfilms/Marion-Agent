@@ -56,6 +56,12 @@ const pushSubject = () => env.mobileAccess?.origin ?? env.browserAccess?.origin 
 
 const recent = new Map<string, number>();
 
+/** What the bot is telling you, shown under its name: "Barry · Has a question". */
+const STATUS: Record<NotificationKind, string> = {
+  finished: 'Finished', approval: 'Needs your OK', question: 'Has a question', error: 'Hit a problem',
+  'bot-message': 'Sent a message', routine: 'Routine report', learned: 'Learned something',
+};
+
 /**
  * Tell the user something happened: an in-app/desktop banner through the event stream (the
  * window decides whether to show it, e.g. only while in the background) and a web push to
@@ -67,10 +73,13 @@ export function notify(userId: string, input: { kind: NotificationKind; botId?: 
   const key = `${userId}:${input.botId ?? ''}:${input.kind}`;
   if ((recent.get(key) ?? 0) > now() - 20_000) return;
   recent.set(key, now());
+  const bot = input.botId ? db.prepare('SELECT name FROM bots WHERE id=?').get(input.botId) as { name: string } | undefined : undefined;
   const notification: AppNotification = {
     id: newId('ntf'),
     kind: input.kind,
     botId: input.botId,
+    botName: bot?.name,
+    status: STATUS[input.kind],
     title: input.title.slice(0, 80),
     body: settings.previews ? input.body.replace(/\s+/g, ' ').trim().slice(0, 180) : '',
     at: now(),
@@ -85,7 +94,9 @@ export async function pushToDevices(userId: string, notification: AppNotificatio
   await Promise.all(targets.map(async target => {
     try {
       const status = await sendPush(target, {
-        title: notification.title, body: notification.body, tag: `${notification.botId ?? 'marion'}:${notification.kind}`,
+        // On a phone the banner leads with the bot's name, then what it needs and what it said.
+        title: notification.botName ?? notification.title,
+        body: notification.botName ? [notification.status, notification.body].filter(Boolean).join(' · ') : notification.body, tag: `${notification.botId ?? 'marion'}:${notification.kind}`,
         url: notification.botId ? `/?bot=${encodeURIComponent(notification.botId)}` : '/',
       }, pushSubject());
       if (status === 404 || status === 410) db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(target.endpoint);

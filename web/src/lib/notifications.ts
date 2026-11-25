@@ -25,27 +25,64 @@ export function openFromLink(url: string) {
 let soundOn = true;
 export const setNotificationSound = (on: boolean) => { soundOn = on; };
 
-/** Show a server notification. In the foreground, approvals and errors become a toast; in the background, a system banner. */
-export function showNotification(notification: AppNotification) {
+/** A rendered bot avatar from the sidebar as a PNG data URL, for system banners. Cached per bot look. */
+const avatarCache = new Map<string, string>();
+async function botIcon(botId: string): Promise<string | undefined> {
+  const svg = document.querySelector<SVGSVGElement>(`[data-chat-id="${CSS.escape(botId)}"] .bot-row__avatar svg`);
+  if (!svg) return undefined;
+  const markup = new XMLSerializer().serializeToString(svg);
+  const cached = avatarCache.get(markup);
+  if (cached) return cached;
+  try {
+    const image = new Image();
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 128;
+    canvas.getContext('2d')!.drawImage(image, 8, 8, 112, 112);
+    const url = canvas.toDataURL('image/png');
+    avatarCache.set(markup, url);
+    return url;
+  } catch { return undefined; }
+}
+
+/** Ignore the same bot + kind arriving twice within a few seconds (the completion event and the server notice). */
+const lastShown = new Map<string, number>();
+function isRepeat(notification: AppNotification) {
+  const key = `${notification.botId ?? ''}:${notification.kind}`;
+  const repeat = Date.now() - (lastShown.get(key) ?? 0) < 5000;
+  lastShown.set(key, Date.now());
+  return repeat;
+}
+
+/**
+ * Show a notification. In the foreground it becomes an in-app banner with the bot's icon and name
+ * (skipped for a plain reply in the chat you're already reading); in the background, a system banner.
+ */
+export function showNotification(notification: AppNotification, viewingBotId?: string | null) {
+  if (isRepeat(notification)) return;
   const background = document.visibilityState !== 'visible' || !document.hasFocus();
   if (!background) {
-    if (notification.kind === 'approval' || notification.kind === 'error' || notification.kind === 'learned') {
-      window.dispatchEvent(new CustomEvent('marion-agent:toast', { detail: notification }));
-    }
+    const quiet = notification.botId && notification.botId === viewingBotId && ['finished', 'routine', 'bot-message'].includes(notification.kind);
+    if (!quiet) window.dispatchEvent(new CustomEvent('marion-agent:toast', { detail: notification }));
     return;
   }
   if (!canNotify() || Notification.permission !== 'granted') return;
-  try {
-    const banner = new Notification(notification.title, {
-      body: notification.body, tag: `${notification.botId ?? 'marion'}:${notification.kind}`, icon: '/app-192.png', silent: true,
-    });
-    banner.onclick = () => {
-      window.focus();
-      if (notification.botId) window.dispatchEvent(new CustomEvent('marion-agent:open-bot', { detail: notification.botId }));
-      banner.close();
-    };
-    if (soundOn) playDictationSound(false);
-  } catch { /* Some browsers only allow notifications from a service worker. */ }
+  const title = notification.botName ?? notification.title;
+  const body = notification.botName ? [notification.status, notification.body].filter(Boolean).join(' · ') : notification.body;
+  void (notification.botId ? botIcon(notification.botId) : Promise.resolve(undefined)).then(icon => {
+    try {
+      const banner = new Notification(title, {
+        body, tag: `${notification.botId ?? 'marion'}:${notification.kind}`, icon: icon ?? '/app-192.png', silent: true,
+      });
+      banner.onclick = () => {
+        window.focus();
+        if (notification.botId) window.dispatchEvent(new CustomEvent('marion-agent:open-bot', { detail: notification.botId }));
+        banner.close();
+      };
+      if (soundOn) playDictationSound(false);
+    } catch { /* Some browsers only allow notifications from a service worker. */ }
+  });
 }
 
 export async function registerServiceWorker() {

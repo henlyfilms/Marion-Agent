@@ -1,0 +1,44 @@
+/* ---------- in-app notification banners (iOS style: frosted card, bot icon, name, time, message) ---------- */
+.notify-stack {
+  position: fixed; z-index: 120; top: calc(var(--native-titlebar-height, 0px) + env(safe-area-inset-top) + 12px); left: 50%;
+  display: grid; width: min(440px, calc(100vw - 24px)); transform: translateX(-50%); pointer-events: none;
+}
+.notify-banner {
+  grid-area: 1 / 1; pointer-events: auto; touch-action: none; user-select: none;
+  border-radius: 26px; overflow: hidden;
+  background: color-mix(in srgb, var(--color-bg-elevated) 72%, transparent);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7); backdrop-filter: blur(28px) saturate(1.7);
+  border: 0.5px solid color-mix(in srgb, var(--palette-foreground) 14%, transparent);
+  box-shadow: 0 18px 40px -14px #00000059, 0 2px 8px -2px #00000026;
+  /* Older banners tuck behind the newest one, like a notification stack. */
+  translate: 0 calc(var(--stack) * 9px);
+  scale: calc(1 - var(--stack) * 0.045);
+  z-index: calc(10 - var(--stack));
+  filter: brightness(calc(1 - var(--stack) * 0.08));
+  animation: notify-in 560ms var(--ease-spring) both;
+  transition: translate 420ms var(--ease-spring), scale 420ms var(--ease-spring), filter 300ms var(--ease-out), transform 360ms var(--ease-spring), opacity 260ms var(--ease-out);
+}
+.notify-banner.is-dragging { transition: none; }
+.notify-banner.is-leaving { animation: notify-out 300ms var(--ease-exit) both; }
+@keyframes notify-in {
+  from { opacity: 0; transform: translateY(-120%) scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes notify-out { to { opacity: 0; transform: translateY(-90%) scale(0.94); } }
+.notify-banner__body { display: flex; align-items: center; gap: 13px; width: 100%; padding: 13px 18px 13px 13px; text-align: left; }
+.notify-banner__icon { display: grid; place-items: center; flex: none; width: 48px; height: 48px; }
+.notify-banner__text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
+.notify-banner__top { display: flex; align-items: baseline; gap: 10px; }
+.notify-banner__top strong { flex: 1; min-width: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.2px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notify-banner__top time { flex: none; font-size: 13px; color: var(--color-text-tertiary); }
+.notify-banner__status { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); }
+.notify-banner__message {
+  font-size: 14px; line-height: 19px; color: var(--color-text-primary);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+}
+.notify-banner.is-approval .notify-banner__status, .notify-banner.is-question .notify-banner__status { color: var(--color-warn-text); }
+.notify-banner.is-error .notify-banner__status { color: var(--color-danger-text); }
+.notify-banner:not(:first-child) .notify-banner__text { opacity: 0; }
+@media (max-width: 700px) {
+  .notify-stack { top: calc(env(safe-area-inset-top) + 8px); width: calc(100vw - 16px); }
+}

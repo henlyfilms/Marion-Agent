@@ -6,6 +6,14 @@ import { configApi } from './lib/configApi';
 
 import { showNotification } from './lib/notifications';
 
+/** The chat on screen right now, if any (not the Tasks or Sessions view, not the phone's chat list). */
+function viewingBotId() {
+  const s = useStore.getState();
+  if (document.querySelector('.tasks-view, .sessions-view')) return null;
+  if (window.matchMedia('(max-width: 700px)').matches && !s.mobileChatOpen) return null;
+  return s.selectedBotId;
+}
+
 export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'group' | 'team' | null;
 
 interface Transcript { generation: number; bySeq: Record<number, Row>; loaded: boolean }
@@ -207,7 +215,10 @@ export const useStore = create<State>((set, get) => ({
         set((st) => ({ bots: previous ? st.bots.map((b) => (b.id === ev.bot.id ? ev.bot : b)) : [...st.bots, ev.bot] }));
         if (previous && ev.bot.completedAt && ev.bot.completedAt > (previous.completedAt ?? 0)
           && Date.now() - ev.bot.completedAt < 6000) {
-          window.dispatchEvent(new CustomEvent('marion-agent:completion', { detail: ev.bot }));
+          showNotification({
+            id: `done:${ev.bot.id}:${ev.bot.completedAt}`, kind: 'finished', botId: ev.bot.id, botName: ev.bot.name,
+            status: 'Finished', title: `${ev.bot.name} finished`, body: ev.bot.lastPreview ?? '', at: ev.bot.completedAt,
+          }, viewingBotId());
         }
         return;
       }
@@ -226,7 +237,7 @@ export const useStore = create<State>((set, get) => ({
         set((st) => ({ connectionsVersion: st.connectionsVersion + 1 }));
         return;
       case 'notify':
-        showNotification(ev.notification);
+        showNotification(ev.notification, viewingBotId());
         return;
       case 'model-settings':
         set((st) => ({ modelSettingsVersion: st.modelSettingsVersion + 1 }));

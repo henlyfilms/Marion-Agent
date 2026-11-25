@@ -1,4 +1,4 @@
-import { Activity } from 'lucide-react';
+import { ArrowDownToLine } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import type { Bot, ChatSort } from '@shared/types';
 import { orderChats } from '@shared/chat-order';
@@ -10,6 +10,9 @@ import { clock } from '../lib/time';
 import { useCompactLayout } from '../lib/layout';
 import { displayName, useStore } from '../store';
 import { TasksIsland } from './config/TasksView';
+import { SessionsIsland } from './sessions/SessionsView';
+import { MeterIcon } from './MeterIcon';
+import { updateAvailable, updateBusy, useAppUpdate } from '../lib/appUpdate';
 import { Icon } from './Icon';
 import { Menu, type MenuItem } from './Menu';
 import { useContextMenu } from './ContextMenu';
@@ -185,12 +188,32 @@ export function Sidebar() {
   const contextMenu = useContextMenu();
   const report = (cause: unknown) => setError((cause as Error).message);
   const logout = async () => { await api.logout(); location.reload(); };
-  const accountItems = [
-    { label: 'Settings', hint: '⌘,', onSelect: () => useConfigUI.getState().openAppSettings() },
+  const update = useAppUpdate(st => st.status);
+  const isLocalMac = localWorkspace && !mobilePaired;
+  const openSettings = () => useConfigUI.getState().openAppSettings();
+  const checkUpdates = () => {
+    const ui = useAppUpdate.getState();
+    if (updateAvailable(ui.status)) useConfigUI.getState().openAppSettings('updates');
+    else void ui.check().then(() => useConfigUI.getState().openAppSettings('updates'));
+  };
+  // Click opens Settings; right-click shows the shortcuts that used to live in this menu.
+  const accountItems: MenuItem[] = [
+    { label: 'Settings', hint: '⌘,', onSelect: openSettings },
     { label: 'Subscription usage', onSelect: () => setModal('usage') },
     { label: 'Connect apps', onSelect: () => setModal('apps') },
+    { label: 'Sessions', onSelect: () => useConfigUI.getState().setView('sessions') },
+    ...(isLocalMac ? [{
+      label: updateBusy(update) ? 'Updating…' : updateAvailable(update) ? 'Install update…' : 'Check for updates…',
+      separator: true, disabled: updateBusy(update), onSelect: checkUpdates,
+    }] : []),
     ...(!localWorkspace || mobilePaired ? [{ label: 'Log out', danger: true, separator: true, onSelect: () => logout().catch(report) }] : []),
   ];
+  useEffect(() => {
+    if (!isLocalMac) return;
+    const first = window.setTimeout(() => void useAppUpdate.getState().check(), 4000);
+    const timer = window.setInterval(() => void useAppUpdate.getState().check(), 30 * 60_000);
+    return () => { clearTimeout(first); clearInterval(timer); };
+  }, [isLocalMac]);
 
   const saveOrder = async (choice: { sort: ChatSort } | ChatMove) => {
     if (orderPending.current) return;
@@ -278,11 +301,12 @@ export function Sidebar() {
 
   const account = (variant: 'mobile' | 'desktop') => (
     <div className={`account account--${variant}`}>
-      <button type="button" className="account__btn" onClick={() => setAccountMenu(accountMenu === variant ? null : variant)}
-        aria-label="Account" aria-expanded={accountMenu === variant} title={user?.email || user?.name}
-        {...contextMenu('Account', () => { setAccountMenu(null); return accountItems; })}>
+      <button type="button" className="account__btn" onClick={() => { setAccountMenu(null); openSettings(); }}
+        aria-label="Settings" title={`Settings · right-click for more`}
+        {...contextMenu(user?.name ?? 'Account', () => { setAccountMenu(null); return accountItems; })}>
         <span className="account__initials">{initials(user?.name ?? user?.email ?? '')}</span>
         {variant === 'desktop' && <span className="account__name">{user?.name ?? user?.email}</span>}
+        {updateAvailable(update) && <span className="account__update-dot" aria-label="Update available" />}
       </button>
       {accountMenu === variant && (
         <Menu placement={variant === 'desktop' ? 'above' : 'below'} onClose={() => setAccountMenu(null)} items={accountItems}>
@@ -341,10 +365,17 @@ export function Sidebar() {
         </div>
       </div>
       <div className="sidebar__bottom">
-        <div className="sidebar__tools"><TasksIsland /></div>
+        <div className="sidebar__tools"><TasksIsland /><SessionsIsland /></div>
+        {isLocalMac && (updateAvailable(update) || updateBusy(update)) && !collapsed && (
+          <button type="button" className={`update-pill update-pill--sidebar${updateBusy(update) ? ' is-busy' : ''}`} onClick={() => useConfigUI.getState().openAppSettings('updates')}>
+            {updateBusy(update) ? <span className="update-pill__spinner" aria-hidden /> : <ArrowDownToLine size={15} />}
+            <span>{updateBusy(update) ? 'Updating…' : 'Update available'}</span>
+            {!updateBusy(update) && <small>{update!.behind} new</small>}
+          </button>
+        )}
         <div className="sidebar__footer">
           {account('desktop')}
-          <button type="button" className="icon-btn icon-btn--bordered" onClick={() => setModal('usage')} aria-label="Subscription usage" title="Subscription usage"><Activity size={17} /></button>
+          <button type="button" className="icon-btn icon-btn--bordered" onClick={() => setModal('usage')} aria-label="Subscription usage" title="Subscription usage"><MeterIcon size={18} /></button>
           <button type="button" className="icon-btn icon-btn--bordered" onClick={() => setModal('apps')} aria-label="Connect apps" title="Connect apps"><Icon name="apps" /></button>
         </div>
       </div>
