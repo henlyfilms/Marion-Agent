@@ -94,16 +94,17 @@
 .usage-bar { position: relative; height: 5px; margin: 6px 0 5px; overflow: hidden; border-radius: 10px; background: var(--color-border-tertiary); color: var(--usage-accent); }
 .usage-window.is-high .usage-bar { color: #d98a59; }
 .usage-bar > span { position: absolute; inset: 0; border-radius: inherit; background: currentColor; transform-origin: left center; transition: transform 700ms cubic-bezier(.22, 1, .36, 1); }
-.usage-skeleton { display: flex; flex-direction: column; gap: 15px; padding-top: 2px; }
-.usage-skeleton__window { display: flex; flex-direction: column; gap: 7px; }
 .usage-skeleton__line {
-  height: 10px; border-radius: 6px;
+  border-radius: 6px;
   background: linear-gradient(90deg, var(--color-border-tertiary) 25%, var(--color-bg-hover) 50%, var(--color-border-tertiary) 75%);
   background-size: 200% 100%; animation: usage-shimmer 1.4s ease-in-out infinite;
 }
-.usage-skeleton__line--label { width: 62%; height: 12px; }
-.usage-skeleton__line--bar { width: 100%; height: 5px; }
-.usage-skeleton__line--reset { width: 44%; height: 9px; }
+/* Placeholders use the real row's text boxes, so each one is exactly as tall as a reading. */
+.usage-window.is-skeleton { color: transparent; }
+.usage-window.is-skeleton span.usage-skeleton__line { display: inline-block; line-height: 1; }
+.usage-window.is-skeleton small { color: transparent; }
+.usage-window.is-skeleton .usage-window__label > span { width: 58%; }
+.usage-window.is-skeleton .usage-window__reset span { width: 46%; }
 .usage-check.is-loading { animation: usage-pulse 1.2s ease-in-out infinite; }
 .usage-dashboard__updating { opacity: 0; transition: opacity 200ms ease; }
 .usage-dashboard__updating.is-on { opacity: 1; }

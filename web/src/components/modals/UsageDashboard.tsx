@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, CircleAlert, RefreshCw, X } from 'lucide-react';
 import { MeterIcon } from '../MeterIcon';
 import { ProviderLogo } from '../ProviderLogo';
 import type { SubscriptionUsage, UsageWindow } from '@shared/types';
 import { api } from '../../lib/api';
+import { prefGet, prefSet } from '../../lib/prefs';
 import { useStore } from '../../store';
 import { Modal } from './Modal';
 
@@ -48,14 +49,20 @@ function Window({ window, index }: { window: UsageWindow; index: number }) {
   );
 }
 
-function Skeleton() {
+/** How many limits each card showed last time, so placeholders take the same room (4 until known). */
+function rememberedRows(): Partial<Record<ProviderId, number>> {
+  try { return JSON.parse(prefGet('usageRows') ?? '{}'); } catch { return {}; }
+}
+
+/** Placeholder limits built from the real row layout, so swapping in numbers doesn't change the height. */
+function Skeleton({ rows }: { rows: number }) {
   return (
-    <div className="usage-skeleton" aria-hidden="true">
-      {[0, 1].map(key => (
-        <div className="usage-skeleton__window" key={key}>
-          <div className="usage-skeleton__line usage-skeleton__line--label" />
-          <div className="usage-skeleton__line usage-skeleton__line--bar" />
-          <div className="usage-skeleton__line usage-skeleton__line--reset" />
+    <div className="usage-card__content" aria-hidden="true">
+      {Array.from({ length: rows }, (_, key) => (
+        <div className="usage-window is-skeleton" key={key}>
+          <div className="usage-window__label"><span className="usage-skeleton__line">&nbsp;</span><strong><span className="usage-skeleton__line">00%</span> <small>used</small></strong></div>
+          <div className="usage-bar usage-skeleton__line" />
+          <div className="usage-window__reset"><span className="usage-skeleton__line">&nbsp;</span></div>
         </div>
       ))}
     </div>
@@ -70,6 +77,22 @@ export function UsageDashboard() {
   const [pendingIds, setPendingIds] = useState<Set<ProviderId>>(() => new Set(providers.map(p => p.id)));
   const [error, setError] = useState(false);
   const loading = pendingIds.size > 0;
+  const [rows] = useState(rememberedRows);
+  // The grid keeps the height it opened with, so the dialog never jumps or shrinks as readings land.
+  const grid = useRef<HTMLDivElement>(null);
+  const [floor, setFloor] = useState<number>();
+  useLayoutEffect(() => { if (grid.current) setFloor(grid.current.offsetHeight); }, []);
+  useEffect(() => {
+    const release = () => setFloor(undefined);
+    addEventListener('resize', release, { passive: true });
+    return () => removeEventListener('resize', release);
+  }, []);
+  useEffect(() => {
+    if (!data?.length) return;
+    const next = { ...rememberedRows() };
+    for (const item of data) if (item.windows.length) next[item.provider] = item.windows.length;
+    prefSet('usageRows', JSON.stringify(next));
+  }, [data]);
 
   useEffect(() => {
     api.subscriptionPlans().then(value => { rememberedPlans = value; setPlans(value); }).catch(() => {});
@@ -130,7 +153,7 @@ export function UsageDashboard() {
           </button>
         </div>
         {error && <p className="usage-dashboard__error" role="alert"><CircleAlert size={16} /> Couldn’t reach the usage service. Try refreshing.</p>}
-        <div className="usage-dashboard__grid">
+        <div className="usage-dashboard__grid" ref={grid} style={floor ? { minHeight: floor } : undefined}>
           {providers.map(({ id, name, account, url }, cardIndex) => {
             const item = data?.find(subscription => subscription.provider === id);
             const busy = pendingIds.has(id);
@@ -153,7 +176,7 @@ export function UsageDashboard() {
                     <div className="usage-card__content" key={item.checkedAt ?? 'saved'}>
                       {item.windows.map((window, index) => <Window key={window.id} window={window} index={index} />)}
                     </div>
-                  ) : !item && busy ? <Skeleton /> : (
+                  ) : !item && busy ? <Skeleton rows={rows[id] ?? 4} /> : (
                     <div className="usage-card__empty usage-card__content">
                       <span>{item ? statusLabels[item.status] : 'Unavailable'}</span>
                       {item?.detail && <p>{item.detail}</p>}
