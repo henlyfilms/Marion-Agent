@@ -274,8 +274,13 @@ function DeviceAccessSection({ kind }: { kind: 'mobile' | 'browser' }) {
   const [origin, setOrigin] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [session, setSession] = useState<{ hours: number; choices: number[] } | null>(null);
+  const [savingSession, setSavingSession] = useState(false);
   useEffect(() => {
-    configApi.deviceAccess(kind).then(result => setOrigin(result.origin)).catch(() => {});
+    configApi.deviceAccess(kind).then(result => {
+      setOrigin(result.origin);
+      if (result.sessionHours && result.sessionChoices) setSession({ hours: result.sessionHours, choices: result.sessionChoices });
+    }).catch(() => {});
   }, [kind]);
   if (!origin) return null;
   const showPairing = async () => {
@@ -284,6 +289,16 @@ function DeviceAccessSection({ kind }: { kind: 'mobile' | 'browser' }) {
     try { setPassphrase((await configApi.deviceAccess(kind, true)).passphrase); }
     catch (cause) { setError((cause as Error).message); }
   };
+  const saveSession = async (hours: number) => {
+    if (!session) return;
+    const previous = session.hours;
+    setSession({ ...session, hours });
+    setSavingSession(true);
+    setError('');
+    try { await configApi.saveBrowserSession(hours); }
+    catch (cause) { setSession({ ...session, hours: previous }); setError((cause as Error).message); }
+    finally { setSavingSession(false); }
+  };
   return (
     <section className="cfg-section">
       <div className="cfg-section__label">{device} access</div>
@@ -291,9 +306,22 @@ function DeviceAccessSection({ kind }: { kind: 'mobile' | 'browser' }) {
       <input className="text-input" value={origin} readOnly aria-label={`${device} Marion Agent address`} onFocus={event => event.target.select()} />
       <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => void showPairing()}>{passphrase ? 'Hide passphrase' : 'Show pairing passphrase'}</button>
       {passphrase && <input className="text-input" value={passphrase} readOnly aria-label={`${device} pairing passphrase`} onFocus={event => event.target.select()} />}
+      {session && <>
+        <label htmlFor="browser-session-length" className="cfg-field__hint">Stay signed in for</label>
+        <select id="browser-session-length" className="text-input" value={session.hours} disabled={savingSession} onChange={event => void saveSession(Number(event.target.value))}>
+          {session.choices.map(hours => <option key={hours} value={hours}>{sessionLabel(hours)}</option>)}
+        </select>
+        <p className="cfg-field__hint">Shorter times apply right away. Longer times apply the next time a browser pairs. Sign out on shared computers.</p>
+      </>}
       {error && <p role="alert" className="cfg-error">{error}</p>}
     </section>
   );
+}
+
+function sessionLabel(hours: number) {
+  if (hours % (7 * 24) === 0) return hours === 7 * 24 ? '1 week' : `${hours / (7 * 24)} weeks`;
+  if (hours >= 24 && hours % 24 === 0) return hours === 24 ? '1 day' : `${hours / 24} days`;
+  return `${hours} hours`;
 }
 
 function ShortcutsSection() {

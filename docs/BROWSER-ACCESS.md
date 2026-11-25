@@ -25,7 +25,7 @@ Use a named Cloudflare Tunnel with Cloudflare Access if the intended browser and
 
 4. Quit and reopen Marion Agent. In **Settings → General → Browser access**, reveal the separate browser passphrase. On the second laptop, visit the HTTPS address, sign in to Cloudflare Access, and enter the Marion passphrase. Verify that a signed-out browser first lands at Cloudflare Access. Marion then requires pairing before it serves the workspace API.
 
-Marion browser sessions last eight hours. Sign out from the account menu when done. To revoke browser sessions, replace the passphrase in `browser-pairing.json` and restart Marion. To disable the route, remove the published hostname from the tunnel and remove `browser-pairing.json`. Neither action affects the iPhone link.
+Marion browser sessions last one week by default. Change this under **Settings → General → Browser access → Stay signed in for** (8 hours, 1 day, 1 week, or 30 days). A shorter time also ends older sessions right away; a longer time applies the next time a browser pairs. Cloudflare Access has its own session duration on the Access application. Sign out from the account menu on shared computers. To revoke browser sessions, replace the passphrase in `browser-pairing.json` and restart Marion. To disable the route, remove the published hostname from the tunnel and remove `browser-pairing.json`. Neither action affects the iPhone link.
 
 ## Use a different authenticated HTTPS proxy
 

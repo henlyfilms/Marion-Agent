@@ -10,7 +10,20 @@ import type { User } from '../types.js';
 const COOKIE = 'marion_agent_session';
 const BROWSER_COOKIE = '__Host-marion_agent_browser';
 const TTL_MS = 30 * 24 * 3600 * 1000;
-const BROWSER_TTL_MS = 8 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+
+/** How long a paired browser stays signed in, chosen under Settings → General → Browser access. */
+export const browserSessionChoices = [8, 24, 7 * 24, 30 * 24] as const;
+const DEFAULT_BROWSER_SESSION_HOURS = 7 * 24;
+
+export function browserSessionHours(): number {
+  const row = db.prepare('SELECT session_hours FROM browser_access_settings WHERE slot=1').get() as { session_hours: number } | undefined;
+  return browserSessionChoices.find((hours) => hours === row?.session_hours) ?? DEFAULT_BROWSER_SESSION_HOURS;
+}
+
+export function saveBrowserSessionHours(hours: number) {
+  db.prepare('INSERT INTO browser_access_settings(slot,session_hours) VALUES (1,?) ON CONFLICT(slot) DO UPDATE SET session_hours=excluded.session_hours').run(hours);
+}
 
 export type AuthVars = { Variables: { user: User } };
 
@@ -29,7 +42,7 @@ export function remoteAccessFor(c: Context) {
 
 export function createSession(c: Context, userId: string, access?: RemoteWorkspaceAccess) {
   const t = token();
-  const ttl = access?.kind === 'browser' ? BROWSER_TTL_MS : TTL_MS;
+  const ttl = access?.kind === 'browser' ? browserSessionHours() * HOUR_MS : TTL_MS;
   const issued = now();
   db.prepare('INSERT INTO auth_sessions(token,user_id,created_at,expires_at) VALUES (?,?,?,?)').run(sessionKey(t, access), userId, issued, issued + ttl);
   setCookie(c, cookieName(access), t, { httpOnly: true, secure: !!access || env.secureCookies, sameSite: 'Lax', path: '/', maxAge: ttl / 1000 });
@@ -49,11 +62,12 @@ export function remoteWorkspaceUser(cookie: string | undefined, access: RemoteWo
   return workspace?.user_id === user.id ? user : null;
 }
 
-export function userFromToken(t: string | undefined): User | null {
+/** `issuedAfter` also rejects sessions older than a since-shortened browser session length. */
+export function userFromToken(t: string | undefined, issuedAfter = 0): User | null {
   if (!t) return null;
   const r = db
-    .prepare('SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at>?')
-    .get(t, now()) as any;
+    .prepare('SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at>? AND s.created_at>?')
+    .get(t, now(), issuedAfter) as any;
   return r ? { id: r.id, email: r.email, name: r.name, avatarUrl: r.avatar_url } : null;
 }
 
@@ -62,7 +76,8 @@ export function userFromCookieHeader(cookieHeader: string | undefined, access?: 
   const parts = cookieHeader?.split(/;\s*/) ?? [];
   const entry = parts.find((part) => part.startsWith(`${name}=`));
   if (!entry) return null;
-  try { return userFromToken(sessionKey(decodeURIComponent(entry.slice(name.length + 1)), access)); } catch { return null; }
+  const issuedAfter = access?.kind === 'browser' ? now() - browserSessionHours() * HOUR_MS : 0;
+  try { return userFromToken(sessionKey(decodeURIComponent(entry.slice(name.length + 1)), access), issuedAfter); } catch { return null; }
 }
 
 export const requireUser: MiddlewareHandler<AuthVars> = async (c, next) => {
