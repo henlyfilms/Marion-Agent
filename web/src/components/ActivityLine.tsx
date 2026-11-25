@@ -19,6 +19,7 @@ export function ActivityLine({ bot, live, rows }: { bot: Bot; live: LiveState; r
     <div className={`activity-line${waiting ? ' is-waiting' : ''}`} role="status" aria-live="polite">
       <span className="activity-line__mark"><BotAvatarFor bot={bot} size={20} /></span>
       <span className="activity-line__text shimmer" key={phrase}>{phrase}</span>
+      {live.activity?.kind === 'loading_model' && <span className="loading-bubble" aria-hidden><i /><i /><i /></span>}
       {!waiting && now - since >= 1000 && <span className="activity-line__time">· {elapsed(now - since)}</span>}
       {waiting && live.awaiting?.reason && <span className="activity-line__time">· {live.awaiting.reason}</span>}
     </div>

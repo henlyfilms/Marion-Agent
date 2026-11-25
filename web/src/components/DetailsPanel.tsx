@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Bot, ComputerState, Routine } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { api, openPopup } from '../lib/api';
@@ -14,6 +14,7 @@ import { Glyph } from './config/glyphs';
 import { LibraryTab } from './config/LibraryTab';
 import { BotTasks } from './config/TasksView';
 import { useContextMenu } from './ContextMenu';
+import { SegmentPill } from './SegmentPill';
 import { botMenuItems } from './botMenuItems';
 import { setDetailsOpen } from '../lib/layout';
 import { featuresApi, useFeatureUI } from '../lib/featuresApi';
@@ -158,6 +159,12 @@ export function DetailsPanel({ open }: { open: boolean }) {
   const bot = useSelectedBot();
   const routines = useStore((s) => (bot ? s.routines[bot.id] : undefined));
   const [tab, setTab] = useState<'activity' | 'tasks' | 'library'>('activity');
+  // Which way the content slides when the tab changes (never on first paint or bot switch).
+  const slide = useRef<{ tab: string; dir: '' | 'left' | 'right' }>({ tab, dir: '' });
+  if (slide.current.tab !== tab) {
+    const order = ['activity', 'tasks', 'library'];
+    slide.current = { tab, dir: order.indexOf(tab) > order.indexOf(slide.current.tab) ? 'left' : 'right' };
+  }
   const [hideSuggested, setHideSuggested] = useState(() => prefGet('hideSuggested') === '1');
   const contextMenu = useContextMenu();
   if (!bot) return null;
@@ -191,13 +198,15 @@ export function DetailsPanel({ open }: { open: boolean }) {
         </div>
         <div className="details__tabs">
           <div className="segmented">
+            <SegmentPill active={tab} />
             <button type="button" className={tab === 'activity' ? 'is-active' : ''} onClick={() => setTab('activity')} aria-pressed={tab === 'activity'}>Activity</button>
             <button type="button" className={tab === 'tasks' ? 'is-active' : ''} onClick={() => setTab('tasks')} aria-pressed={tab === 'tasks'}>Tasks</button>
             <button type="button" className={tab === 'library' ? 'is-active' : ''} onClick={() => setTab('library')} aria-pressed={tab === 'library'}>Library</button>
           </div>
         </div>
       </div>
-      <div className="details__scroll" key={`${bot.id}:${tab}`}>
+      <div className={`details__scroll${slide.current.dir ? ` is-from-${slide.current.dir}` : ''}`} key={`${bot.id}:${tab}`}
+        onAnimationEnd={(e) => { if (e.target === e.currentTarget) slide.current.dir = ''; }}>
         {tab === 'activity' ? (
           <div className="details__sections">
             {bot.kind !== 'room' && <>

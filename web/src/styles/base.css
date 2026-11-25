@@ -17,6 +17,10 @@ button, input, textarea, select { font: inherit; letter-spacing: inherit; color:
 button { background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-align: inherit; }
 button:disabled { cursor: default; }
 a { color: inherit; }
+/* Scrollbars float like macOS: a slim thumb on a clear track that shows while the pointer is over
+   the scrolling area, instead of a grey gutter that stops short above the composer. */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+:hover { scrollbar-color: color-mix(in srgb, var(--palette-foreground) 22%, transparent) transparent; }
 :focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
 .boot { height: 100%; background: var(--color-bg-chrome); }
 

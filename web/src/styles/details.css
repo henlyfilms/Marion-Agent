@@ -20,7 +20,11 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .details__tabs { display: flex; justify-content: center; padding: 4px 16px 10px; }
-.segmented { display: flex; align-items: center; gap: 2px; }
+.segmented { position: relative; display: flex; align-items: center; gap: 2px; }
+.segmented__pill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: var(--radius-full); background: var(--color-bg-tertiary); opacity: 0; pointer-events: none;
+  transition: transform 340ms var(--ease-spring), width 340ms var(--ease-spring), opacity var(--dur-fast) var(--ease-out); }
+.segmented__pill ~ button { position: relative; z-index: 1; transition: color var(--dur-fast) var(--ease-out); }
+.segmented__pill ~ button.is-active { background: transparent; }
 .segmented button { padding: 4px 8px; border-radius: var(--radius-full); font-size: 13px; line-height: 18px; letter-spacing: 0.195px; color: var(--color-text-secondary); }
 .segmented button:hover { color: var(--color-text-primary); }
 .segmented button.is-active { background: var(--color-bg-tertiary); color: var(--color-ink); }

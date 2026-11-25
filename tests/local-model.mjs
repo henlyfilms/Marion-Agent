@@ -11,6 +11,7 @@ const grokEnabled = process.argv.includes('--grok');
 const fakeModel = createServer(async (req, res) => {
   const data = [];
   for await (const chunk of req) data.push(chunk);
+  if (req.method !== 'POST') return res.writeHead(404).end(); // not Ollama: no /api/ps
   const request = JSON.parse(Buffer.concat(data).toString());
   requests.push({ url: req.url, request });
   const first = requests.length === 1;

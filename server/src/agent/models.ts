@@ -31,10 +31,18 @@ export function localInput(items: any[]) {
 export const selectedLocalModel = (userId: string): string =>
   (db.prepare('SELECT model FROM local_model_preferences WHERE user_id=?').get(userId) as { model: string } | undefined)?.model ?? env.localModelName;
 
-export const modelForBot = (botId: string): string => {
-  const row = db.prepare('SELECT user_id FROM bots WHERE id=?').get(botId) as { user_id: string } | undefined;
-  return row ? selectedLocalModel(row.user_id) : env.localModelName;
-};
+
+/** Ollama only: is `model` already in memory? null when the server can't tell (not Ollama, or down). */
+export async function localModelLoaded(model: string): Promise<boolean | null> {
+  try {
+    const response = await fetch(`${env.localModelUrl.replace(/\/v1\/?$/, '')}/api/ps`, { signal: AbortSignal.timeout(800) });
+    if (!response.ok) return null;
+    const { models } = await response.json() as { models?: { name?: string; model?: string }[] };
+    if (!Array.isArray(models)) return null;
+    const names = new Set(models.flatMap(m => [m.name, m.model]));
+    return names.has(model) || names.has(`${model}:latest`);
+  } catch { return null; }
+}
 
 export async function availableLocalModels(): Promise<string[]> {
   const page = await localModel.models.list({ timeout: 4000 });

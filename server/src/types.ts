@@ -236,7 +236,7 @@ export interface NoticeBody { type: 'notice'; text: string; tone?: 'info' | 'war
 export type ActivityKind =
   | 'thinking' | 'working' | 'searching_web' | 'reading_web' | 'browsing_web' | 'on_its_computer'
   | 'running_commands' | 'waiting_on_command' | 'messaging_named' | 'connecting_service'
-  | 'waiting_for_you' | 'drafting_file' | 'remembering';
+  | 'waiting_for_you' | 'drafting_file' | 'remembering' | 'loading_model';
 
 export interface LiveState {
   botId: string;

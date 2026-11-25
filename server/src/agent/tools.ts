@@ -705,6 +705,3 @@ export function activityFor(name: string): { kind: ActivityKind; label: string }
   return { kind: 'connecting_service', label: 'Using a connected app' };
 }
 
-export function getBotName(botId: string) {
-  return getBotRow(botId)?.name ?? 'Bot';
-}

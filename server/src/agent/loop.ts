@@ -1,4 +1,4 @@
-import { localInput, localModel, selectedLocalModel } from './models.js';
+import { localInput, localModel, localModelLoaded, selectedLocalModel } from './models.js';
 import { chatModelForBot } from './chat-model.js';
 import { attachmentText, photos, type UploadedAttachment } from '../attachments.js';
 import { subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
@@ -519,6 +519,9 @@ async function callModel(
     stream: true,
   };
 
+  // A cold model takes a while to load into memory: say so instead of looking stuck.
+  const cold = await localModelLoaded(model) === false;
+  if (cold) setLive(botId, { activity: { kind: 'loading_model', detail: model, since: now() } });
   let stream: any;
   try {
     stream = await localModel.responses.create(body, { signal });
@@ -532,6 +535,7 @@ async function callModel(
       throw new Error(`Local model ${model} is unavailable. Start your model server and check MARION_LOCAL_MODEL and MARION_LOCAL_MODEL_URL.`);
     } else throw e;
   }
+  if (cold) setLive(botId, { activity: { kind: 'thinking', since: now() } });
 
   let msgSeq: number | null = null;
   let text = '';

@@ -18,6 +18,7 @@ const inference = createServer(async (request, response) => {
     response.end(JSON.stringify({ data: [{ id: selectedModel }, { id: otherModel }] }));
     return;
   }
+  if (request.method !== 'POST') return response.writeHead(404).end(); // not Ollama: no /api/ps
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   requests.push(JSON.parse(Buffer.concat(chunks).toString()));

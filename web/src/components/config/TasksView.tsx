@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { SegmentPill } from '../SegmentPill';
 import type { Bot, Task } from '@shared/types';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { configApi } from '../../lib/configApi';
@@ -89,6 +90,7 @@ export function TasksView() {
           onClick={() => { useConfigUI.getState().setView('chat'); useStore.setState({ mobileChatOpen: false }); }}><Icon name="chev_left" size={23} /></button>
         <div className="tasks-view__title">Tasks</div>
         <div className="segmented" role="tablist" aria-label="Filter tasks">
+          <SegmentPill active={filter} />
           {([['open', `In progress${counts.open ? ` ${counts.open}` : ''}`], ['done', 'Done'], ['all', 'All']] as [Filter, string][]).map(([f, label]) => (
             <button key={f} type="button" role="tab" aria-selected={filter === f} className={filter === f ? 'is-active' : ''} onClick={() => setFilter(f)}>{label}</button>
           ))}

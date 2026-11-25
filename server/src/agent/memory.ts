@@ -248,12 +248,6 @@ Read the recent conversation and extract only durable facts worth remembering fo
 Skip: one-off requests, small talk, temporary states, anything the Bot said about itself, passwords or secrets, and anything already covered by EXISTING MEMORIES (even if worded differently).
 Write each memory as one short standalone sentence in the third person (e.g. "Prefers bullet-point summaries."), under 200 characters. Return at most 8. Return an empty list when nothing qualifies.`;
 
-export const MEMORY_SCHEMA = {
-  type: 'object',
-  properties: { memories: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false } } },
-  required: ['memories'],
-  additionalProperties: false,
-};
 
 export interface ConsolidateResult { added: string[]; skipped: number; considered: number }
 

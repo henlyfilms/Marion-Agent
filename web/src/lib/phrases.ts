@@ -38,6 +38,7 @@ export function activityPhrase(live: LiveState, rows: Row[], tick: number): stri
     const name = typeof args?.bot_name === 'string' ? args.bot_name : nice(a.detail) ? a.detail : null;
     return name ? `Asking ${name}` : 'Asking another Bot';
   }
+  if (kind === 'loading_model') return `Loading ${a.detail ?? 'the model'} on your Mac`;
   if (kind === 'connecting_service') return nice(a.detail) ? `Using ${a.detail}` : 'Using a connected app';
   const list = PHRASES[kind] ?? PHRASES.working;
   return list[tick % list.length];

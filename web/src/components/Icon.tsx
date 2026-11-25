@@ -12,7 +12,8 @@ export type IconName =
   | 'arrow_up' | 'stop' | 'more' | 'monitor' | 'refresh' | 'sort' | 'trash';
 
 /** Icon name → Lucide glyph (ISC, see THIRD_PARTY_NOTICES.md). `filled` paints the shape solid. */
-const ICONS: Record<IconName, { icon: LucideIcon; filled?: boolean }> = {
+/** `lift`: optical nudge up, in 24-unit icon space, for glyphs whose weight sits low (the eye reads them as off-centre). */
+const ICONS: Record<IconName, { icon: LucideIcon; filled?: boolean; lift?: number }> = {
   apps: { icon: LayoutGrid },
   arrow_down: { icon: ArrowDown },
   arrow_up: { icon: ArrowUp },
@@ -36,7 +37,7 @@ const ICONS: Record<IconName, { icon: LucideIcon; filled?: boolean }> = {
   refresh: { icon: RotateCw },
   save: { icon: Bookmark },
   search: { icon: Search },
-  share: { icon: Share },
+  share: { icon: Share, lift: 1.5 }, // the wide tray pulls its visual centre ~1.8 units down
   sidebar: { icon: PanelLeft },
   slack: { icon: Hash },
   sort: { icon: ListOrdered },
@@ -52,7 +53,7 @@ interface Props { name: IconName; size?: number; opacity?: number; className?: s
 
 /** Single-color line icon that inherits `currentColor` (or `color`). */
 export function Icon({ name, size = 16, opacity, className, style, color }: Props) {
-  const { icon: Glyph, filled } = ICONS[name] ?? ICONS.more;
+  const { icon: Glyph, filled, lift } = ICONS[name] ?? ICONS.more;
   return (
     <Glyph
       aria-hidden
@@ -60,7 +61,7 @@ export function Icon({ name, size = 16, opacity, className, style, color }: Prop
       size={size}
       strokeWidth={size <= 12 ? 2.25 : 2}
       fill={filled ? 'currentColor' : 'none'}
-      style={{ display: 'inline-block', flexShrink: 0, opacity, color, ...style }}
+      style={{ display: 'inline-block', flexShrink: 0, opacity, color, ...(lift ? { transform: `translateY(${(-lift * size / 24).toFixed(2)}px)` } : null), ...style }}
     />
   );
 }

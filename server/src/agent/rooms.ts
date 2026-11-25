@@ -21,7 +21,6 @@ export function initRooms() {
   }
 }
 
-export const isRoom = (botId: string) => (db.prepare('SELECT kind FROM bots WHERE id=?').get(botId) as any)?.kind === 'room';
 
 export function roomMembers(roomId: string): { id: string; name: string; effort: string }[] {
   const r = db.prepare('SELECT members FROM bots WHERE id=?').get(roomId) as any;

@@ -2,7 +2,7 @@ import { agentSkills } from './skills.js';
 import { teamPromptSection } from './orchestration.js';
 import { db } from '../db.js';
 import { getBotRow, listRoutines } from '../store.js';
-import { connectedToolkits } from '../composio.js';
+import { connectedToolkits, withinChatBudget } from '../composio.js';
 import { memoriesForPrompt } from './memory.js';
 
 export async function systemPrompt(userId: string, botId: string, voice = false): Promise<string> {
@@ -17,7 +17,7 @@ export async function systemPrompt(userId: string, botId: string, voice = false)
   const routines = listRoutines(botId).map((r) => `- ${r.name} (${r.id}): ${r.enabled ? r.description : 'paused'}; ${r.prompt.slice(0, 120)}`).join('\n');
   let apps = '';
   if (!voice) {
-    try { apps = [...(await connectedToolkits(userId))].join(', '); } catch { apps = '(unavailable)'; }
+    try { apps = [...(await withinChatBudget(() => connectedToolkits(userId), new Set(['(unavailable)'])))].join(', '); } catch { apps = '(unavailable)'; }
   }
 
   return `You are ${bot.name}, a Bot on ${user?.name ?? 'the user'}'s team: an always-on AI teammate that does real work, not just chat.

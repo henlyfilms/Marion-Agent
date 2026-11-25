@@ -123,3 +123,9 @@
   .sidebar__footer .account--desktop { display: flex; flex: 1 1 0; min-width: 0; overflow: hidden; transition: opacity 150ms var(--ease-out); }
   .sidebar.is-collapsed .account--desktop { display: flex; opacity: 0; pointer-events: none; }
 }
+
+/* Details tabs (Activity / Tasks / Library): content slides in from the side of the tab you picked. */
+.details__scroll.is-from-left { animation: tab-from-left var(--dur-base) var(--ease-ios); }
+.details__scroll.is-from-right { animation: tab-from-right var(--dur-base) var(--ease-ios); }
+@keyframes tab-from-left { from { opacity: 0; transform: translateX(14px); } }
+@keyframes tab-from-right { from { opacity: 0; transform: translateX(-14px); } }

@@ -89,6 +89,7 @@ const fakeModel = createServer(async (req, res) => {
     res.end(JSON.stringify({ data: [{ id: 'team-fixture' }] }));
     return;
   }
+  if (req.method !== 'POST') return res.writeHead(404).end(); // not Ollama: no /api/ps
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const request = JSON.parse(Buffer.concat(chunks).toString());

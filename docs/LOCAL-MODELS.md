@@ -9,6 +9,8 @@ MARION_LOCAL_MODEL=your-installed-model-id
 
 Restart Marion, then check the list under **Settings → Models**. A local model server and Docker run independently. [Ollama's OpenAI compatibility guide](https://docs.ollama.com/api/openai-compatibility)
 
+Local chats work offline. If connected apps don't answer within 4 seconds, the chat goes on without them and skips them for a minute. With Ollama, a model that isn't in memory yet shows **Loading <model> on your Mac** until it's ready. `node tests/local-offline.mjs` checks both.
+
 With `XAI_API_KEY` configured, Marion can ask Grok for a second opinion with your approval or use hosted transcription and voice. Local inference and on-device speech avoid those provider calls. [xAI pricing](https://docs.x.ai/developers/pricing)
 
 ## Local transcription

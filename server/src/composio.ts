@@ -65,6 +65,26 @@ export function composio() {
   return client ??= new Composio({ apiKey: env.composioKey, provider: new OpenAIResponsesProvider() });
 }
 
+/**
+ * Chats never wait on Composio for long. The SDK allows 60 s per request plus two retries, so on
+ * bad Wi-Fi a turn sat silent for minutes before reaching even a local model. After a miss, skip
+ * Composio for a minute so the next messages answer at once.
+ */
+const CHAT_BUDGET_MS = 4000;
+let unreachableUntil = 0;
+export function withinChatBudget<T>(work: () => Promise<T>, fallback: T): Promise<T> {
+  if (Date.now() < unreachableUntil) return Promise.resolve(fallback);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>(resolve => {
+    timer = setTimeout(() => {
+      unreachableUntil = Date.now() + 60_000;
+      console.warn('[composio] unreachable; chatting without connected apps for a minute');
+      resolve(fallback);
+    }, CHAT_BUDGET_MS);
+  });
+  return Promise.race([work(), late]).finally(() => clearTimeout(timer));
+}
+
 const REST = 'https://backend.composio.dev/api/v3.1';
 async function rest<T = any>(path: string): Promise<T> {
   if (!env.composioKey) throw new Error('Configure COMPOSIO_API_KEY for connected apps');
@@ -163,8 +183,12 @@ export async function startConnect(userId: string, toolkit: string, callbackUrl:
 }
 
 /** OpenAI-Responses-format function tools for this user's Composio session (meta tools). */
-export async function composioTools(userId: string): Promise<any[]> {
-  if (!env.composioKey) return [];
+export function composioTools(userId: string): Promise<any[]> {
+  if (!env.composioKey) return Promise.resolve([]);
+  return withinChatBudget(() => loadTools(userId), []);
+}
+
+async function loadTools(userId: string): Promise<any[]> {
   const cached = toolsCache.get(userId);
   if (cached && cached.expires > Date.now()) return cached.tools;
   const revision = credentialRevision;

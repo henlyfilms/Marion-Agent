@@ -1,7 +1,6 @@
 import type { ChatProvider } from '@shared/types';
 
 const FILES: Record<ChatProvider, string> = { local: 'qwen-color', codex: 'codex', gemini: 'gemini-color', claude: 'claude-color' };
-export const PROVIDER_NAMES: Record<ChatProvider, string> = { local: 'Local', codex: 'ChatGPT', gemini: 'Gemini', claude: 'Claude' };
 
 /** The real brand mark for a model provider, the same files the model picker uses. */
 export function ProviderLogo({ provider, size = 16, className = '' }: { provider: ChatProvider; size?: number; className?: string }) {
