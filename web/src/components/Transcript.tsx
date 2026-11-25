@@ -6,6 +6,7 @@ import { DEFAULT_BERRY } from '@shared/avatarShapes';
 import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
 import { clock, dividerLabel } from '../lib/time';
 import { useStore } from '../store';
+import { useConfigUI } from '../configStore';
 import { ActivityLine } from './ActivityLine';
 import { CardRow } from './cards/Cards';
 import { Icon } from './Icon';
@@ -62,6 +63,7 @@ function cornerClass(i: number, n: number) {
 const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left' | 'right'; pos: string }) {
   const b = row.body as MessageBody;
   const contextMenu = useContextMenu();
+  const showTokens = useConfigUI(s => s.showTokenStats);
   return (
     <div className={`bubble-wrap is-${side}`}>
       <div className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}
@@ -91,7 +93,7 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
           </div>
         )}
       </div>
-      {side === 'left' && !b.streaming && !!b.usage?.length && (
+      {side === 'left' && showTokens && !b.streaming && !!b.usage?.length && (
         <div className="bubble__usage" aria-label="Response usage">
           {b.usage.map(usage => <span key={`${usage.provider}:${usage.model}`} title={usage.model}>
             {usage.label || usage.model || usage.provider} · {usageLabel(usage)}

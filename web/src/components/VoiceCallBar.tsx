@@ -4,6 +4,7 @@ import { BotAvatarFor } from '../avatar/BotAvatar';
 import { usageLabel } from '../lib/modelUsage';
 import { botVars } from '../lib/colors';
 import { useStore } from '../store';
+import { useConfigUI } from '../configStore';
 import { callLevels, endCall, toggleMute, useVoice } from '../voice/call';
 
 function MicGlyph({ off }: { off?: boolean }) {
@@ -11,7 +12,8 @@ function MicGlyph({ off }: { off?: boolean }) {
 }
 
 function CaptionUsage({ usage }: { usage: ReturnType<typeof useVoice.getState>['usage'] }) {
-  return usage ? <small className="vcall__usage">{usageLabel(usage)}</small> : null;
+  const show = useConfigUI(s => s.showTokenStats);
+  return usage && show ? <small className="vcall__usage">{usageLabel(usage)}</small> : null;
 }
 
 function HangUpGlyph() {

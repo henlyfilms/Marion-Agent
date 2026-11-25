@@ -175,7 +175,6 @@ export function Sidebar() {
   const selectedBotId = inTasks || (compact && !mobileChatOpen) ? null : storeSelectedBotId;
   const set = useStore(s => s.set);
   const setModal = useStore(s => s.setModal);
-  const [accountMenu, setAccountMenu] = useState<'mobile' | 'desktop' | null>(null);
   const [swipe, setSwipe] = useState<Swipe | null>(null);
   const [sortMenu, setSortMenu] = useState(false);
   const [ordering, setOrdering] = useState(false);
@@ -301,18 +300,13 @@ export function Sidebar() {
 
   const account = (variant: 'mobile' | 'desktop') => (
     <div className={`account account--${variant}`}>
-      <button type="button" className="account__btn" onClick={() => { setAccountMenu(null); openSettings(); }}
-        aria-label="Settings" title={`Settings · right-click for more`}
-        {...contextMenu(user?.name ?? 'Account', () => { setAccountMenu(null); return accountItems; })}>
+      <button type="button" className="account__btn" onClick={() => openSettings()}
+        aria-label="Settings" title={`${user?.email || user?.name || 'Workspace'} · Settings (⌘,) · Right-click for more`}
+        {...contextMenu(user?.name ?? 'Account', () => accountItems)}>
         <span className="account__initials">{initials(user?.name ?? user?.email ?? '')}</span>
         {variant === 'desktop' && <span className="account__name">{user?.name ?? user?.email}</span>}
         {updateAvailable(update) && <span className="account__update-dot" aria-label="Update available" />}
       </button>
-      {accountMenu === variant && (
-        <Menu placement={variant === 'desktop' ? 'above' : 'below'} onClose={() => setAccountMenu(null)} items={accountItems}>
-          {user?.email && <div className="menu__header">{user.email}</div>}
-        </Menu>
-      )}
     </div>
   );
 

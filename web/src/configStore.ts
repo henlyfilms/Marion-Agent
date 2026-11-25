@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { prefSet } from './lib/prefs';
+import { prefGet, prefSet } from './lib/prefs';
 import { readTheme, THEME_PREF, THEME_PRESETS, themeStyle, type Theme } from './lib/themes';
 import type { ServerEvent } from '@shared/types';
 import { useStore } from './store';
@@ -16,6 +16,9 @@ interface ConfigUI {
   appSettings: AppSettingsPage | null;
   view: 'chat' | 'tasks' | 'sessions';
   theme: Theme;
+  /** Show "in · out tokens" under each reply. */
+  showTokenStats: boolean;
+  setShowTokenStats(on: boolean): void;
   /** Bumped by server events (tasks, memories) so open views refetch. Keys: 'tasks', 'memories:<botId>'. */
   versions: Record<string, number>;
   openBotSettings(botId: string, tab?: BotSettingsTab): void;
@@ -45,6 +48,8 @@ export const useConfigUI = create<ConfigUI>((set, get) => ({
   appSettings: null,
   view: 'chat',
   theme: readTheme(),
+  showTokenStats: prefGet('showTokenStats') !== '0',
+  setShowTokenStats: (on) => { prefSet('showTokenStats', on ? '1' : '0'); set({ showTokenStats: on }); },
   versions: {},
   openBotSettings: (botId, tab = 'general') => set({ botSettings: { botId, tab } }),
   openBotAppearance: (botId) => set({ botSettings: { botId, tab: 'general', showAppearance: true } }),

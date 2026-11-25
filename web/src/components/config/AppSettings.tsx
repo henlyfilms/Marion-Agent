@@ -14,7 +14,7 @@ import { useStore } from '../../store';
 import { computerStatusText } from '../DetailsPanel';
 import { ToolkitLogo } from '../ToolkitLogo';
 import { AudioSettings, ComposioSettings, LocalModelSettings, SubscriptionSettings } from './LocalSettings';
-import { ConfirmButton } from './ui';
+import { ConfirmButton, Switch } from './ui';
 import { LifeLinkSection, NotificationsSection } from '../features/FeatureSettings';
 import { DEFAULT_DICTATION_SHORTCUT, dictationShortcut, setDictationShortcut, shortcutFor, shortcutLabel } from '../../voice/shortcut';
 
@@ -248,6 +248,8 @@ function ThemeTile({ value, current, onPick }: { value: Theme; current: Theme; o
 function GeneralSection() {
   const theme = useConfigUI((s) => s.theme);
   const setTheme = useConfigUI((s) => s.setTheme);
+  const showTokens = useConfigUI((s) => s.showTokenStats);
+  const setShowTokens = useConfigUI((s) => s.setShowTokenStats);
   const localWorkspace = useStore(s => s.localWorkspace);
   const mobilePaired = useStore(s => s.mobilePaired);
   return (
@@ -259,6 +261,18 @@ function GeneralSection() {
           {THEME_OPTIONS.map((value) => <ThemeTile key={value} value={value} current={theme} onPick={setTheme} />)}
         </div>
         <div className="cfg-field__hint">System follows your device’s light or dark setting.</div>
+      </section>
+      <section className="cfg-section">
+        <div className="cfg-section__label">Chat</div>
+        <div className="cfg-card">
+          <div className="cfg-row">
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">Show token counts</div>
+              <div className="cfg-row__sub">Show the model and “in · out tokens” under each reply and on calls.</div>
+            </div>
+            <Switch on={showTokens} onChange={setShowTokens} label="Show token counts under replies" />
+          </div>
+        </div>
       </section>
       {localWorkspace && !mobilePaired && <>
         <DeviceAccessSection kind="mobile" />
