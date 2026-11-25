@@ -52,12 +52,17 @@ function TaskRow({ t, bot, showBot }: { t: Task; bot?: Bot; showBot: boolean }) 
   );
 }
 
+// Last list per scope, so reopening Tasks shows it instantly and refreshes quietly underneath.
+const taskCache = new Map<string, Task[]>();
+
 function useTasks(botId?: string): Task[] | null {
-  const v = useVersion(botId ? `tasks:${botId}` : 'tasks');
-  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const key = botId ? `tasks:${botId}` : 'tasks';
+  const v = useVersion(key);
+  const [tasks, setTasks] = useState<Task[] | null>(() => taskCache.get(key) ?? null);
   useEffect(() => {
     let alive = true;
-    (botId ? configApi.botTasks(botId) : configApi.tasks()).then((r) => { if (alive) setTasks(r.tasks); }).catch(() => { if (alive) setTasks([]); });
+    if (taskCache.has(key)) setTasks(taskCache.get(key)!);
+    (botId ? configApi.botTasks(botId) : configApi.tasks()).then((r) => { taskCache.set(key, r.tasks); if (alive) setTasks(r.tasks); }).catch(() => { if (alive) setTasks((current) => current ?? []); });
     return () => { alive = false; };
   }, [botId, v]);
   return tasks;
@@ -91,7 +96,7 @@ export function TasksView() {
       </header>
       <div className="tasks-view__scroll">
         <div className="tasks-view__inner">
-          {tasks === null ? <div className="cfg-empty">Loading…</div> : shown.length === 0 ? (
+          {tasks === null ? <div className="session-skeleton" aria-label="Loading tasks">{[0, 1, 2, 3].map(i => <span key={i} />)}</div> : shown.length === 0 ? (
             <div className="tasks-empty">
               <Glyph name="tasks" size={28} opacity={0.35} />
               <div className="tasks-empty__title">{filter === 'done' ? 'Nothing finished yet' : 'Nothing in progress'}</div>

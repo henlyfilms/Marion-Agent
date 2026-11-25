@@ -23,11 +23,14 @@ function readFilter(): Filter {
 const ago = (ts: number) => { const r = relativeShort(ts); return r === 'now' ? 'Just now' : /^\d/.test(r) ? `${r} ago` : r; };
 
 /** Live list of coding sessions, refreshed while it is on screen. */
+// Last list seen (the sidebar polls it), so opening Sessions shows rows at once instead of a loading state.
+let lastSessions: CodingSession[] | null = null;
+
 export function useCodingSessions(refreshMs = 8000) {
-  const [sessions, setSessions] = useState<CodingSession[] | null>(null);
+  const [sessions, setSessions] = useState<CodingSession[] | null>(lastSessions);
   useEffect(() => {
     let alive = true;
-    const load = () => featuresApi.sessions().then(r => { if (alive) setSessions(r.sessions); }).catch(() => { if (alive) setSessions(current => current ?? []); });
+    const load = () => featuresApi.sessions().then(r => { lastSessions = r.sessions; if (alive) setSessions(r.sessions); }).catch(() => { if (alive) setSessions(current => current ?? []); });
     void load();
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load(); }, refreshMs);
     return () => { alive = false; clearInterval(timer); };

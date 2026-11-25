@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { leaveGhost } from '../lib/exitGhost';
 import { createPortal } from 'react-dom';
 import { MenuItems, type MenuItem } from './Menu';
 
@@ -43,11 +44,13 @@ export function ContextMenuProvider({ children }: { children: ReactNode }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const open = useCallback((next: MenuTarget) => {
     setError(null);
+    leaveGhost(menuRef.current, 180);
     setTarget(next);
   }, []);
 
   const close = (restoreFocus = false) => {
     if (restoreFocus && target?.trigger.isConnected) target.trigger.focus({ preventScroll: true });
+    leaveGhost(menuRef.current, 180);
     setTarget(null);
   };
 
@@ -63,7 +66,7 @@ export function ContextMenuProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!target) return;
     const dismiss = (event: Event) => {
-      if (!menuRef.current?.contains(event.target as Node)) setTarget(null);
+      if (!menuRef.current?.contains(event.target as Node)) { leaveGhost(menuRef.current, 180); setTarget(null); }
     };
     document.addEventListener('pointerdown', dismiss, true);
     window.addEventListener('wheel', dismiss, { capture: true, passive: true });

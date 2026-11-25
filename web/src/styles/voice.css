@@ -66,10 +66,21 @@
 .vcall__toggle { align-self: flex-start; font-size: 12px; color: #FFFFFF8F; text-decoration: underline; }
 
 /* ---------- composer: dictation + call button states ---------- */
-.composer__btn.is-recording { background: var(--color-danger); color: #FFFFFF; animation: breathe 1.2s ease-in-out infinite; }
-.composer__btn.is-recording > * { opacity: 1 !important; }
-.composer__btn.is-transcribing { animation: breathe 0.9s ease-in-out infinite; }
+/* Mic and call are the same solid 28px circle (38px on phones) so they read as a matching pair. */
+.composer__mic {
+  background: color-mix(in srgb, var(--color-ink) 16%, var(--color-bg-pane)); box-shadow: none; color: var(--color-ink);
+  transition: background-color var(--dur-fast) var(--ease-out), box-shadow 220ms var(--ease-spring), color var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+.composer__mic:hover:not(:disabled) { background: color-mix(in srgb, var(--color-ink) 22%, var(--color-bg-pane)); }
+/* Dictating: a blue ring around the button and a blue mic. */
+.composer__mic.is-recording, .composer__mic.is-transcribing {
+  background: color-mix(in srgb, #0A84FF 18%, var(--color-bg-pane)); color: #0A84FF;
+  box-shadow: 0 0 0 2px #0A84FF;
+}
+.composer__mic.is-recording:hover:not(:disabled) { background: color-mix(in srgb, #0A84FF 26%, var(--color-bg-pane)); }
+.composer__mic.is-transcribing { animation: breathe 0.9s ease-in-out infinite; }
 .call-handset { transform: scaleX(-1); }
+.call-handset--filled { stroke-linejoin: round; }
 .composer__cta:is(.is-in-call, .is-call) { background: var(--color-danger); color: #fff; }
 .composer__cta:is(.is-in-call, .is-call):hover:not(:disabled) { background: #C82532; }
 

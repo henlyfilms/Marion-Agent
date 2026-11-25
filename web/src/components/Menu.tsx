@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from './Icon';
+import { useExitGhost } from '../lib/exitGhost';
 
 export interface MenuItem {
   label: string;
@@ -37,6 +38,7 @@ export function MenuItems({ items, onSelect, tabIndex }: { items: MenuItem[]; on
 /** Small popover menu anchored by its parent (position: relative). Closes on outside click / Escape. */
 export function Menu({ items, onClose, align = 'left', placement = 'below', children, label, className = '' }: { items: MenuItem[]; onClose: () => void; align?: 'left' | 'right' | 'center'; placement?: 'below' | 'above'; children?: ReactNode; label?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  useExitGhost(ref, 180);
   const trigger = useRef(document.activeElement);
   useEffect(() => {
     const down = (e: MouseEvent) => { if (ref.current && !ref.current.parentElement?.contains(e.target as Node)) onClose(); };

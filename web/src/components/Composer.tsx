@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
-import { Activity, Clapperboard, FileText, Mic, Paperclip, Phone, PhoneOff, SquareSlash, Users, X } from 'lucide-react';
+import { Activity, Clapperboard, FileText, Mic, Paperclip, PhoneOff, SquareSlash, Users, X } from 'lucide-react';
 import { useFeatureUI } from '../lib/featuresApi';
+import { MicSolid, PhoneSolid } from './SolidGlyphs';
 import type { Bot, ChatModel } from '@shared/types';
 import { configApi } from '../lib/configApi';
 import { callModelFor, chatCallModel, defaultCallModel, endLocalCall, isLocalCallActive, setChatCallModel, setDefaultCallModel, startLocalCall, useLocalCall } from '../voice/localCall';
@@ -378,7 +379,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
         <div className="composer__right">
           <span className="composer__mic-anchor"><button
             type="button"
-            className={`composer__btn${state === 'recording' ? ' is-recording' : state === 'transcribing' ? ' is-transcribing' : ''}`}
+            className={`composer__btn composer__mic${state === 'recording' ? ' is-recording' : state === 'transcribing' ? ' is-transcribing' : ''}`}
             aria-label={state === 'recording' ? 'Stop dictation' : 'Dictate'}
             aria-pressed={state === 'recording'} aria-keyshortcuts={dictationShortcut()}
             title={state === 'recording' ? 'Tap to stop · Esc cancels' : `Dictate (${shortcutLabel(dictationShortcut())}) · Right-click for audio input`}
@@ -390,7 +391,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             onPointerCancel={() => { if (micPress.current?.started) discardDictation(); micPress.current = undefined; }}
             onContextMenu={event => { event.preventDefault(); event.stopPropagation(); showInputs(); }}
           >
-            <Icon name="mic" opacity={0.56} />
+            <MicSolid size={15} />
           </button>
           {audioMenu && <Menu label="Audio input" placement="above" align="right" className="microphone-menu" onClose={() => setAudioMenu(false)} items={[
             { label: 'System default', checked: selectedInput === '', onSelect: () => selectMic('') },
@@ -400,7 +401,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           </span>
           {(inCall || localCall) && !hasMessage ? (
             <button type="button" className={`composer__cta is-in-call${ringing ? ' is-call-ringing' : ''}`} onClick={() => localCall ? endLocalCall() : endCall()} aria-label="End call" title="End call">
-              <PhoneOff className="call-handset" size={16} aria-hidden />
+              <PhoneOff className="call-handset" size={15} aria-hidden />
             </button>
           ) : running && !hasMessage ? (
             <button type="button" className="composer__cta" onClick={stop} aria-label="Stop" title="Stop">
@@ -418,7 +419,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
                 aria-label={hasMessage ? 'Send' : `Call ${bot.name}`}
                 title={hasMessage ? 'Send (Enter)' : `Call ${bot.name} · Right-click to choose the call model`}
               >
-                {hasMessage ? <Icon name="arrow_up" size={16} /> : <Phone className="call-handset" size={16} aria-hidden />}
+                {hasMessage ? <Icon name="arrow_up" size={16} /> : <PhoneSolid size={15} />}
               </button>
               {callMenu && <Menu label="Call model" placement="above" align="right" className="chat-model__menu" onClose={() => setCallMenu(false)} items={[
                 { label: `Same as chat · ${bot.chatModel?.label ?? bot.chatModel?.model ?? 'chat model'}`, checked: !callModelFor(bot.id), onSelect: () => setChatCallModel(bot.id, null) },

@@ -1,11 +1,14 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useExitGhost } from '../../lib/exitGhost';
 
 const focusable = 'button, input, textarea, select, a[href], [tabindex]';
 
 /** Centered dialog with keyboard focus kept inside the active modal. */
 export function Modal({ onClose, children, className, label, top }: { onClose: () => void; children: ReactNode; className?: string; label: string; top?: number }) {
   const ref = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  useExitGhost(root);
   const returnFocus = useRef(document.activeElement as HTMLElement | null);
   const close = useRef(onClose);
   close.current = onClose;
@@ -38,7 +41,7 @@ export function Modal({ onClose, children, className, label, top }: { onClose: (
     };
   }, []);
   return createPortal(
-    <div className="modal-root">
+    <div className="modal-root" ref={root}>
       <div className="modal-scrim" onMouseDown={onClose} />
       <div ref={ref} className={`modal ${className ?? ''}`} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} style={top !== undefined ? { marginTop: top } : undefined}>
         {children}

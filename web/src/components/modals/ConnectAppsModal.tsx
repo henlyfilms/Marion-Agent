@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { LayoutGrid, X } from 'lucide-react';
 import type { Toolkit } from '@shared/types';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { api, isConnectedMessage, openPopup, type AppsResponse } from '../../lib/api';
@@ -144,7 +145,7 @@ export function ConnectAppsModal() {
 
   let body: React.ReactNode;
   if (error) body = <div className="apps-empty">Couldn’t load apps. {error}</div>;
-  else if (!data && loading) body = <div className="apps-empty">Loading apps…</div>;
+  else if (!data && loading) body = <div className="apps-skeleton" aria-label="Loading apps">{Array.from({ length: 8 }, (_, i) => <span key={i} style={{ animationDelay: `${i * 40}ms` }} />)}</div>;
   else if (data && !data.configured) body = <div className="apps-empty"><button type="button" className="btn btn--primary" onClick={() => { close(); useConfigUI.getState().openAppSettings('apps'); }}>Set up Composio</button></div>;
   else if (view.kind === 'connected') body = connectedApps.length ? <Section title="Connected" apps={connectedApps} onChanged={refresh} /> : <div className="apps-empty">No apps connected yet.</div>;
   else if (searching || view.kind === 'category') {
@@ -166,11 +167,17 @@ export function ConnectAppsModal() {
   const connectedCount = data?.connected.length ?? 0;
 
   return (
-    <Modal onClose={close} className="apps-modal" label="Connect Apps">
-      <button type="button" className="modal__close apps-modal__close" onClick={close} aria-label="Close"><Icon name="close" size={16} opacity={0.68} /></button>
+    <Modal onClose={close} className="apps-modal" label="Connect apps">
+      <header className="usage-dashboard__header apps-modal__header">
+        <div className="usage-dashboard__title">
+          <div className="usage-dashboard__symbol"><LayoutGrid size={21} /></div>
+          <div><h1>Connect apps</h1><p>Let your bots use the apps and accounts you already have.</p></div>
+        </div>
+        <button type="button" className="icon-btn usage-dashboard__close" onClick={close} aria-label="Close"><X size={19} /></button>
+      </header>
       <div className="apps-modal__head">
         <div className="apps-modal__titlerow">
-          <span className="apps-modal__title">Connect Apps</span>
+          <span className="apps-modal__title">{view.kind === 'connected' ? 'Connected apps' : 'All apps'}</span>
           <button type="button" className={`apps-modal__connected${view.kind === 'connected' ? ' is-active' : ''}`} onClick={() => setView(view.kind === 'connected' ? { kind: 'all' } : { kind: 'connected' })}>
             {connectedApps.length > 0 && (
               <span className="apps-modal__connected-logos">

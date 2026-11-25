@@ -376,7 +376,6 @@ export function Sidebar() {
         <div className="sidebar__footer">
           {account('desktop')}
           <button type="button" className="icon-btn icon-btn--bordered" onClick={() => setModal('usage')} aria-label="Subscription usage" title="Subscription usage"><MeterIcon size={18} /></button>
-          <button type="button" className="icon-btn icon-btn--bordered" onClick={() => setModal('apps')} aria-label="Connect apps" title="Connect apps"><Icon name="apps" /></button>
         </div>
       </div>
       {pendingDelete && <Modal onClose={closeDelete} className="delete-chat" label="Delete chat">

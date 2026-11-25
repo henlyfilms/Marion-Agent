@@ -1,6 +1,7 @@
 .usage-dashboard {
-  width: min(914px, 100%);
-  height: 450px;
+  width: min(960px, 100%);
+  /* Grows to fit every card and limit (no inner scrollbar); the floor keeps it from jumping while readings load. */
+  height: auto; min-height: min(520px, 100%);
   max-height: 100%;
   background: var(--color-bg-pane);
   animation: usage-in 280ms cubic-bezier(.2, .8, .2, 1) both;
@@ -27,7 +28,8 @@
 .usage-dashboard__title h1 { margin: 0; font-size: clamp(21px, 4vw, 29px); font-weight: 680; letter-spacing: -.045em; line-height: 1.15; }
 .usage-dashboard__title p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: 13px; }
 .usage-dashboard__close { align-self: flex-start; flex: none; }
-.usage-dashboard__body { flex: 1 1 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 14px 26px 24px; }
+.usage-dashboard__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none; padding: 14px 26px 24px; }
+.usage-dashboard__body::-webkit-scrollbar { display: none; }
 .usage-dashboard__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; margin-bottom: 12px; }
 .usage-dashboard__status, .usage-dashboard__refresh, .usage-card__link {
   display: inline-flex; align-items: center; gap: 7px; font-size: 12px;
@@ -78,7 +80,7 @@
 .usage-card__link:hover { background: var(--color-bg-hover); color: var(--color-ink); }
 .usage-dashboard__footer { border-top: 1px solid var(--color-border-tertiary); color: var(--color-text-secondary); font-size: 11px; padding-block: 12px; }
 @media (max-width: 630px) {
-  .usage-dashboard { height: 680px; }
+  .usage-dashboard { min-height: 0; }
   .usage-dashboard__grid { grid-template-columns: minmax(0, 1fr); }
   .usage-dashboard__header, .usage-dashboard__footer { padding-inline: 16px; }
   .usage-dashboard__body { padding-inline: 16px; }

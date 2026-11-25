@@ -10,6 +10,8 @@
   --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-spring: linear(0, 0.063 2.6%, 0.247 5.9%, 0.512 10.4%, 0.739 15.2%, 0.886 20%, 0.968 25%, 1.009 30.4%, 1.024 36%, 1.022 43%, 1.011 52%, 1.003 64%, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  /* Closing: starts gently and glides to rest (no hard stop at the end), like an iOS sheet dismiss. */
+  --ease-dismiss: cubic-bezier(0.25, 0.1, 0.25, 1);
   --dur-press: 110ms;
   --dur-fast: 180ms;
   --dur-base: 280ms;
@@ -29,25 +31,49 @@
 .app { overflow: clip; }
 
 /* Buttons press in a touch, like iOS controls. */
-:is(.icon-btn, .btn, .cfg-btn, .account__btn, .sheet-row, .sheet-done, .update-pill, .session-filter button, .bot-row):active:not(:disabled) {
+:is(.icon-btn, .btn, .cfg-btn, .account__btn, .sheet-row, .sheet-done, .update-pill, .session-filter button, .sidebar-island, .composer__btn, .composer__cta, .cat-pill, .app-row__connect):active:not(:disabled) {
   transform: scale(0.97);
 }
 :is(.icon-btn, .btn, .cfg-btn, .account__btn, .sheet-row, .sheet-done, .update-pill, .session-filter button) {
   transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
-.bot-row { transition: background-color 150ms var(--ease-out), transform var(--dur-press) var(--ease-out); }
+/* Chat rows don't press in: picking a chat just highlights it softly (no zoom). */
+.bot-row { transition: background-color 200ms var(--ease-out); }
+.bot-row:active { transform: none; }
 
 /* Shared entrances. */
 @keyframes rise { from { opacity: 0; transform: translateY(4px) scale(0.985); } to { opacity: 1; transform: none; } }
 @keyframes pop { from { opacity: 0; transform: scale(0.96) translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
-.menu { animation: rise 220ms var(--ease-spring); transform-origin: top left; }
+.menu { animation: menu-in 240ms var(--ease-spring); transform-origin: top left; }
+@keyframes menu-in { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: none; } }
 .menu.is-right { transform-origin: top right; }
 .menu.is-above { transform-origin: bottom left; }
 .menu.is-above.is-right { transform-origin: bottom right; }
-.modal { animation: pop 340ms var(--ease-spring); }
-.modal-scrim { animation: fade 240ms var(--ease-out); }
+/* Every window (usage, connect apps, new bot, bot settings…) opens exactly like Settings. */
+.modal { animation: sheet-pop 420ms var(--ease-spring) both; }
+.modal-scrim { animation: fade var(--dur-base) var(--ease-out) both; }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+/* Leaving: a frozen copy (lib/exitGhost.ts) glides out while the real thing is already gone. */
+.is-leaving { pointer-events: none !important; }
+.is-leaving :not(.modal, .modal-scrim, .sheet, .sheet-scrim), .is-leaving :not(.modal, .modal-scrim, .sheet, .sheet-scrim)::before, .is-leaving :not(.modal, .modal-scrim, .sheet, .sheet-scrim)::after {
+  animation: none !important; transition: none !important;
+}
+.modal-root.is-leaving .modal { animation: modal-out 280ms var(--ease-dismiss) both !important; }
+.modal-root.is-leaving .modal-scrim { animation: fade-out 280ms var(--ease-dismiss) both !important; }
+@keyframes modal-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(12px) scale(0.97); } }
+.menu.is-leaving { animation: menu-out 160ms var(--ease-dismiss) both !important; }
+@keyframes menu-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.96); } }
+
+/* Right-click menus pop from the pointer and never scroll: every item shows. */
+.context-menu { animation: menu-in 220ms var(--ease-spring); transform-origin: top left; max-height: none; overflow: visible; }
+
+/* Main column views (Tasks, Sessions) settle in instead of snapping. */
+.chat.tasks-view, .chat.sessions-view { animation: view-in 320ms var(--ease-ios) both; }
+@keyframes view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.jump-btn { animation: fade var(--dur-fast) var(--ease-out); }
 
 /* Desktop panels: one curve for sidebar and details so they move together. */
 .sidebar { transition: width var(--dur-base) var(--ease-ios); }
@@ -77,4 +103,23 @@
     animation-duration: 1ms !important; animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
   }
+}
+
+/* Sidebar bottom collapses like the chat rows: nothing jumps, words just fade and the buttons stay put.
+   Tasks/Sessions icons are already centred in the 74px rail; the footer slides its one button to the centre. */
+@media (min-width: 701px) {
+  .sidebar-island { overflow: hidden; white-space: nowrap; }
+  .sidebar-island__icon { flex: none; }
+  .sidebar.is-collapsed .sidebar-island { justify-content: flex-start; padding: 0 10px; }
+  .sidebar.is-collapsed :is(.sidebar-island__label, .sidebar-island__count) { display: revert; }
+  .sidebar-island__label, .sidebar-island__count { transition: opacity 150ms var(--ease-out); }
+  .sidebar.is-collapsed :is(.sidebar-island__label, .sidebar-island__count) { opacity: 0; }
+
+  .sidebar__footer {
+    justify-content: flex-start; gap: 8px; padding-inline: 13px;
+    transition: padding var(--dur-base) var(--ease-ios), gap var(--dur-base) var(--ease-ios);
+  }
+  .sidebar.is-collapsed .sidebar__footer { justify-content: flex-start; gap: 0; padding-inline: 13px 19px; }
+  .sidebar__footer .account--desktop { display: flex; flex: 1 1 0; min-width: 0; overflow: hidden; transition: opacity 150ms var(--ease-out); }
+  .sidebar.is-collapsed .account--desktop { display: flex; opacity: 0; pointer-events: none; }
 }
