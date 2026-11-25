@@ -170,3 +170,26 @@
 
 .model-usage .context-card__label { flex-shrink: 0; }
 .model-usage .context-card__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Model usage: one bar per plan window, tinted by provider, warming up near the limit. */
+.model-usage { --usage-tint: var(--bot-action, var(--color-primary)); }
+.model-usage--codex { --usage-tint: #648af7; }
+.model-usage--claude { --usage-tint: #d97757; }
+.model-usage--gemini { --usage-tint: #4796e3; }
+.model-usage__windows { display: flex; flex-direction: column; gap: 10px; margin-top: 2px; padding-top: 10px; border-top: 0.5px solid var(--color-border-tertiary); }
+.model-usage__windows.is-stale { opacity: .7; }
+.model-usage__window { display: flex; flex-direction: column; gap: 5px; animation: usage-card-in 300ms cubic-bezier(.2, .8, .2, 1) both; }
+.model-usage__window + .model-usage__window { animation-delay: 60ms; }
+.model-usage__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--color-text-secondary); }
+.model-usage__row strong { font-size: 13px; font-weight: 650; color: var(--color-ink); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.model-usage__row small { font-size: 11px; font-weight: 500; color: var(--color-text-tertiary); }
+.model-usage__bar { position: relative; height: 6px; border-radius: 6px; overflow: hidden; background: color-mix(in srgb, var(--palette-foreground, #888) 10%, transparent); }
+.model-usage__bar > span {
+  position: absolute; inset: 0; border-radius: inherit; transform-origin: left center;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--usage-tint) 72%, white), var(--usage-tint));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--usage-tint) 55%, transparent);
+  transition: transform 800ms cubic-bezier(.22, 1, .36, 1), background 300ms ease;
+}
+.model-usage__window.is-warm .model-usage__bar > span { --usage-tint: #d99a3a; }
+.model-usage__window.is-high .model-usage__bar > span { --usage-tint: var(--color-danger); }
+.model-usage__reset { font-size: 11px; color: var(--color-text-quaternary); }

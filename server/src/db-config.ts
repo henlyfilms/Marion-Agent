@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS subscription_model_preferences (
   effort TEXT,
   PRIMARY KEY (user_id, provider)
 );
+CREATE TABLE IF NOT EXISTS browser_access_settings (
+  slot INTEGER PRIMARY KEY CHECK (slot = 1),
+  session_hours INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS memory_jobs (
   bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
   last_consolidated_at INTEGER NOT NULL DEFAULT 0,

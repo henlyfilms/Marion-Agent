@@ -13,7 +13,7 @@ import { db, now } from './db.js';
 import './db-config.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
-import { requireUser, type AuthVars } from './lib/auth.js';
+import { browserSessionChoices, browserSessionHours, requireUser, saveBrowserSessionHours, type AuthVars } from './lib/auth.js';
 import { emitBot, getBot, getBotRow, listRoutines, listTasks } from './store.js';
 import { BOX_ROOT, computerState, screenFor, stopDesktop } from './computer.js';
 import { desktop } from './desktop.js';
@@ -38,9 +38,22 @@ for (const [kind, access] of [['mobile', env.mobileAccess], ['browser', env.brow
     return c.json({
       origin: access?.origin ?? null,
       passphrase: c.req.query('reveal') === '1' ? access?.passphrase ?? null : null,
+      ...(kind === 'browser' ? { sessionHours: browserSessionHours(), sessionChoices: browserSessionChoices } : {}),
     });
   });
 }
+
+configApi.put('/settings/browser-session', async (c) => {
+  const origin = c.req.header('origin');
+  if (!isDesktop || !hasDesktopAccess(c.req.header(desktopAccessHeader)) || !origin || !env.trustedOrigins.includes(origin)) {
+    return c.json({ error: 'Open Settings on your Mac.' }, 403);
+  }
+  const body = await c.req.json<{ hours?: unknown }>().catch(() => null);
+  const hours = browserSessionChoices.find((choice) => choice === body?.hours);
+  if (!hours) return c.json({ error: 'Choose how long browsers stay signed in.' }, 400);
+  saveBrowserSessionHours(hours);
+  return c.json({ sessionHours: hours });
+});
 
 configApi.get('/settings/chat-provider', (c) => {
   if (!isDesktop) return c.json({ error: 'Open the Mac app to use subscription chat' }, 403);

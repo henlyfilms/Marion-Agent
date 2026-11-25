@@ -223,9 +223,9 @@ try {
   assert.deepEqual(mobileRoster.bots.map(bot => bot.id), migrated.bots.map(bot => bot.id));
 
   const browserConfig = await fetch(origin + '/api/settings/browser-access', { headers: signedIn });
-  assert.deepEqual(await browserConfig.json(), { origin: browserOrigin, passphrase: null });
+  assert.deepEqual(await browserConfig.json(), { origin: browserOrigin, passphrase: null, sessionHours: 168, sessionChoices: [8, 24, 168, 720] });
   const browserSecret = await fetch(origin + '/api/settings/browser-access?reveal=1', { headers: signedIn });
-  assert.deepEqual(await browserSecret.json(), { origin: browserOrigin, passphrase: browserPassphrase });
+  assert.deepEqual(await browserSecret.json(), { origin: browserOrigin, passphrase: browserPassphrase, sessionHours: 168, sessionChoices: [8, 24, 168, 720] });
   assert.equal(browserSecret.headers.get('cache-control'), 'no-store');
   assert.equal((await mobileRequest('/api/auth/me', { headers: browserHeaders })).body.mobileLogin, true);
   assert.equal((await mobileRequest('/api/bots', { headers: browserHeaders })).status, 401);
@@ -238,7 +238,7 @@ try {
   assert.match(browserCookie, /^__Host-marion_agent_browser=/);
   assert.match(browserCookie, /; Secure/i);
   assert.match(browserCookie, /; HttpOnly/i);
-  assert.match(browserCookie, /; Max-Age=28800/i);
+  assert.match(browserCookie, /; Max-Age=604800/i);
   const browserSession = { ...browserHeaders, Cookie: browserCookie.split(';')[0] };
   const browserRoster = (await mobileRequest('/api/bots', { headers: browserSession })).body;
   assert.deepEqual(browserRoster.bots.map(bot => bot.id), migrated.bots.map(bot => bot.id));
@@ -247,6 +247,15 @@ try {
   assert.equal((await mobileRequest('/api/bots', { headers: { ...mobileHeaders, Cookie: browserSession.Cookie.replace('__Host-marion_agent_browser', 'marion_agent_session') } })).status, 401);
   assert.equal((await mobileRequest('/api/settings/browser-access?reveal=1', { headers: browserSession })).status, 403);
   assert.equal((await mobileRequest('/api/auth/logout', { method: 'POST', headers: { ...browserSession, Origin: mobileOrigin } })).status, 403);
+  const saveSession = (hours, headers = { ...signedIn, Origin: origin }) => fetch(origin + '/api/settings/browser-session', { method: 'PUT', headers, body: JSON.stringify({ hours }) });
+  assert.equal((await saveSession(5)).status, 400);
+  assert.equal((await mobileRequest('/api/settings/browser-session', { method: 'PUT', headers: { ...browserSession, 'Content-Type': 'application/json' }, body: '{"hours":720}' })).status, 403);
+  assert.deepEqual(await (await saveSession(8)).json(), { sessionHours: 8 });
+  assert.equal((await fetch(origin + '/api/settings/browser-access', { headers: signedIn }).then(response => response.json())).sessionHours, 8);
+  assert.equal((await mobileRequest('/api/bots', { headers: browserSession })).status, 200);
+  const shortBrowser = await pair(browserPassphrase, browserHeaders);
+  assert.match(shortBrowser.headers['set-cookie'][0], /; Max-Age=28800/i);
+  assert.equal((await saveSession(168)).status, 200);
   assert.equal((await mobileRequest('/api/auth/logout', { method: 'POST', headers: browserSession })).status, 200);
   assert.equal((await mobileRequest('/api/bots', { headers: browserSession })).status, 401);
 
