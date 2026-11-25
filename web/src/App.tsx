@@ -27,6 +27,7 @@ import { NotificationBanners } from './components/NotificationBanners';
 import { ContextMenuProvider } from './components/ContextMenu';
 import { useConfigUI } from './configStore';
 import { setDetailsOpen, useCompactLayout, useDetailsOpen } from './lib/layout';
+import { useViewSwap } from './lib/viewSwap';
 
 function FeatureLayer() {
   const gallery = useFeatureUI(s => s.gallery);
@@ -124,6 +125,9 @@ function Shell() {
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }, [compact]);
+
+  // Phone has its own push/back; on a wider window the main column glides between bots and views.
+  useViewSwap(view, selectedBotId, !compact);
 
   const hasDetails = Boolean(selectedBotId) && view === 'chat' && (!compact || mobileChatOpen);
   return (

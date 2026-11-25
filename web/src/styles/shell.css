@@ -24,7 +24,7 @@
   display: flex; align-items: center; gap: 10px; min-height: 62px; flex-shrink: 0;
   padding: 8px 14px;
 }
-.sidebar .sidebar-toggle, .chat .sidebar-back { width: 44px; height: 44px; flex: 0 0 44px; border-radius: 12px; }
+.sidebar .sidebar-toggle, .chat .sidebar-back { width: 44px; height: 44px; flex: 0 0 44px; border-radius: var(--radius-full); }
 .sidebar__brand {
   display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
   color: var(--color-ink); font-size: 15px; font-weight: 650; letter-spacing: -0.3px;

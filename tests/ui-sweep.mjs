@@ -76,9 +76,9 @@ try {
 
     if (label !== 'phone') {
       await page.locator('.details__identity').click();
-      await page.waitForSelector('.bot-profile__panel');
-      for (const section of ['Memories', 'Skills', 'Routines', 'Integrations']) await page.locator('.bot-profile__nav-item', { hasText: section }).click();
-      await check('profile');
+      await page.waitForSelector('.bot-settings');
+      for (const section of ['Skills', 'Memories', 'Routines', 'Apps', 'General']) await page.locator('.bot-settings .cfg-nav__item', { hasText: section }).click();
+      await check('bot settings');
       await page.keyboard.press('Escape');
     }
     await page.evaluate(() => document.querySelector('.composer__plus-anchor button').click());

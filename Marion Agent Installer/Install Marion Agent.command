@@ -98,12 +98,22 @@ for binary in "$prebuilds"/darwin-*.node; do
 done
 
 printf 'Signing and checking the app…\n'
-/usr/bin/codesign --force --sign - "$prebuilds/darwin-$arch.node"
-/usr/bin/codesign --force --sign - "$resources/runtime/node"
-if [[ -f "$resources/speech/marion-transcribe" ]]; then
-  /usr/bin/codesign --force --sign - "$resources/speech/marion-transcribe"
+# Sign with the Mac's own "Marion Agent Local Signing" certificate when it exists (made once by
+# scripts/macos/make-signing-identity.sh). Every build then has the same signature, so macOS keeps
+# the file and microphone permissions you already gave instead of asking again after each update.
+signer=-
+if /usr/bin/security find-certificate -c "Marion Agent Local Signing" >/dev/null 2>&1; then
+  signer="Marion Agent Local Signing"
 fi
-/usr/bin/codesign --force --deep --sign - "$bundle"
+sign() {
+  /usr/bin/codesign --force --sign "$signer" "$@" 2>/dev/null || { signer=-; /usr/bin/codesign --force --sign - "$@"; }
+}
+sign "$prebuilds/darwin-$arch.node"
+sign "$resources/runtime/node"
+if [[ -f "$resources/speech/marion-transcribe" ]]; then
+  sign "$resources/speech/marion-transcribe"
+fi
+sign --deep "$bundle"
 /usr/bin/codesign --verify --deep --strict "$bundle"
 require_closed_app
 if [[ -n "$existing_inode" ]]; then

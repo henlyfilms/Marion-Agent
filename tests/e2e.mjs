@@ -84,7 +84,7 @@ await step('bot uses its own computer (shell on its screen)', async () => {
 
 await step('computer viewer: watch, take control, hand back', async () => {
   const card = page.getByText("Bot's computer").first();
-  if (!(await card.isVisible())) await page.getByLabel('Show details').first().click();
+  if (!(await card.isVisible())) await page.getByLabel('Show side panel').first().click();
   await page.getByText("Bot's computer").first().click();
   await page.locator('canvas').first().waitFor({ timeout: 30000 });
   await page.waitForTimeout(2500);

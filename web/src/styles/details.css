@@ -120,3 +120,4 @@
 .computer-thumb__face { width: 32px; height: 32px; }
 .computer-thumb__z1 { left: calc(50% + 15px); top: calc(50% - 22px); }
 .computer-thumb__z2 { left: calc(50% + 21px); top: calc(50% - 29px); }
+.panel-card--teach { margin-top: 8px; }

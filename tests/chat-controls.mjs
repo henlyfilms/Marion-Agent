@@ -283,8 +283,9 @@ try {
   await page.emulateMedia({ colorScheme: 'dark' });
   await checkAppearance(page, true);
   await page.getByRole('button', { name: 'Research', exact: true }).click({ button: 'right' });
-  await page.getByRole('menuitem', { name: 'Change icon…' }).click();
+  await page.getByRole('menuitem', { name: 'Bot settings…' }).click();
   const appearance = page.getByRole('dialog', { name: 'Research settings' });
+  await appearance.getByRole('button', { name: 'Change look' }).click();
   await appearance.getByRole('switch', { name: 'Show stem' }).click();
   await appearance.getByRole('button', { name: 'Save changes' }).click();
   await appearance.getByText('Saved', { exact: true }).waitFor();
@@ -346,8 +347,8 @@ try {
   await page.getByRole('button', { name: 'Effort: Extra high' }).click();
   await page.getByRole('menuitemradio', { name: 'High', exact: true }).click();
   await mobile.getByRole('button', { name: 'Effort: High' }).waitFor();
-  await mobile.getByRole('button', { name: 'Show details' }).tap();
-  await mobile.getByRole('button', { name: 'Close details' }).tap();
+  await mobile.getByRole('button', { name: 'Show side panel' }).tap();
+  await mobile.getByRole('button', { name: 'Hide side panel' }).tap();
   await mobile.getByRole('button', { name: 'Back to chats' }).tap();
   // The chat list slides back in (iOS-style); swipe once it has landed.
   await mobile.locator('.sidebar').evaluate(sidebar => Promise.allSettled(sidebar.getAnimations().map(animation => animation.finished)));

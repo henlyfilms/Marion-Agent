@@ -8,7 +8,9 @@ import { botVars } from '../../lib/colors';
 import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
 import { useStore } from '../../store';
-import { featuresApi } from '../../lib/featuresApi';
+import { featuresApi, type BotProfileData } from '../../lib/featuresApi';
+import { Share } from 'lucide-react';
+import { ToolkitLogo } from '../ToolkitLogo';
 import { Icon } from '../Icon';
 import { Modal } from '../modals/Modal';
 import { Glyph } from './glyphs';
@@ -56,7 +58,18 @@ export function BotSettingsModal() {
     { id: 'skills', label: 'Skills', count: data?.skills.length },
     { id: 'memories', label: 'Memories', count: data?.memories.length },
     { id: 'routines', label: 'Routines', count: (routines ?? data?.routines)?.length },
+    ...(bot.kind === 'room' ? [] : [{ id: 'apps' as const, label: 'Apps' }]),
   ];
+  const exportBot = async () => {
+    const response = await fetch(`/api/bots/${bot.id}/export`, { credentials: 'include' });
+    if (!response.ok) { setLoadError('Could not export this Bot.'); return; }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${bot.name.replace(/[^\w .-]+/g, '').trim() || 'bot'}.marionbot.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
 
   return (
     <Modal onClose={onClose} className="bot-settings" label={`${bot.name} settings`}>
@@ -65,7 +78,10 @@ export function BotSettingsModal() {
           <BotAvatarFor bot={bot} size={24} />
           <span className="modal__title">{bot.name}</span>
         </div>
-        <button type="button" className="modal__close" onClick={onClose} aria-label="Close"><Icon name="close" size={14} opacity={0.68} /></button>
+        <div className="bot-settings__actions">
+          {bot.kind !== 'room' && <button type="button" className="icon-btn icon-btn--sm" onClick={() => void exportBot()} aria-label="Export Bot" title="Export as a file to share or back up"><Share size={15} /></button>}
+          <button type="button" className="icon-btn icon-btn--sm" onClick={onClose} aria-label="Close" title="Close"><Icon name="close" size={14} opacity={0.68} /></button>
+        </div>
       </div>
       <div className="bot-settings__body" style={botVars(bot.avatarColor)}>
         <nav className="cfg-nav" aria-label="Bot settings sections">
@@ -78,10 +94,11 @@ export function BotSettingsModal() {
         </nav>
         <div className="cfg-content" key={target.tab}>
           {loadError && <div className="cfg-error">Couldn’t load settings: {loadError}</div>}
-          {target.tab === 'general' && <GeneralTab key={bot.id} bot={bot} onClose={onClose} showAppearance={target.showAppearance} />}
+          {target.tab === 'general' && <GeneralTab key={bot.id} bot={bot} onClose={onClose} />}
           {target.tab === 'skills' && <SkillsTab bot={bot} skills={data?.skills} onChange={reload} />}
           {target.tab === 'memories' && <MemoriesTab bot={bot} data={data} onChange={reload} />}
           {target.tab === 'routines' && <RoutinesTab bot={bot} routines={routines ?? data?.routines} />}
+          {target.tab === 'apps' && <AppsTab bot={bot} />}
         </div>
       </div>
     </Modal>
@@ -93,9 +110,9 @@ export function BotSettingsModal() {
 type Draft = Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'effort' | 'mode'>;
 const draftOf = (b: Bot): Draft => ({ name: b.name, label: b.label, description: b.description, instructions: b.instructions, avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, effort: b.effort, mode: b.mode });
 
-function GeneralTab({ bot, onClose, showAppearance = false }: { bot: Bot; onClose: () => void; showAppearance?: boolean }) {
+function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot));
-  const [picker, setPicker] = useState(showAppearance);
+  const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
 
@@ -223,6 +240,33 @@ function GeneralTab({ bot, onClose, showAppearance = false }: { bot: Bot; onClos
   );
 }
 
+
+/** The apps this Bot can use (its integrations) and whether each is connected. */
+function AppsTab({ bot }: { bot: Bot }) {
+  const [profile, setProfile] = useState<BotProfileData | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => { featuresApi.profile(bot.id).then(r => setProfile(r.profile)).catch(e => setError((e as Error).message)); }, [bot.id]);
+  if (error) return <div className="cfg-page"><div className="cfg-error">Couldn’t load apps: {error}</div></div>;
+  if (!profile) return <div className="cfg-page"><div className="cfg-empty">Loading…</div></div>;
+  return (
+    <div className="cfg-page">
+      <section className="cfg-section">
+        <div className="cfg-section__label">Apps it can use</div>
+        {profile.integrations.length ? (
+          <div className="cfg-card">
+            {profile.integrations.map(slug => (
+              <div key={slug} className="cfg-row">
+                <ToolkitLogo name={slug} logo={`https://logos.composio.dev/api/${slug}`} size={20} radius={5} />
+                <div className="cfg-row__text"><div className="cfg-row__title">{slug.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</div></div>
+                {profile.connected && <span className={`bot-profile__app-state${profile.connected.includes(slug) ? ' is-on' : ''}`}>{profile.connected.includes(slug) ? 'Connected' : 'Not connected'}</span>}
+              </div>
+            ))}
+          </div>
+        ) : <div className="cfg-empty">Uses its own computer, browser and files. Connect apps in Settings → Connected apps when it needs them.</div>}
+      </section>
+    </div>
+  );
+}
 
 function LookPicker({ shape, color, stemColor, onShape, onColor, onStem }: {
   shape: AvatarShape;

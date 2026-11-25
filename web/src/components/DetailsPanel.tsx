@@ -18,6 +18,7 @@ import { SegmentPill } from './SegmentPill';
 import { botMenuItems } from './botMenuItems';
 import { setDetailsOpen } from '../lib/layout';
 import { featuresApi, useFeatureUI } from '../lib/featuresApi';
+import { Clapperboard } from 'lucide-react';
 import { ModelUsage } from './features/ModelUsage';
 import { ContextCard } from './features/ContextCard';
 
@@ -203,15 +204,15 @@ export function DetailsPanel({ open }: { open: boolean }) {
         <button type="button" className="icon-btn icon-btn--bordered details__close" onClick={() => {
           setDetailsOpen(false);
           requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.details-toggle')?.focus());
-        }} aria-label="Close details">
+        }} aria-label="Hide side panel" title="Hide side panel">
           <Icon name="close" opacity={0.92} />
         </button>
       </div>
       <div className="details__navigation">
-        <div className="details__identity" tabIndex={0} role="button" title="View profile"
-          onClick={() => bot.kind !== 'room' && useFeatureUI.getState().set({ profile: { kind: 'bot', id: bot.id } })}
+        <div className="details__identity" tabIndex={0} role="button" title={bot.kind === 'room' ? 'Group settings' : 'Bot settings'}
+          onClick={() => useConfigUI.getState().openBotSettings(bot.id)}
           {...identityMenu}
-          onKeyDown={(e) => { identityMenu.onKeyDown(e); if (e.key === 'Enter' && bot.kind !== 'room') useFeatureUI.getState().set({ profile: { kind: 'bot', id: bot.id } }); }}>
+          onKeyDown={(e) => { identityMenu.onKeyDown(e); if (e.key === 'Enter') useConfigUI.getState().openBotSettings(bot.id); }}>
           <BotAvatarFor bot={bot} size={30} />
           <div className="details__name" title={displayName(bot)}>{displayName(bot)}</div>
         </div>
@@ -230,12 +231,19 @@ export function DetailsPanel({ open }: { open: boolean }) {
           <div className="details__sections">
             {bot.kind !== 'room' && <>
               <section>
+                <ComputerCard bot={bot} open={open} />
+                <div className="panel-card panel-card--teach">
+                  <button type="button" className="panel-row panel-row--link" onClick={() => useFeatureUI.getState().set({ teachBotId: bot.id })}>
+                    <span className="panel-row__glyph"><Clapperboard size={14} strokeWidth={1.8} /></span>
+                    <span className="panel-row__title" style={{ flex: 1 }}>Teach by screen recording</span>
+                    <Icon name="chev_right" size={12} opacity={0.56} />
+                  </button>
+                </div>
+              </section>
+              <section>
                 <ContextCard key={bot.id} bot={bot} />
                 <ModelUsage key={`usage-${bot.id}`} bot={bot} open={open} />
                 <TokenCountsRow />
-              </section>
-              <section>
-                <ComputerCard bot={bot} open={open} />
               </section>
             </>}
             <section>

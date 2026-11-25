@@ -250,6 +250,8 @@ function GeneralSection() {
   const setTheme = useConfigUI((s) => s.setTheme);
   const showTokens = useConfigUI((s) => s.showTokenStats);
   const setShowTokens = useConfigUI((s) => s.setShowTokenStats);
+  const fileAccess = useConfigUI((s) => s.fileAccess);
+  const setFileAccess = useConfigUI((s) => s.setFileAccess);
   const localWorkspace = useStore(s => s.localWorkspace);
   const mobilePaired = useStore(s => s.mobilePaired);
   return (
@@ -274,6 +276,18 @@ function GeneralSection() {
           </div>
         </div>
       </section>
+      {localWorkspace && !mobilePaired && <section className="cfg-section">
+        <div className="cfg-section__label">This Mac</div>
+        <div className="cfg-card">
+          <div className="cfg-row">
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">File access</div>
+              <div className="cfg-row__sub">Lets Marion Agent use your folders, like the source folder it updates from. Turn off and macOS won’t ask about your files when the app opens.</div>
+            </div>
+            <Switch on={fileAccess} onChange={(on) => { setFileAccess(on); void useAppUpdate.getState().check(); }} label="Let Marion Agent use files on this Mac" />
+          </div>
+        </div>
+      </section>}
       {localWorkspace && !mobilePaired && <>
         <DeviceAccessSection kind="mobile" />
         <DeviceAccessSection kind="browser" />

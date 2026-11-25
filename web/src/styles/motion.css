@@ -16,6 +16,8 @@
   --dur-fast: 180ms;
   --dur-base: 280ms;
   --dur-sheet: 460ms;
+  /* Side panels (sidebar, details) glide like an iPhone sheet: quick start, long soft landing. */
+  --dur-panel: 480ms;
 }
 @supports not (transition-timing-function: linear(0, 1)) {
   :root { --ease-spring: cubic-bezier(0.2, 0.9, 0.25, 1.02); }
@@ -70,15 +72,32 @@
 /* Right-click menus pop from the pointer and never scroll: every item shows. */
 .context-menu { animation: menu-in 220ms var(--ease-spring); transform-origin: top left; max-height: none; overflow: visible; }
 
-/* Main column views (Tasks, Sessions) settle in instead of snapping. */
-.chat.tasks-view, .chat.sessions-view { animation: view-in 320ms var(--ease-ios) both; }
-@keyframes view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Main column views (chat, Tasks, Sessions) and switching bots: lib/viewSwap.ts plays the entrance
+   with the Web Animations API, so nothing remounts and nothing animates on first paint. */
+/* Model list: rows that arrive (after the availability check) rise in instead of popping. */
+.chat-model__menu :is(.menu__item, .menu__header) { animation: rise 260ms var(--ease-ios) both; }
 .jump-btn { animation: fade var(--dur-fast) var(--ease-out); }
 
-/* Desktop panels: one curve for sidebar and details so they move together. */
-.sidebar { transition: width var(--dur-base) var(--ease-ios); }
-.details-slot { transition: width var(--dur-base) var(--ease-ios), visibility 0s var(--dur-base); }
-.app.has-details .details-slot { transition: width var(--dur-base) var(--ease-ios), visibility 0s 0s; }
+/* Desktop panels: one curve for sidebar and details so they move together.
+   The slot's width makes room (the chat glides over), while the panel itself slides in from the edge and
+   fades up, so it never looks like a wall shoving the chat. Closing is the same path in reverse. */
+@media (min-width: 701px) {
+  .sidebar { transition: width var(--dur-panel) var(--ease-ios); }
+}
+@media (min-width: 921px) {
+  .details-slot { transition: width var(--dur-panel) var(--ease-ios), visibility 0s var(--dur-panel); }
+  .app.has-details .details-slot { transition: width var(--dur-panel) var(--ease-ios), visibility 0s 0s; }
+  .details-slot .details {
+    transform: translateX(28%); opacity: 0;
+    transition: transform var(--dur-panel) var(--ease-ios), opacity 240ms var(--ease-out);
+  }
+  .app.has-details .details-slot .details { transform: none; opacity: 1; transition: transform var(--dur-panel) var(--ease-ios), opacity 300ms var(--ease-out) 40ms; }
+}
+/* Split view: the panel floats over the chat and slides in from the right edge. */
+@media (min-width: 701px) and (max-width: 920px) {
+  .details-slot, .app.has-details .details-slot { transition: transform var(--dur-panel) var(--ease-ios), visibility 0s var(--dur-panel); }
+  .app.has-details .details-slot { transition: transform var(--dur-panel) var(--ease-ios), visibility 0s 0s; }
+}
 
 /* Phone: opening a chat pushes it in from the right while the list slides back, like UINavigationController. */
 @media (max-width: 700px) {

@@ -16,6 +16,9 @@ function ProviderIcon({ provider, model }: { provider: ChatProvider; model?: str
   return <img className={`provider-icon provider-icon--${provider}`} src={`/providers/${icons[provider]}.svg`} alt="" width="16" height="16" />;
 }
 
+/** Model lists are checked once per app session (shared by every chat), so the menu opens already full. */
+let discoveredOnce = false;
+
 const effortLabel = (effort: string | null) => effort === null ? 'Default' : effort === 'xhigh'
   ? 'Extra high' : effort.substring(0, 1).toUpperCase() + effort.substring(1);
 
@@ -26,7 +29,7 @@ export function ModelPicker({ bot, inputId }: { bot: Bot; inputId: string }) {
   const saving = useStore(s => !!s.savingChatModels[bot.id]);
   const [error, setError] = useState('');
   const version = useRef(0);
-  const discovered = useRef(false);
+  const discovered = useRef(discoveredOnce);
   const appSettingsOpen = useConfigUI(s => s.appSettings !== null);
   const settingsVersion = useStore(s => s.modelSettingsVersion);
 
@@ -37,7 +40,7 @@ export function ModelPicker({ bot, inputId }: { bot: Bot; inputId: string }) {
     try {
       const result = await configApi.chatModels(bot.id, discover);
       if (request !== version.current) return;
-      if (discover) discovered.current = true;
+      if (discover) { discovered.current = true; discoveredOnce = true; }
       setData(result);
     } catch (cause) {
       if (request === version.current) setError((cause as Error).message);
@@ -50,6 +53,12 @@ export function ModelPicker({ bot, inputId }: { bot: Bot; inputId: string }) {
     if (!appSettingsOpen) void refresh(discovered.current);
     return () => { version.current++; };
   }, [refresh, appSettingsOpen, settingsVersion, bot.chatModel?.provider, bot.chatModel?.model]);
+  // Check which models are available quietly in the background, so opening the menu never waits.
+  useEffect(() => {
+    if (discovered.current) return;
+    const timer = window.setTimeout(() => { if (!discovered.current) void refresh(true); }, 1800);
+    return () => clearTimeout(timer);
+  }, [refresh]);
 
   const selection = bot.chatModel?.model ? bot.chatModel
     : data?.selection.provider === bot.chatModel?.provider ? data?.selection : bot.chatModel ?? data?.selection;

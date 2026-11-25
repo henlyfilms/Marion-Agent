@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { featuresApi, type UpdateStatus } from './featuresApi';
+import { prefGet } from './prefs';
 
 /** "Check for updates" state shared by the sidebar pill, the workspace menu and Settings. */
 interface UpdateUI {
@@ -20,6 +21,11 @@ export const useAppUpdate = create<UpdateUI>((set, get) => ({
   error: '',
   check: async () => {
     if (get().checking) return;
+    // File access off: never look in the source folder on the Desktop, so macOS never asks.
+    if (prefGet('fileAccess') === '0') {
+      set({ error: '', status: { supported: false, current: BUILD, latest: null, behind: 0, changes: [], dirty: false, install: { state: 'idle', message: '', at: 0 }, reason: 'Turn on File access in Settings → General to check for updates.' } });
+      return;
+    }
     set({ checking: true, error: '' });
     try { set({ status: await featuresApi.updateStatus(BUILD) }); }
     catch (cause) { set({ error: (cause as Error).message }); }

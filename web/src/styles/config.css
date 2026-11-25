@@ -48,6 +48,7 @@
 
 /* ---------- bot settings dialog ---------- */
 .bot-settings { width: 760px; height: min(680px, calc(100vh - 48px)); max-width: calc(100vw - 32px); }
+.bot-settings__actions { display: flex; align-items: center; gap: 4px; margin: -6px -6px -6px auto; }
 .bot-settings__title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .bot-settings__body { display: flex; flex: 1 1 0; min-height: 0; }
 .cfg-nav { display: flex; flex-direction: column; gap: 2px; width: 176px; flex-shrink: 0; padding: 12px 8px; border-right: 0.5px solid var(--color-border-tertiary); background: var(--color-bg-chrome); }

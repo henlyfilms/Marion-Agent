@@ -34,7 +34,9 @@ a { color: inherit; }
 }
 .icon-btn:hover { background: var(--color-bg-elevated-hover); }
 .icon-btn--bordered { border-width: 1px; }
-.icon-btn--plain { width: 24px; height: 24px; background: transparent; border: 0; border-radius: 6px; }
+.icon-btn--sm { width: 32px; height: 32px; background: transparent; border: 0; color: var(--color-text-secondary); }
+.icon-btn--sm:hover { background: var(--color-bg-hover); color: var(--color-ink); }
+.icon-btn--plain { width: 24px; height: 24px; background: transparent; border: 0; border-radius: var(--radius-full); }
 .icon-btn--plain:hover { background: var(--color-bg-hover); }
 
 .btn {

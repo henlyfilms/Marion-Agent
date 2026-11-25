@@ -40,7 +40,7 @@ export function ConversationActions({ detailsOpen }: { detailsOpen: boolean }) {
     link.click();
   };
 
-  const detailsLabel = detailsOpen ? 'Close details' : 'Show details';
+  const detailsLabel = detailsOpen ? 'Hide side panel' : 'Show side panel';
   return (
     <>
       <div className="conversation-actions" role="group" aria-label="Conversation actions">
