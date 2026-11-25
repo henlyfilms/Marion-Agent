@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
-import { Activity, Clapperboard, FileText, Mic, Paperclip, PhoneOff, SquareSlash, Users, X } from 'lucide-react';
-import { useFeatureUI } from '../lib/featuresApi';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import { Activity, BarChart3, Brain, Clapperboard, Eraser, FileText, Mic, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
+import { featuresApi, formatTokens, useFeatureUI } from '../lib/featuresApi';
 import { MicSolid, PhoneSolid } from './SolidGlyphs';
 import type { Bot, ChatModel } from '@shared/types';
 import { configApi } from '../lib/configApi';
@@ -18,7 +18,7 @@ import { appendDictation, supportsLiveDictation, useLiveDictation } from '../voi
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../voice/audio';
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
 import { useConfigUI } from '../configStore';
-import { useCompactLayout } from '../lib/layout';
+import { setDetailsOpen, useCompactLayout, useDetailsOpen } from '../lib/layout';
 
 const MAX_H = 200;
 const drafts = new Map<string, string>();
@@ -57,6 +57,9 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState('');
   const [menu, setMenu] = useState<'attachments' | 'commands' | null>(null);
   const [files, setFiles] = useState(() => fileDrafts.get(bot.id) ?? []);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -106,7 +109,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const send = async () => {
     const t = shown.trim();
     if ((!t && !files.length) || sending || savingModel) return;
-    const command = commands.find(item => item.label === t);
+    const command = findCommand(t.toLowerCase());
     if (command && !files.length) { runCommand(command); return; }
     discardDictation();
     setSending(true); setError(null);
@@ -276,19 +279,60 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     if (press?.id === event.pointerId && press.started && Date.now() - press.at >= 350) stopDictation();
   };
 
-  const commands = [
-    { label: '/attach', detail: 'Add files or photos', icon: <Paperclip size={15} />, onSelect: chooseFiles },
-    { label: '/usage', detail: 'View subscription limits', icon: <Activity size={15} />, onSelect: () => setModal('usage') },
-    { label: '/team', detail: 'Orchestrate several models together', icon: <Users size={15} />, onSelect: () => setModal('team') },
+  const detailsOpen = useDetailsOpen();
+  const say = (message: string) => { setError(null); setNotice(message); };
+  const room = bot.kind === 'room';
+  type Command = { label: string; detail: string; icon: ReactNode; onSelect: () => void; aliases?: string[] };
+  const commands: Command[] = [
+    { label: '/clear', detail: 'Start a new conversation', icon: <Eraser size={15} />, aliases: ['/new', '/reset'], onSelect: () => {
+      say('Starting a new conversation…');
+      api.fresh(bot.id).then(() => say('Started a new conversation.')).catch(e => setError((e as Error).message));
+    } },
+    ...(room ? [] : [{ label: '/compact', detail: 'Summarize older messages to save tokens', icon: <Shrink size={15} />, onSelect: () => {
+      if (running) { setError('Wait for the reply to finish, then compact.'); return; }
+      say('Compacting…');
+      featuresApi.compact(bot.id).then(result => say(`Compacted to about ${formatTokens(result.tokens)} tokens.`)).catch(e => setError((e as Error).message));
+    } }]),
+    { label: '/stats', detail: 'Subscription usage and limits', icon: <BarChart3 size={15} />, aliases: ['/usage', '/limits'], onSelect: () => setModal('usage') },
+    ...(running ? [{ label: '/stop', detail: 'Stop the current reply', icon: <Square size={15} />, onSelect: () => void stop() }] : []),
+    ...(room ? [] : [{ label: '/learn', detail: 'Turn this chat’s corrections into lessons and skills', icon: <Brain size={15} />, onSelect: () => {
+      say('Learning from this chat…');
+      featuresApi.improve(bot.id).then(result => say(result.lessons || result.skills
+        ? `Learned ${result.lessons} lesson${result.lessons === 1 ? '' : 's'} and updated ${result.skills} skill${result.skills === 1 ? '' : 's'}.`
+        : 'Nothing new to learn from this chat yet.')).catch(e => setError((e as Error).message));
+    } }]),
+    ...(room ? [] : [{ label: '/team', detail: 'Orchestrate several models together', icon: <Users size={15} />, onSelect: () => setModal('team') }]),
+    { label: '/call', detail: `Start a voice call with ${displayName(bot)}`, icon: <Phone size={15} />, onSelect: openCall },
     { label: '/dictate', detail: 'Toggle dictation', icon: <Mic size={15} />, onSelect: toggleDictation },
-    { label: '/teach', detail: 'Teach by screen recording', icon: <Clapperboard size={15} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) },
+    { label: '/attach', detail: 'Add files or photos', icon: <Paperclip size={15} />, onSelect: chooseFiles },
+    ...(room ? [] : [{ label: '/teach', detail: 'Teach by screen recording', icon: <Clapperboard size={15} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
+    { label: '/details', detail: detailsOpen ? 'Hide the side panel' : 'Show the side panel', icon: <PanelRight size={15} />, onSelect: () => setDetailsOpen(!detailsOpen) },
+    { label: '/bot', detail: `${displayName(bot)}’s settings, skills and memories`, icon: <Sliders size={15} />, onSelect: () => useConfigUI.getState().openBotSettings(bot.id) },
+    { label: '/apps', detail: 'Connect apps', icon: <Activity size={15} />, onSelect: () => setModal('apps') },
+    { label: '/settings', detail: 'Marion Agent settings', icon: <Settings size={15} />, aliases: ['/preferences'], onSelect: () => useConfigUI.getState().openAppSettings() },
   ];
-  const runCommand = (command: typeof commands[number]) => {
-    if (shown.trim() === command.label) { discardDictation(); setText(''); }
-    if (command.label === '/usage') plusButton.current?.focus();
+  const findCommand = (typed: string) => commands.find(item => item.label === typed || item.aliases?.includes(typed));
+  const runCommand = (command: Command) => {
+    discardDictation();
+    setText('');
+    drafts.delete(bot.id);
+    setSlashIndex(0);
+    if (['/stats', '/apps', '/team', '/bot', '/settings'].includes(command.label)) plusButton.current?.focus();
     else ref.current?.focus();
     command.onSelect();
   };
+  // Typing "/" at the start opens the command list, filtered as you type.
+  const slashQuery = /^\/[\w-]*$/.test(shown) && !files.length ? shown.toLowerCase() : null;
+  const slashMatches = slashQuery === null || slashQuery === slashDismissed ? [] : commands.filter(command =>
+    command.label.startsWith(slashQuery) || command.aliases?.some(alias => alias.startsWith(slashQuery)));
+  const slashOpen = slashMatches.length > 0;
+  const slashActive = Math.min(slashIndex, Math.max(0, slashMatches.length - 1));
+  useEffect(() => { setSlashIndex(0); }, [slashQuery]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const hasMessage = shown.trim().length > 0 || files.length > 0;
   const multiline = shown.includes('\n') || lines > 1;
 
@@ -311,6 +355,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
         ref.current?.focus();
       }}>
       {dropping && <div className="composer-drop" aria-hidden="true">Drop photos or files to attach</div>}
+      {notice && !error && <div className="composer__error composer__notice" role="status">{notice}</div>}
       {error && <div className="composer__error">{error} <button type="button" className="link-btn" onClick={() => setError(null)}>Dismiss</button></div>}
       <div className="composer__progress" role="status" data-visible={sending || state !== 'idle'}>
         <span className="loading-dot" aria-hidden="true" />{sending ? 'Sending…' : state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…' : ''}
@@ -330,6 +375,21 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
         {files.map((file, index) => <DraftAttachment key={`${file.name}:${file.lastModified}:${index}`} file={file} disabled={sending}
           remove={() => setFiles(current => current.filter((_, position) => position !== index))} />)}
       </ul>}
+      {slashOpen && (
+        <div className="slash-menu" id={`${inputId}-commands`} role="listbox" aria-label="Commands">
+          <div className="slash-menu__header">Commands</div>
+          {slashMatches.map((command, index) => (
+            <button key={command.label} id={`${inputId}-command-${index}`} type="button" role="option" aria-selected={index === slashActive} tabIndex={-1}
+              className={`slash-menu__item${index === slashActive ? ' is-active' : ''}`}
+              onMouseDown={event => event.preventDefault()} onMouseEnter={() => setSlashIndex(index)} onClick={() => runCommand(command)}>
+              <span className="slash-menu__icon" aria-hidden="true">{command.icon}</span>
+              <span className="slash-menu__label">{command.label}</span>
+              <span className="slash-menu__detail">{command.detail}</span>
+            </button>
+          ))}
+          <div className="slash-menu__footer"><kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>Enter</kbd> to run · <kbd>Esc</kbd> to close</div>
+        </div>
+      )}
       <div className={`composer${multiline ? ' is-multiline' : ''}`}>
         <div className="composer__left">
           <span className="composer__plus-anchor">
@@ -371,8 +431,20 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
               addFiles(pasted.map(named));
             }}
             onKeyDown={(e) => {
+              if (slashOpen && !e.nativeEvent.isComposing) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const step = e.key === 'ArrowDown' ? 1 : -1;
+                  setSlashIndex((slashActive + step + slashMatches.length) % slashMatches.length);
+                  return;
+                }
+                if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); runCommand(slashMatches[slashActive]); return; }
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setSlashDismissed(slashQuery ?? ''); return; }
+              }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
             }}
+            aria-controls={slashOpen ? `${inputId}-commands` : undefined}
+            aria-activedescendant={slashOpen ? `${inputId}-command-${slashActive}` : undefined} aria-autocomplete="list"
             aria-label={`Message ${bot.name}`}
           />
         </div>

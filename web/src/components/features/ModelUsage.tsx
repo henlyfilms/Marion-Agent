@@ -7,6 +7,32 @@ import { sortedRows, useStore } from '../../store';
 import { useVoice } from '../../voice/call';
 import { callModelFor, isLocalCallActive, useLocalCall } from '../../voice/localCall';
 
+const resetFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+
+/** One plan window as a glowing bar that glides to its value; warms up as the limit gets close. */
+function UsageMeter({ label, used, resetsAt }: { label: string; used: number; resetsAt?: number }) {
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setShown(Math.min(100, Math.max(0, used))));
+    return () => cancelAnimationFrame(frame);
+  }, [used]);
+  const tone = used >= 90 ? 'is-high' : used >= 70 ? 'is-warm' : '';
+  const reset = resetsAt ? new Date(resetsAt) : null;
+  const percent = used > 0 && used < 1 ? '<1' : String(Math.round(used));
+  return (
+    <div className={`model-usage__window ${tone}`}>
+      <div className="model-usage__row">
+        <span>{label}</span>
+        <strong>{percent}%<small> used</small></strong>
+      </div>
+      <div className="model-usage__bar" role="meter" aria-label={`${label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(used)}>
+        <span style={{ transform: `scaleX(${shown / 100})` }} />
+      </div>
+      {reset && !Number.isNaN(reset.getTime()) && <span className="model-usage__reset">Resets {resetFormat.format(reset)}</span>}
+    </div>
+  );
+}
+
 export function ModelUsage({ bot, open }: { bot: Bot; open: boolean }) {
   const onCall = useLocalCall(state => state.botId === bot.id && isLocalCallActive(state));
   const realtime = useVoice(state => state.botId === bot.id && state.status === 'live' ? state.model : undefined);
@@ -36,7 +62,7 @@ export function ModelUsage({ bot, open }: { bot: Bot; open: boolean }) {
   const windows = plan?.provider === provider ? plan?.windows ?? [] : [];
 
   return (
-    <div className="panel-card context-card model-usage">
+    <div className={`panel-card context-card model-usage${provider ? ` model-usage--${provider}` : ''}`}>
       <div className="context-card__top">
         <span className="context-card__label">Model usage</span>
         <span className="context-card__value" title={realtime || model?.model}>{realtime || model?.label || lastChatUsage?.label || model?.model || 'Default model'}</span>
@@ -44,12 +70,11 @@ export function ModelUsage({ bot, open }: { bot: Bot; open: boolean }) {
       {usage
         ? <span className="context-card__meta" title={usageLabel(usage)}>Last response · {usage.estimated ? '≈' : ''}{formatTokens(usage.input + usage.output)} tokens</span>
         : <span className="context-card__meta">{realtime ? 'Usage unavailable until reported by the provider.' : 'Usage appears after the first response.'}</span>}
-      {windows.map(window => (
-        <div key={window.id} className="context-card__meta">
-          <span>{window.label}{plan?.status === 'stale' ? ' · Last checked' : ''}</span>
-          <span>{Math.round(window.usedPercent)}% of plan used</span>
+      {windows.length > 0 && (
+        <div className={`model-usage__windows${plan?.status === 'stale' ? ' is-stale' : ''}`}>
+          {windows.map(window => <UsageMeter key={window.id} label={window.label} used={window.usedPercent} resetsAt={window.resetsAt} />)}
         </div>
-      ))}
+      )}
     </div>
   );
 }

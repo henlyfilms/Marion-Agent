@@ -15,6 +15,8 @@ import { getSecret, getSetting, setSecret, setSetting } from './schema.js';
  */
 export interface LifeLinkSettings {
   enabled: boolean;
+  /** Copy changed chats automatically every minute. Off: only "Sync now" copies. */
+  autoSync: boolean;
   endpoint: string;
   lifeEmail: string;
   lastSyncAt: number | null;
@@ -23,7 +25,7 @@ export interface LifeLinkSettings {
 }
 
 const DEFAULT_ENDPOINT = 'https://marionberry.app/api/mcp';
-const DEFAULTS: LifeLinkSettings = { enabled: false, endpoint: DEFAULT_ENDPOINT, lifeEmail: '', lastSyncAt: null, lastError: null, syncedChats: 0 };
+const DEFAULTS: LifeLinkSettings = { enabled: false, autoSync: true, endpoint: DEFAULT_ENDPOINT, lifeEmail: '', lastSyncAt: null, lastError: null, syncedChats: 0 };
 const keyName = (userId: string) => `life_link_key:${userId}`;
 const legacyKeyName = (userId: string) => `life_service_key:${userId}`;
 /** Life's limits: a batch of chats must fit in 64 KB; a single chat may be up to 640 KB. */
@@ -89,9 +91,17 @@ async function lifeTool<T>(endpoint: string, key: string, name: string, args: Re
 const missingSync = 'Connected, but Marion Life hasn’t turned on chat sync yet. Chats will copy over once it does.';
 
 /** Save the key, check it with Life (whoami), and start copying chats. */
-export async function connectLife(userId: string, input: { endpoint?: string; linkKey?: string; enabled?: boolean }) {
+export async function connectLife(userId: string, input: { endpoint?: string; linkKey?: string; enabled?: boolean; autoSync?: boolean }) {
   const current = lifeLinkSettings(userId);
   const next: LifeLinkSettings = { ...current };
+  // Turning auto sync on or off is a local preference: no key check or network call needed.
+  if (typeof input.autoSync === 'boolean' && input.endpoint === undefined && !input.linkKey && input.enabled === undefined) {
+    next.autoSync = input.autoSync;
+    setSetting(userId, 'life-link', next);
+    if (next.autoSync && next.enabled) queueMicrotask(() => { void syncLife(userId).catch(() => {}); });
+    return next;
+  }
+  if (typeof input.autoSync === 'boolean') next.autoSync = input.autoSync;
   if (input.endpoint !== undefined) next.endpoint = input.endpoint ? normalizeEndpoint(input.endpoint) : DEFAULT_ENDPOINT;
   if (input.linkKey) {
     const key = input.linkKey.trim();
@@ -178,10 +188,11 @@ function chatDocument(row: ChatRow) {
 
 const syncing = new Set<string>();
 
-export async function syncLife(userId: string, opts: { force?: boolean } = {}) {
+export async function syncLife(userId: string, opts: { force?: boolean; auto?: boolean } = {}) {
   const settings = lifeLinkSettings(userId);
   const key = getSecret(keyName(userId));
   if (!settings.enabled || !key || syncing.has(userId)) return { synced: 0 };
+  if (opts.auto && !settings.autoSync) return { synced: 0 };
   syncing.add(userId);
   let synced = 0;
   const errorBefore = settings.lastError;
@@ -228,11 +239,11 @@ export async function syncLife(userId: string, opts: { force?: boolean } = {}) {
   }
 }
 
-/** Every minute, copy changed chats of every linked workspace. */
+/** Every minute, copy changed chats of every linked workspace that has auto sync on. */
 export function startLifeSync() {
   const timer = setInterval(() => {
     const users = db.prepare("SELECT user_id FROM user_settings WHERE key='life-link'").all() as { user_id: string }[];
-    for (const { user_id } of users) void syncLife(user_id).catch(() => {});
+    for (const { user_id } of users) void syncLife(user_id, { auto: true }).catch(() => {});
   }, 60_000);
   timer.unref?.();
 }

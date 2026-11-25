@@ -203,6 +203,19 @@ export function LifeLinkSection() {
             {s?.enabled && <button type="button" className="cfg-btn cfg-btn--primary" disabled={!!busy} onClick={() => void run('sync', featuresApi.syncLife, 'All chats are copied.')}>{busy === 'sync' ? 'Copying…' : 'Sync now'}</button>}
           </div>
           {s?.lastError && <div className="cfg-error cfg-error--inset">{s.lastError}</div>}
+          {s && (
+            <div className="cfg-row cfg-row--divided">
+              <div className="cfg-row__text">
+                <div className="cfg-row__title">Auto sync</div>
+                <div className="cfg-row__sub">{s.autoSync === false ? 'Off. Chats copy only when you press Sync now.' : s.enabled ? 'Chats copy over about a minute after each reply.' : 'Once linked, chats copy over about a minute after each reply.'}</div>
+              </div>
+              <Switch on={s.autoSync !== false} disabled={busy === 'auto'} label="Auto sync chats to Marion Life"
+                onChange={on => {
+                  setLink(current => current && { ...current, settings: { ...current.settings, autoSync: on } });
+                  void run('auto', () => featuresApi.saveLifeLink({ autoSync: on }));
+                }} />
+            </div>
+          )}
         </div>
       </section>
       <section className="cfg-section">
