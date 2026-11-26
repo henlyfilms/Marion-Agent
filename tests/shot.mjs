@@ -24,7 +24,7 @@ let browser;
 try {
   for (let i = 0; i < 80 && !(await fetch(app + '/api/health').catch(() => null))?.ok; i++) await new Promise(r => setTimeout(r, 100));
   browser = await chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE || undefined });
-  const context = await browser.newContext({ viewport: { width: Number(process.env.W ?? 1320), height: Number(process.env.H ?? 860) }, deviceScaleFactor: 2,
+  const context = await browser.newContext({ viewport: { width: Number(process.env.W ?? 1320), height: Number(process.env.H ?? 860) }, deviceScaleFactor: Number(process.env.DPR ?? 2),
     userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/130 Safari/537.36 Electron/33.0.0', colorScheme: 'dark' });
   const page = await context.newPage();
   page.on('pageerror', e => console.log('pageerror', e.stack ?? String(e)));
