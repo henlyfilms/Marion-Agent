@@ -4,7 +4,6 @@ import { BotAvatar, BotAvatarFor } from '../../avatar/BotAvatar';
 import { BotShapePicker } from '../../avatar/BotShapePicker';
 import { BotColorPicker } from '../../avatar/BotColorPicker';
 import { BotStemPicker } from '../../avatar/BotStemPicker';
-import { Reveal } from '../Reveal';
 import { botVars } from '../../lib/colors';
 import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
@@ -56,6 +55,7 @@ export function BotSettingsModal() {
 
   const tabs: { id: BotSettingsTab; label: string; count?: number }[] = [
     { id: 'general', label: 'General' },
+    { id: 'theme', label: 'Theme' },
     { id: 'skills', label: 'Skills', count: data?.skills.length },
     { id: 'memories', label: 'Memories', count: data?.memories.length },
     { id: 'routines', label: 'Routines', count: (routines ?? data?.routines)?.length },
@@ -96,6 +96,7 @@ export function BotSettingsModal() {
         <div className="cfg-content" key={target.tab}>
           {loadError && <div className="cfg-error">Couldn’t load settings: {loadError}</div>}
           {target.tab === 'general' && <GeneralTab key={bot.id} bot={bot} onClose={onClose} />}
+          {target.tab === 'theme' && <ThemeTab key={bot.id} bot={bot} />}
           {target.tab === 'skills' && <SkillsTab bot={bot} skills={data?.skills} onChange={reload} />}
           {target.tab === 'memories' && <MemoriesTab bot={bot} data={data} onChange={reload} />}
           {target.tab === 'routines' && <RoutinesTab bot={bot} routines={routines ?? data?.routines} />}
@@ -113,7 +114,6 @@ const draftOf = (b: Bot): Draft => ({ name: b.name, label: b.label, description:
 
 function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot));
-  const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
 
@@ -147,13 +147,11 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
           <BotAvatar shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow} size={72} />
           <div className="cfg-look__text">
             <div className="cfg-look__name">{draft.name || 'New Bot'}</div>
-            <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => setPicker(!picker)} aria-expanded={picker}>
-              {picker ? 'Done' : 'Change look'}
+            <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => useConfigUI.setState({ botSettings: { botId: bot.id, tab: 'theme' } })}>
+              Change look
             </button>
           </div>
         </div>
-        <Reveal open={picker}><LookPicker shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow}
-          onShape={(s) => put('avatarShape', s)} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} /></Reveal>
       </section>
 
       <section className="cfg-section cfg-grid">
@@ -387,6 +385,60 @@ function LookPicker({ shape, color, stemColor, glow, onShape, onColor, onStem, o
       <BotShapePicker shape={shape} color={color} stemColor={stemColor} glow={glow} onShape={onShape} />
       <BotColorPicker color={color} onChange={onColor} />
       <BotStemPicker color={stemColor} onChange={onStem} glow={glow} onGlow={onGlow} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+type Look = Pick<Draft, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow'>;
+const lookOf = (b: Bot): Look => ({ avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, avatarGlow: !!b.avatarGlow });
+
+/** The Bot's look: berry shape, colour, stem and glow, with a live preview and its own save bar. */
+function ThemeTab({ bot }: { bot: Bot }) {
+  const [look, setLook] = useState<Look>(() => lookOf(bot));
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
+  const base = lookOf(bot);
+  const changed = (Object.keys(look) as (keyof Look)[]).filter((k) => look[k] !== base[k]);
+  const dirty = changed.length > 0;
+  const put = <K extends keyof Look>(k: K, v: Look[K]) => setLook((d) => ({ ...d, [k]: v }));
+  const save = async () => {
+    if (!dirty) return;
+    setSaving(true);
+    try {
+      const patch = Object.fromEntries(changed.map((k) => [k, look[k]]));
+      const { bot: next } = await configApi.updateBot(bot.id, patch);
+      useStore.setState((s) => ({ bots: s.bots.map((b) => (b.id === next.id ? next : b)) }));
+      setNote({ text: 'Saved', tone: 'ok' });
+    } catch (e) {
+      setNote({ text: (e as Error).message, tone: 'error' });
+    } finally {
+      setSaving(false);
+      setTimeout(() => setNote(null), 2400);
+    }
+  };
+  return (
+    <div className="cfg-page">
+      <div className="cfg-page__head">
+        <div>
+          <div className="cfg-page__title">Theme</div>
+          <div className="cfg-page__sub">How {bot.name} looks in the sidebar, chats and menus.</div>
+        </div>
+      </div>
+      <section className="cfg-section">
+        <div className="cfg-look">
+          <BotAvatar shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow} size={72} />
+          <div className="cfg-look__text"><div className="cfg-look__name">{bot.name}</div></div>
+        </div>
+        <LookPicker shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow}
+          onShape={(s) => put('avatarShape', s)} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} />
+      </section>
+      <div className={`cfg-savebar${dirty ? ' is-dirty' : ''}`}>
+        <span className={`cfg-savebar__note${note?.tone === 'error' ? ' is-error' : ''}`} role="status">{note?.text ?? (dirty ? 'Unsaved changes' : '')}</span>
+        <button type="button" className="cfg-btn cfg-btn--secondary" disabled={!dirty || saving} onClick={() => setLook(lookOf(bot))}>Discard</button>
+        <button type="button" className="cfg-btn cfg-btn--primary" disabled={!dirty || saving} onClick={save}>{saving ? 'Saving…' : 'Save changes'}</button>
+      </div>
     </div>
   );
 }
