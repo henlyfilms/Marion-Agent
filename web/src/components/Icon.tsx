@@ -49,16 +49,19 @@ const ICONS: Record<IconName, { icon: LucideIcon; filled?: boolean; lift?: numbe
   voice_b: { icon: AudioWaveform },
 };
 
-interface Props { name: IconName; size?: number; opacity?: number; className?: string; style?: CSSProperties; color?: string }
+interface Props { name: IconName; size?: number; opacity?: number; className?: string; style?: CSSProperties; color?: string;
+  /** Draw the svg the full size of its button (the glyph stays `size`), so no inner box is rounded off-centre at page zoom. */
+  fill?: number }
 
 /** Single-color line icon that inherits `currentColor` (or `color`). */
-export function Icon({ name, size = 16, opacity, className, style, color }: Props) {
+export function Icon({ name, size = 16, opacity, className, style, color, fill: box }: Props) {
   const { icon: Glyph, filled, lift } = ICONS[name] ?? ICONS.more;
   return (
     <Glyph
       aria-hidden
       className={className}
-      size={size}
+      size={box ?? size}
+      {...(box ? { viewBox: (pad => `${-pad} ${-pad} ${24 + pad * 2} ${24 + pad * 2}`)(((box / size) * 24 - 24) / 2) } : null)}
       strokeWidth={size <= 12 ? 2.25 : 2}
       fill={filled ? 'currentColor' : 'none'}
       style={{ display: 'inline-block', flexShrink: 0, opacity, color, ...(lift ? { transform: `translateY(${(-lift * size / 24).toFixed(2)}px)` } : null), ...style }}

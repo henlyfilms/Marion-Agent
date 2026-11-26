@@ -70,7 +70,7 @@ export function useChatReorder(move: (move: ChatMove) => void, closeSwipe: () =>
     g.list.setPointerCapture(g.pointerId);
     closeSwipe();
     g.rows = [...g.list.querySelectorAll<HTMLElement>('[data-chat-id]')].filter(row =>
-      row.offsetHeight > 0 && row.dataset.starred === g.row.dataset.starred);
+      row.offsetHeight > 0 && row.dataset.tier === g.row.dataset.tier);
     g.rows.forEach(row => row.getAnimations().forEach(animation => animation.cancel()));
     g.row.classList.add('is-moving');
     g.list.classList.add('is-reordering');

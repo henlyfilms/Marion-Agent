@@ -127,8 +127,8 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
           <NativeSelect label="Call model for this chat" value={chosen ? key(chosen) : ''} options={chosen && !modelOptions.some(o => o.value === key(chosen)) ? [...modelOptions, { value: key(chosen), label: chosen.label ?? chosen.model }] : modelOptions} onChange={(value) => pick(value, false)} />
         </div>
         <div className="panel-row panel-row--setting">
-          <span>Default for all chats</span>
-          <NativeSelect label="Default call model" value={fallback ? key(fallback) : ''} options={[{ value: '', label: 'Each chat’s model' }, ...modelOptions.slice(1)]} onChange={(value) => pick(value, true)} />
+          <span>All chats</span>
+          <NativeSelect label="Default call model" value={fallback ? key(fallback) : ''} options={[{ value: '', label: 'Chat’s own' }, ...modelOptions.slice(1)]} onChange={(value) => pick(value, true)} />
         </div>
         <div className="panel-row panel-row--setting">
           <span>Voice</span>

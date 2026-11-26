@@ -10,7 +10,7 @@
 @keyframes wfx-in { from { opacity: 0; transform: scale(0.82); } to { opacity: 1; transform: none; } }
 
 /* The body: a soft bob with the faintest squash, like a breath. */
-.bot-avatar.is-working > svg { transform-origin: 50% 90%; animation: wfx-bob 1.9s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
+.bot-avatar.is-working > :is(svg, .bot-avatar__photo) { transform-origin: 50% 90%; animation: wfx-bob 1.9s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
 @keyframes wfx-bob {
   0%, 100% { transform: translateY(0) scale(1, 1); }
   45% { transform: translateY(-5%) scale(0.985, 1.02); }

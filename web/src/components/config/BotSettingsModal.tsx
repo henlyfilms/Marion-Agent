@@ -144,7 +144,7 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
     <div className="cfg-page">
       <section className="cfg-section">
         <div className="cfg-look">
-          <BotAvatar shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow} size={72} />
+          <BotAvatar shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow} image={bot.avatarImage} size={72} />
           <div className="cfg-look__text">
             <div className="cfg-look__name">{draft.name || 'New Bot'}</div>
             <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => useConfigUI.setState({ botSettings: { botId: bot.id, tab: 'theme' } })}>
@@ -197,15 +197,19 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
               Start new
             </ConfirmButton>
           </div>
-          {!bot.isPrimary && (
-            <div className="cfg-row">
-              <div className="cfg-row__text">
-                <div className="cfg-row__title">Make primary</div>
-                <div className="cfg-row__sub">Your go-to Bot. It reaches out first and keeps the others on track.</div>
-              </div>
-              <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => configApi.makePrimary(bot.id).then(() => flash(`${bot.name} is now your primary Bot`)).catch((e) => flash(e.message, 'error'))}>Make primary</button>
+          <div className="cfg-row">
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">Primary</div>
+              <div className="cfg-row__sub">Your go-to Bot. It reaches out first, keeps the others on track and sits at the top of your chats.</div>
             </div>
-          )}
+            <Switch on={bot.isPrimary} label="Primary" onChange={(on) => {
+              // Shown at once; the roster event confirms it (owner, Nov 25: "turn it on and then you can't turn it off").
+              useStore.setState((s) => ({ bots: s.bots.map((b) => ({ ...b, isPrimary: on ? b.id === bot.id : b.id === bot.id ? false : b.isPrimary })) }));
+              (on ? configApi.makePrimary(bot.id) : configApi.clearPrimary(bot.id))
+                .then(() => flash(on ? `${bot.name} is now your primary Bot` : `${bot.name} is no longer primary`))
+                .catch((e) => { flash(e.message, 'error'); useStore.getState().loadBots().catch(() => {}); });
+            }} />
+          </div>
         </div>
       </section>
 
@@ -215,7 +219,7 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
           <div className="cfg-row">
             <div className="cfg-row__text">
               <div className="cfg-row__title">Delete {bot.name}</div>
-              <div className="cfg-row__sub">{bot.isPrimary ? 'Make another Bot primary first.' : 'Removes its chat, memories, skills and routines for good.'}</div>
+              <div className="cfg-row__sub">{bot.isPrimary ? 'Turn off Primary first.' : 'Removes its chat, memories, skills and routines for good.'}</div>
             </div>
             <ConfirmButton
               disabled={bot.isPrimary}
@@ -443,8 +447,23 @@ function LookPicker({ shape, color, stemColor, glow, onShape, onColor, onStem, o
 
 // ---------------------------------------------------------------------------
 
-type Look = Pick<Draft, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow'>;
-const lookOf = (b: Bot): Look => ({ avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, avatarGlow: !!b.avatarGlow });
+type Look = Pick<Draft, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow'> & { avatarImage: string | null };
+const lookOf = (b: Bot): Look => ({ avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, avatarGlow: !!b.avatarGlow, avatarImage: b.avatarImage ?? null });
+
+/** Any photo → a 256px square, centre-cropped, small enough to keep with the Bot (WebP, or PNG where WebP can't be made). */
+async function squarePhoto(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('Choose an image file.');
+  const bitmap = await createImageBitmap(file).catch(() => { throw new Error('That image could not be opened.'); });
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 256, 256);
+  bitmap.close();
+  const webp = canvas.toDataURL('image/webp', 0.9);
+  return webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png');
+}
 
 /** The Bot's look: berry shape, colour, stem and glow, with a live preview and its own save bar. */
 function ThemeTab({ bot }: { bot: Bot }) {
@@ -480,11 +499,24 @@ function ThemeTab({ bot }: { bot: Bot }) {
       </div>
       <section className="cfg-section">
         <div className="cfg-look">
-          <BotAvatar shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow} size={72} />
-          <div className="cfg-look__text"><div className="cfg-look__name">{bot.name}</div></div>
+          <BotAvatar shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow} image={look.avatarImage} size={72} />
+          <div className="cfg-look__text">
+            <div className="cfg-look__name">{bot.name}</div>
+            <div className="cfg-look__actions">
+              <label className="cfg-btn cfg-btn--secondary cfg-upload">
+                {look.avatarImage ? 'Change photo' : 'Upload photo'}
+                <input type="file" accept="image/*" onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) squarePhoto(file).then((url) => put('avatarImage', url)).catch((err) => { setNote({ text: (err as Error).message, tone: 'error' }); setTimeout(() => setNote(null), 2400); });
+                }} />
+              </label>
+              {look.avatarImage && <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => put('avatarImage', null)}>Use a berry</button>}
+            </div>
+          </div>
         </div>
         <LookPicker shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow}
-          onShape={(s) => put('avatarShape', s)} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} />
+          onShape={(s) => setLook((d) => ({ ...d, avatarShape: s, avatarImage: null }))} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} />
       </section>
       <div className={`cfg-savebar${dirty ? ' is-dirty' : ''}`}>
         <span className={`cfg-savebar__note${note?.tone === 'error' ? ' is-error' : ''}`} role="status">{note?.text ?? (dirty ? 'Unsaved changes' : '')}</span>

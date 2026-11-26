@@ -28,6 +28,7 @@ export function toBot(r: any): Bot {
     avatarColor: r.avatar_color,
     avatarStemColor: r.avatar_stem_color,
     avatarGlow: !!r.avatar_glow,
+    avatarImage: r.avatar_image || null,
     mode: r.mode,
     isPrimary: !!r.is_primary,
     kind: r.kind === 'room' ? 'room' : 'agent',

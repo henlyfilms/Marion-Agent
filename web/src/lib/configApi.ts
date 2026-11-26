@@ -65,6 +65,7 @@ export const configApi = {
   deletedBots: () => req<{ bots: (Bot & { deletedAt: number; purgeAt: number })[] }>('GET', '/bots/deleted'),
   restoreBot: (botId: string) => req<{ bot: Bot }>('POST', `/bots/${botId}/restore`),
   makePrimary: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/primary`),
+  clearPrimary: (botId: string) => req<{ ok: true }>('DELETE', `/bots/${botId}/primary`),
   fresh: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/fresh`),
 
   deleteMemory: (id: string) => req<{ ok: true }>('DELETE', `/memories/${id}`),

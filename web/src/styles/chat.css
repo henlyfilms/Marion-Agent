@@ -27,6 +27,16 @@
   display: flex; align-items: center; gap: var(--toolbar-gap);
 }
 .conversation-actions__share { position: relative; display: inline-flex; }
+/* Over a bubble, text or a picture (ConversationActions checks), the buttons get a dark frosted backing so the
+   white glyph stays easy to see. Over the plain background nothing changes (owner, Nov 25). */
+.conversation-actions .icon-btn { transition: background-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out); }
+.conversation-actions .icon-btn.is-over-content {
+  background: color-mix(in srgb, var(--color-bg-chrome) 78%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4); backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--color-ink) 14%, transparent), 0 2px 10px rgb(0 0 0 / 0.28);
+}
+.conversation-actions .icon-btn.is-over-content:hover:not(:disabled),
+.conversation-actions .icon-btn.is-over-content[aria-expanded="true"] { background: color-mix(in srgb, var(--color-bg-chrome) 70%, var(--color-ink) 12%); }
 .conversation-actions__share .menu { min-width: 170px; }
 
 /* ---------- transcript ---------- */
