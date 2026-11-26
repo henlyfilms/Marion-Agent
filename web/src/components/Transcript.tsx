@@ -158,13 +158,22 @@ function SystemRow({ row }: { row: Row }) {
   return null;
 }
 
+const PAGE = 60;
+
 interface Props { bot: Bot; rows: Row[]; live: LiveState | undefined; loaded: boolean }
 
 export function Transcript({ bot, rows, live, loaded }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
-  const items = useMemo(() => buildItems(rows), [rows]);
+  const allItems = useMemo(() => buildItems(rows), [rows]);
+  // Only draw the newest part of a long chat (switching bots used to lay out the whole history at once).
+  // Older messages are added as you scroll up, keeping your place.
+  const [win, setWin] = useState({ bot: bot.id, limit: PAGE });
+  const limit = win.bot === bot.id ? win.limit : PAGE;
+  const items = allItems.length > limit ? allItems.slice(allItems.length - limit) : allItems;
+  const hidden = allItems.length - items.length;
+  const keepPlace = useRef<number | null>(null);
 
   const running = !!live?.isRunning;
   const waiting = !running && (!!live?.awaiting || live?.activity?.kind === 'waiting_for_you');
@@ -175,7 +184,9 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
   // Keep pinned to the bottom while new content arrives, unless the user scrolled up.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (keepPlace.current !== null) { el.scrollTop = el.scrollHeight - keepPlace.current; keepPlace.current = null; }
+    else if (stick.current) el.scrollTop = el.scrollHeight;
   });
   // Jump to bottom when switching bots.
   useLayoutEffect(() => {
@@ -189,6 +200,10 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     stick.current = dist < 40;
     setShowJump(dist > 200);
+    if (hidden > 0 && el.scrollTop < 400 && keepPlace.current === null) {
+      keepPlace.current = el.scrollHeight - el.scrollTop;
+      setWin({ bot: bot.id, limit: limit + PAGE });
+    }
   };
 
   const jump = () => {
