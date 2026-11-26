@@ -19,7 +19,7 @@ import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
 import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
 import { teamDelegate, teamDiscuss } from './orchestration.js';
-import { botFolders, hasFullAccess, listFolder, moveInFolder, resolveBotFolder } from '../features/folders.js';
+import { botFolders, hasFullAccess, folderForTask, listFolder, moveInFolder } from '../features/folders.js';
 import { appControlTool, runAppControl } from '../features/app-control.js';
 import { agentSettings } from '../features/agent-settings.js';
 import { orchestrate } from './orchestrate.js';
@@ -248,7 +248,7 @@ export const TOOLS: ToolDef[] = [
     parameters: obj({
       provider: { type: 'string', enum: ['claude', 'codex', 'gemini'] },
       prompt: { type: 'string', description: 'The full task. The provider knows nothing else, so include every detail it needs' },
-      folder: { type: 'string', description: 'Optional: a folder shared with you (its name or path). The provider then works inside that folder on this Mac' },
+      folder: { type: 'string', description: 'Optional: a folder on this Mac to work in, by name (e.g. "Marion Agent") or full path. It does not need to be shared with you; the owner approves it' },
     }, ['provider', 'prompt']),
     activity: 'working',
     label: 'Asking another assistant',
@@ -256,7 +256,7 @@ export const TOOLS: ToolDef[] = [
       const { provider, prompt } = args;
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
-      const folder = args.folder ? resolveBotFolder(ctx.botId, args.folder) : undefined;
+      const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
       const task = folder
         ? `${prompt}\n\nWork only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.`
         : prompt;
@@ -291,12 +291,12 @@ export const TOOLS: ToolDef[] = [
       orchestrator: { type: 'string', description: 'Model name as the owner said it' },
       workers: { type: 'array', items: { type: 'string' }, description: 'Subagent model names as the owner said them' },
       worker_count: { type: 'integer', description: 'How many subagents to run (default: one per name)' },
-      folder: { type: 'string', description: 'Optional shared folder to work in (name or path)' },
+      folder: { type: 'string', description: 'Optional folder on this Mac to work in (name or full path); it does not need to be shared with you' },
       title: { type: 'string', description: 'A short title for the work' },
     }, ['goal', 'orchestrator', 'workers']),
     activity: 'messaging_named',
     label: 'Orchestrating a team',
-    impl: async (args, ctx) => orchestrate(ctx, args, args.folder ? resolveBotFolder(ctx.botId, args.folder) : undefined),
+    impl: async (args, ctx) => orchestrate(ctx, args, args.folder ? await folderForTask(ctx.botId, args.folder) : undefined),
   },
   {
     ...appControlTool,
@@ -782,7 +782,8 @@ export function policyFor(userId: string, toolName: string, args: any, botId?: s
   // A task inside a folder the owner already shared with this bot can be set to "Always allow".
   if (toolName === 'ask_subscription' && args?.folder) {
     const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, 'ask_subscription_folder') as any;
-    return { decision: p?.mode === 'always_allow' ? 'allow' : p?.mode === 'blocked' ? 'block' : 'ask', key: 'ask_subscription_folder', title: 'Assistant: work in a shared folder' };
+    const who = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' }[String(args.provider) as 'claude'] ?? 'an assistant';
+    return { decision: p?.mode === 'always_allow' ? 'allow' : p?.mode === 'blocked' ? 'block' : 'ask', key: 'ask_subscription_folder', title: `Assistant: have ${who} work in “${String(args.folder).slice(0, 80)}”` };
   }
   if (toolName === 'ask_subscription') return { decision: 'ask', key: toolName, title: 'Assistant: send this request to another provider' };
   if (toolName === 'ask_grok') return grok

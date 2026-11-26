@@ -212,7 +212,7 @@ function UpdatesSection() {
         </section>
       )}
       {available && status?.dirty && <p className="cfg-field__hint">Another chat has unsaved changes in the source folder. The update waits until that work is committed.</p>}
-      <p className="cfg-field__hint">Updating builds the new version on this Mac, then Marion Agent quits, installs it, and reopens. Your chats and settings stay as they are.</p>
+      <p className="cfg-field__hint">Updating builds the new version on this Mac while you keep working, then Marion Agent restarts by itself in a few seconds. Your chats and settings stay as they are.</p>
     </>
   );
 }

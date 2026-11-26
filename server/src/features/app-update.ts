@@ -82,13 +82,14 @@ set -uo pipefail
 state=${JSON.stringify(state)}
 say() { printf '{"state":"%s","message":"%s","at":%s}' "$1" "$2" "$(($(date +%s)*1000))" > "$state"; }
 cd ${JSON.stringify(dir)} || { say failed "Source folder missing."; exit 1; }
-if ! ./scripts/package-distributions.sh > "$state.log" 2>&1; then say failed "The build failed. See marion-update.json.log in the app data folder."; exit 1; fi
+if ! ./scripts/package-distributions.sh > "$state.log" 2>&1; then say failed "The build failed. Details: $state.log"; exit 1; fi
 work="$(mktemp -d)"
 /usr/bin/unzip -q releases/Marion-Agent-Mac-Installer.zip -d "$work" || { say failed "Couldn't open the new installer."; exit 1; }
-say installing "Installing… Marion Agent will reopen."
-/usr/bin/osascript -e 'tell application "Marion Agent" to quit' >/dev/null 2>&1 || true
-for _ in $(seq 1 120); do /bin/ps -axo comm= | /usr/bin/grep -q "Marion Agent.app/Contents/MacOS/Electron" || break; sleep 0.5; done
-if "$work/Marion Agent Installer/Install Marion Agent.command" >> "$state.log" 2>&1; then say idle "Updated."; else say failed "The installer stopped. See marion-update.json.log in the app data folder."; /usr/bin/open -a "Marion Agent" || true; fi
+say installing "Getting the new version ready… Marion Agent restarts by itself when it’s done."
+if "$work/Marion Agent Installer/Install Marion Agent.command" --replace-running >> "$state.log" 2>&1; then say idle "Updated."; else say failed "The install stopped, so the current version was kept. Details: $state.log"; fi
+# Whatever happened, never leave the owner without the app.
+sleep 2
+/bin/ps -axo comm= | /usr/bin/grep -q "Marion Agent.app/Contents/MacOS/Electron" || /usr/bin/open -b com.henlyfilms.marion-agent || /usr/bin/open -a "Marion Agent" || true
 rm -rf "$work"
 `;
   const child = spawn('/bin/bash', ['-c', script], { detached: true, stdio: 'ignore', env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ''}` } });

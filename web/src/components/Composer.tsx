@@ -19,9 +19,9 @@ import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneI
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
 import { useConfigUI } from '../configStore';
 import { setDetailsOpen, useCompactLayout, useDetailsOpen } from '../lib/layout';
+import { appendToDraft, clearDraft, getDraft, setDraft } from '../lib/drafts';
 
 const MAX_H = 200;
-const drafts = new Map<string, string>();
 const fileDrafts = new Map<string, File[]>();
 const photoTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const textFiles = '.txt,.md,.markdown,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.htm,.css,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.sh,.sql';
@@ -53,7 +53,7 @@ function DraftAttachment({ file, remove, disabled }: { file: File; remove: () =>
 export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const inputId = useId();
   const savingModel = useStore(s => !!s.savingChatModels[bot.id]);
-  const [text, setText] = useState(() => drafts.get(bot.id) ?? '');
+  const [text, setText] = useState(() => getDraft(bot.id));
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +72,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState(microphoneId);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mounted = useRef(true);
   const micPress = useRef<{ id: number; at: number; started: boolean }>();
   const selection = useRef<{ start: number; end: number }>();
   const setModal = useStore((s) => s.setModal);
@@ -94,7 +95,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   };
 
   // Per-bot drafts.
-  useEffect(() => { drafts.set(bot.id, text); }, [bot.id, text]);
+  useEffect(() => { setDraft(bot.id, text); }, [bot.id, text]);
   useEffect(() => {
     if (files.length) fileDrafts.set(bot.id, files);
     else fileDrafts.delete(bot.id);
@@ -120,7 +121,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       setFiles([]);
       fileDrafts.delete(bot.id);
       setText('');
-      drafts.delete(bot.id);
+      clearDraft(bot.id);
     } catch (e) {
       setError((e as Error).message || 'Message failed to send');
     } finally {
@@ -152,6 +153,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
 
   // Server transcription preserves the selection the user had when recording started.
   const insertText = (t: string) => {
+    if (!mounted.current) { appendToDraft(bot.id, t, appendDictation); return; }
     const el = ref.current;
     const range = selection.current;
     selection.current = undefined;
@@ -169,11 +171,19 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     });
   };
   const recorded = useDictation(insertText, setMicError, bot.voiceLanguage, 10 * 60_000, voiceStatus?.nativeSpeech);
-  const spoken = useLiveDictation(words => setText(current => appendDictation(current, words)), setMicError, bot.voiceLanguage);
+  const spoken = useLiveDictation(words => {
+    if (mounted.current) setText(current => appendDictation(current, words));
+    else appendToDraft(bot.id, words, appendDictation);
+  }, setMicError, bot.voiceLanguage);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
   const state = spoken.state !== 'idle' ? spoken.state : recorded.state;
   const liveWords = spoken.interim || recorded.interim;
   const shown = liveWords ? appendDictation(text, liveWords) : text;
+  // Leaving this chat mid-dictation: keep the words heard so far in its saved draft. Live words not yet
+  // final are saved now; a recorded dictation finishes transcribing and lands in the draft (insertText).
+  const latest = useRef({ text, live: spoken.interim });
+  latest.current = { text, live: spoken.interim };
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; setDraft(bot.id, appendDictation(latest.current.text, latest.current.live)); }; }, [bot.id]);
   const discardDictation = () => { spoken.stop(true); recorded.finish(true); };
   const stopDictation = () => {
     if (spoken.state === 'recording') playDictationSound(false);
@@ -317,7 +327,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const runCommand = (command: Command) => {
     discardDictation();
     setText('');
-    drafts.delete(bot.id);
+    clearDraft(bot.id);
     setSlashIndex(0);
     if (['/stats', '/apps', '/team', '/bot', '/settings'].includes(command.label)) plusButton.current?.focus();
     else ref.current?.focus();

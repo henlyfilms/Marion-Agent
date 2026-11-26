@@ -105,6 +105,49 @@ export function resolveBotFolder(botId: string, name: unknown): BotFolder {
   return match;
 }
 
+/** Folders searched (a few levels deep) when a task names a project folder that isn't shared yet. */
+const searchRoots = () => [join(home, 'Desktop', 'CODEX', 'Projects'), join(home, 'Desktop'), join(home, 'Documents'), join(home, 'Developer'), join(home, 'Projects'), home];
+const SKIP = new Set(['node_modules', 'Library', 'Applications', 'Pictures', 'Music', 'Movies', 'dist', 'build']);
+
+async function findFolderByName(wanted: string): Promise<string | null> {
+  const target = wanted.toLowerCase();
+  let visited = 0;
+  for (const root of searchRoots()) {
+    let level = [root];
+    for (let depth = 0; depth < 3 && level.length && visited < 5000; depth++) {
+      const next: string[] = [];
+      for (const dir of level) {
+        const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP.has(entry.name)) continue;
+          visited++;
+          const full = join(dir, entry.name);
+          if (entry.name.toLowerCase() === target) return full;
+          next.push(full);
+        }
+      }
+      level = next;
+    }
+  }
+  return null;
+}
+
+/**
+ * The folder a CLI task (ask_subscription / orchestrate) should run in. A shared folder wins; otherwise
+ * a full path or a project folder found by name. The owner approves the card that names the folder, so
+ * approving it is the access - the bot itself never needs the folder shared first.
+ */
+export async function folderForTask(botId: string, name: unknown): Promise<BotFolder> {
+  try { return resolveBotFolder(botId, name); } catch (notShared) {
+    const wanted = String(name ?? '').trim();
+    if (!wanted || !isDesktop) throw notShared;
+    const found = /^(~|\/)/.test(wanted) ? wanted : await findFolderByName(wanted.split('/').filter(Boolean).pop() ?? wanted);
+    if (!found) throw new Error(`Couldn't find a folder called "${wanted}" on this Mac. Ask the owner for its full path (like ~/Desktop/${wanted}) and call again with that path. Don't ask them to share it.`);
+    const path = await checkFolder(found);
+    return { path, label: basename(path), write: true };
+  }
+}
+
 /** Resolves a path inside a shared folder and refuses anything that escapes it (.., symlinks). */
 async function inside(folder: BotFolder, sub: unknown, mustExist = true) {
   const root = await realpath(folder.path);
@@ -155,7 +198,8 @@ export async function moveInFolder(botId: string, args: { folder?: string; moves
 /** One prompt line so the bot knows which folders it has and how to use or relay them. */
 export function foldersPromptLine(botId: string) {
   const folders = botFolders(botId);
-  if (!folders.length) return '';
+  const relay = isDesktop ? 'To have Claude Code, Codex or Gemini work in any project folder on this Mac, call ask_subscription (or orchestrate) with folder set to its name or full path (e.g. "Marion Agent"), even if it isn\'t shared with you: the owner approves that card and the approval is the access. Never ask the owner to share a folder first.' : '';
+  if (!folders.length) return relay;
   const full = hasFullAccess(botId) ? 'The owner gave you FULL ACCESS to their Mac: "Whole Mac" is their home folder, and Claude Code, Codex or Gemini can work anywhere in it (ask_subscription or orchestrate with folder "Whole Mac"). Still confirm anything destructive or irreversible with the owner first. ' : '';
-  return `${full}Folders on the owner's Mac shared with you: ${folders.map(folder => `"${folder.label}" (${folder.path}, ${folder.write ? 'read and write' : 'read only'})`).join('; ')}. Use folder_list and folder_move for them yourself. For work that needs looking inside files (sorting screenshots by what they show, editing documents), call ask_subscription with that folder: Claude Code, Codex or Gemini then works directly inside it. Tell them the full task; they know nothing else about it.`;
+  return `${full}Folders on the owner's Mac shared with you: ${folders.map(folder => `"${folder.label}" (${folder.path}, ${folder.write ? 'read and write' : 'read only'})`).join('; ')}. Use folder_list and folder_move for them yourself. For work that needs looking inside files (sorting screenshots by what they show, editing documents), call ask_subscription with that folder: Claude Code, Codex or Gemini then works directly inside it. Tell them the full task; they know nothing else about it. ${relay}`;
 }

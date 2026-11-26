@@ -23,6 +23,14 @@ else
   node_sha=977614af0504c81045e7fd85596dbca0e5f951b96681516dadafedcca8c447f7
 fi
 
+# --replace-running (used by "Install update" inside the app): prepare everything while the app keeps
+# running, then quit it just before the swap and reopen the new one, so it is only closed for seconds.
+replace_running=0
+if [[ ${1:-} == --replace-running ]]; then
+  replace_running=1
+  shift
+fi
+
 if [[ ${1:-} == --app-dir && $# -eq 2 ]]; then
   apps="$2"
   mkdir -p "$apps"
@@ -49,12 +57,19 @@ if [[ -e "$destination" || -L "$destination" ]]; then
   existing_inode="$(/usr/bin/stat -f %i "$destination")"
 fi
 
+app_running() { /bin/ps -axo comm= | /usr/bin/grep -Fx "$destination/Contents/MacOS/Electron" >/dev/null; }
 require_closed_app() {
-  if [[ -n "$existing_inode" ]] && /bin/ps -axo comm= | /usr/bin/grep -Fx "$destination/Contents/MacOS/Electron" >/dev/null; then
-    fail "Quit Marion Agent, then run this installer to update the existing app."
+  [[ -n "$existing_inode" ]] && app_running || return 0
+  if [[ "$replace_running" == 1 ]]; then
+    printf 'Restarting Marion Agent…\n'
+    /usr/bin/osascript -e 'tell application id "com.henlyfilms.marion-agent" to quit' >/dev/null 2>&1 || true
+    for _ in $(seq 1 60); do app_running || return 0; sleep 0.5; done
+    /usr/bin/pkill -TERM -f "$destination/Contents/MacOS/Electron" >/dev/null 2>&1 || true
+    for _ in $(seq 1 20); do app_running || return 0; sleep 0.5; done
   fi
+  fail "Quit Marion Agent, then run this installer to update the existing app."
 }
-require_closed_app
+[[ "$replace_running" == 1 ]] || require_closed_app
 
 work="$(/usr/bin/mktemp -d "$apps/.marion-install.XXXXXXXX")"
 previous="$work/previous.app"
@@ -69,10 +84,18 @@ cleanup() {
   /bin/rm -rf "$work"
 }
 trap cleanup EXIT
+# The runtime downloads (~165 MB) are kept in ~/Library/Caches by checksum, so updates after the
+# first one skip them and take seconds instead of minutes.
+cache="$HOME/Library/Caches/Marion Agent/runtime"
 download() {
-  local url="$1" path="$2" checksum="$3"
+  local url="$1" path="$2" checksum="$3" cached="$cache/$3"
+  if [[ -f "$cached" ]] && printf '%s  %s\n' "$checksum" "$cached" | /usr/bin/shasum -a 256 -c - >/dev/null 2>&1; then
+    /bin/cp "$cached" "$path"
+    return
+  fi
   /usr/bin/curl --fail --location --proto '=https' --proto-redir '=https' --retry 2 --connect-timeout 20 --output "$path" "$url"
   printf '%s  %s\n' "$checksum" "$path" | /usr/bin/shasum -a 256 -c -
+  mkdir -p "$cache" && /bin/cp "$path" "$cached" 2>/dev/null || true
 }
 
 printf 'Downloading the app runtime for %s…\n' "$arch"

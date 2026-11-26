@@ -130,7 +130,8 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, [state, finish]);
-  useEffect(() => () => finish(true), [finish]);
+  // Closing the chat mid-recording still transcribes it, so the words are kept (the owner never loses them).
+  useEffect(() => () => finish(), [finish]);
 
   return { state, interim, begin, finish };
 }
