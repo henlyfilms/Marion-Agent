@@ -99,8 +99,17 @@
 .md h1 { font-size: 17px; line-height: 24px; }
 .md blockquote { padding-left: 10px; border-left: 2px solid var(--color-border-primary); color: var(--color-text-secondary); }
 .md code { font-family: var(--font-mono-stack); font-size: 13px; background: var(--color-bg-tertiary); padding: 1px 4px; border-radius: 4px; }
+/* Fenced code box: header (language + Copy) stays fixed; only the body scrolls. */
+.md-code { border: 1px solid var(--color-border-secondary); border-radius: var(--radius-sm); background: var(--color-bg-subtle); overflow: hidden; min-width: 0; }
+.md-code__bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 3px 6px 3px 12px; background: var(--color-bg-tertiary); border-bottom: 1px solid var(--color-border-tertiary); }
+.md-code__lang { font-family: var(--font-mono-stack); font-size: 11px; line-height: 16px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--color-text-tertiary); }
+.md-code__copy { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; line-height: 16px; cursor: pointer; margin-left: auto; }
+.md-code__copy:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.md-code__copy:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
+.md-code__copy[data-state='copied'] { color: var(--color-text-primary); }
+.md-code__copy[data-state='failed'] { color: var(--color-text-tertiary); }
 .md pre {
-  background: var(--color-bg-subtle); border-radius: var(--radius-sm); padding: 8px 12px; overflow-x: auto;
+  background: transparent; border-radius: 0; margin: 0; padding: 8px 12px; overflow: auto; max-height: 420px;
   font-family: var(--font-mono-stack); font-size: 13px; line-height: 20px; letter-spacing: 0.15px; color: var(--color-text-secondary);
   white-space: pre; scrollbar-width: thin;
 }

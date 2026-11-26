@@ -66,7 +66,7 @@ function jsonFrom(text: string): any {
 }
 
 async function callAgent(agent: Agent, prompt: string, signal: AbortSignal, card: WorkCard, folder?: Folder, images: UploadedAttachment[] = [], session?: SessionTrack) {
-  // No wall-clock limit on a subagent: relayed runs have their own silence watchdog and the owner can stop the run.
+  // No wall-clock limit on a subagent: relayed runs are never timed out; only the owner stopping the run ends one early.
   if (agent.provider === 'local') return modelReply(agent.selection, prompt, signal);
   return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, signal, images, { folder, onStep: card.feed(agent.label), session })).trim();
 }
