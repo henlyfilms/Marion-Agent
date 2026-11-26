@@ -1,7 +1,7 @@
 import { createGitHubRepo } from '../features/github-repos.js';
 import { isDesktop } from '../lib/desktop-access.js';
 import { grok } from './models.js';
-import { subscriptionReply, subscriptionSelection } from './subscriptions.js';
+import { modelLabel, subscriptionReply, subscriptionSelection } from './subscriptions.js';
 import { env } from '../env.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
@@ -14,7 +14,6 @@ import { createBotRecord } from '../features/bots.js';
 import { AVATAR_SHAPE_IDS, normalizeAvatarShape } from '../avatarShapes.js';
 import { saveLearnedSkill } from '../features/improve.js';
 import { addUniversalMemory, searchUniversalMemories } from '../features/universal-memory.js';
-import { notify } from '../features/notify.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
 import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes } from '../triggers.js';
@@ -28,7 +27,7 @@ import { botFolders, hasFullAccess, folderForTask, listFolder, moveInFolder } fr
 import { appControlTool, runAppControl } from '../features/app-control.js';
 import { agentSettings } from '../features/agent-settings.js';
 import { orchestrate } from './orchestrate.js';
-import { miniTitle, trailingQuestion, WorkCard } from './work-feed.js';
+import { ASK_OWNER_LINE, miniTitle, ownerRequest, showQuestionCard, WorkCard } from './work-feed.js';
 import { leanLine, planRelaySession, recordRelayTurn, relayMedia } from './relay.js';
 import { lifePlannerTools, lifeToolsEnabled, runLifePlannerTool, type LifePlannerTool } from '../features/life-link.js';
 import type { ActivityKind } from '../types.js';
@@ -308,13 +307,15 @@ export const TOOLS: ToolDef[] = [
         prompt,
         media.note,
         folder ? `Work only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.` : '',
+        ASK_OWNER_LINE,
         leanLine(ctx.botId, Boolean(folder)),
       ].filter(Boolean).join('\n\n');
+      // The card names the provider and the exact model it runs ("Claude · Opus 5.5"); the model is refreshed once the CLI resolves it.
       const card = new WorkCard(ctx.botId, ctx.userId, {
         title: miniTitle(prompt, args.title), detail: prompt.split('\n')[0], reporter: getBotRow(ctx.botId)?.name,
-        agents: [{ id: 'worker-0', label: selection.label || name, provider, model: selection.model, role: 'worker' }],
+        agents: [{ id: 'worker-0', label: name, provider, model: selection.model, role: 'worker', modelLabel: modelLabel(provider, selection.model, selection.label), effort: selection.effort }],
       });
-      const who = selection.label || name;
+      const who = name;
       const askedAt = Date.now();
       if (plan.rotated) card.step(who, 'note', `Fresh session: ${plan.rotated}`);
       if (media.images.length) card.step(who, 'note', `Sent ${media.images.length} image${media.images.length === 1 ? '' : 's'} from your message`);
@@ -322,7 +323,7 @@ export const TOOLS: ToolDef[] = [
         let used: number | undefined;
         // One relayed session at a time per project folder, so two runs never edit it (or its git state) together.
         const text = await withFolder(folder, ctx.signal, () => card.step(who, 'note', `Waiting for another session in ${folder?.label} to finish first`), () => subscriptionReply(selection, task, ctx.signal ?? new AbortController().signal, media.images, {
-          folder, handoffProgress: plan.carried ? [plan.carried] : [], handoffContinuation: ctx.turn?.handoff, onStep: card.feed(who), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
+          folder, handoffProgress: plan.carried ? [plan.carried] : [], handoffContinuation: ctx.turn?.handoff, onStep: card.feed(who), onModel: model => card.setModel('worker-0', model), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
           session: {
             id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
             request: prompt, title: miniTitle(prompt, args.title), folder: folder && { path: folder.path, label: folder.label },
@@ -330,11 +331,15 @@ export const TOOLS: ToolDef[] = [
           },
         }));
         recordRelayTurn(plan.session, prompt, text, used);
-        const question = trailingQuestion(text);
-        if (question) card.step(who, 'question', question);
-        card.finish(question ? 'needs-input' : 'done', question || undefined);
+        // Needs the owner (approval, a choice, a missing detail): an action card goes up right away.
+        const request = ownerRequest(text);
+        if (request) {
+          card.step(who, 'question', request.question);
+          showQuestionCard(ctx.botId, ctx.userId, request.question, request.options);
+        }
+        card.finish(request ? 'needs-input' : 'done', request?.question, request?.options);
         return {
-          output: question ? `${text}\n\n${name} is asking the owner something. Relay it with ask_user (short options) and stop.` : text,
+          output: request ? `${text}\n\n${name} is asking the owner something. An action card with that question${request.options.length ? ` and the options ${request.options.map(o => `"${o}"`).join(', ')}` : ''} is already showing: relay the reply in a line or two and stop. Do not call ask_user again; the owner's answer arrives as their next message.` : text,
           summary: folder ? `${provider} worked in ${folder.label}` : `Received a reply from ${provider}`,
         };
       } catch (error) {
@@ -765,9 +770,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'waiting_for_you',
     label: 'Waiting on you',
     impl: async (a, ctx) => {
-      appendRow(ctx.botId, 'card', { type: 'card', card: 'question', question: a.question, options: (a.options ?? []).slice(0, 6), status: 'pending' });
-      const asking = getBotRow(ctx.botId);
-      if (!asking.hidden) notify(ctx.userId, { kind: 'question', botId: ctx.botId, title: `${asking.name} has a question`, body: String(a.question ?? '') });
+      showQuestionCard(ctx.botId, ctx.userId, String(a.question ?? ''), Array.isArray(a.options) ? a.options.map(String) : []);
       return { output: 'Question shown to the user. Stop here and wait for their answer.', endTurn: true };
     },
   },

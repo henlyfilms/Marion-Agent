@@ -55,6 +55,7 @@
 /* ---------- work card: Claude / Codex / Gemini working, live (WorkCard.tsx) ---------- */
 .work-card {
   width: 560px; max-width: 100%; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px;
+  container: work-card / inline-size;
   border-radius: var(--radius-card); background: var(--color-bg-pane);
   box-shadow: var(--color-border-tertiary) 0 0 0 1px inset; animation: rise 320ms var(--ease-ios) both;
 }
@@ -73,6 +74,10 @@
   display: inline-flex; align-items: center; gap: 6px; flex: none; height: 22px; padding: 0 9px; border-radius: var(--radius-full);
   background: var(--color-bg-tertiary); color: var(--color-text-secondary); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
+.work-card__who .work-card__model { color: var(--color-text-primary); font-weight: 500; }
+/* Effort is extra detail: dropped first when the card is narrow (the model always stays). */
+@container work-card (max-width: 460px) { .work-card__who .work-card__effort { display: none; } }
+.work-node__model { margin-left: 2px; font-size: 11px; color: var(--color-text-tertiary); white-space: nowrap; }
 .work-card__status.is-done { background: var(--color-success-bg); color: var(--color-success-text); }
 .work-card__status.is-failed { background: var(--color-danger-bg); color: var(--color-danger-text); }
 .work-card__status.is-needs-input { background: var(--color-warn-bg); color: var(--color-warn-text); }

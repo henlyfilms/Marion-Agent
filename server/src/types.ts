@@ -229,7 +229,12 @@ export type CardBody =
   | { type: 'card'; card: 'handoff'; id: string; provider: RelayProvider; goal: string; status: 'pending' | 'started'; fallback: ChatModelSelection | null };
 
 /** Who is doing the work in a work card: a model reached through a CLI or a local server. */
-export interface WorkAgent { id: string; label: string; provider: ChatProvider; model: string; role: 'orchestrator' | 'worker' }
+export interface WorkAgent {
+  id: string; label: string; provider: ChatProvider; model: string; role: 'orchestrator' | 'worker';
+  /** The exact model in use, short ("Opus 5.5", "6.2 Sol", "Gemini 4 Neon"); updated once the CLI resolves it. */
+  modelLabel?: string;
+  effort?: string | null;
+}
 export interface WorkStep { at: number; agent: string; kind: 'command' | 'edit' | 'read' | 'search' | 'note' | 'review' | 'approve' | 'error' | 'question'; text: string }
 export interface WorkPhase { title: string; status: 'pending' | 'running' | 'done' | 'failed' }
 
@@ -255,6 +260,8 @@ export interface WorkCardBody {
   startedAt: number;
   endedAt?: number;
   question?: string;
+  /** Choices offered with the question (also shown as a question card the owner can tap). */
+  options?: string[];
 }
 
 export interface EventBody {

@@ -2,6 +2,8 @@ import { now } from '../db.js';
 import { agentSettings } from '../features/agent-settings.js';
 import { appendRow, getBotRow, getRow, updateRow } from '../store.js';
 import type { WorkAgent, WorkCardBody, WorkPhase, WorkStep } from '../types.js';
+import { modelLabel as shortModelLabel } from './subscriptions.js';
+import { notify } from '../features/notify.js';
 
 const MAX_STEPS = 60;
 const FLUSH_MS = 350;
@@ -62,10 +64,22 @@ export class WorkCard {
     this.schedule();
   }
 
-  finish(status: WorkCardBody['status'], question?: string) {
+  /** The model the CLI actually runs (it can differ from the pick: account fallback, fast mode), kept on the card. */
+  setModel(agentId: string, model: { provider: WorkAgent['provider']; model: string; label?: string; effort?: string | null }) {
+    const agent = this.body.agents.find(a => a.id === agentId);
+    if (!agent) return;
+    const modelLabel = shortModelLabel(model.provider, model.model, model.label);
+    const effort = model.effort ?? null;
+    if (agent.model === model.model && agent.modelLabel === modelLabel && agent.effort === effort) return;
+    Object.assign(agent, { model: model.model, modelLabel, effort });
+    this.schedule();
+  }
+
+  finish(status: WorkCardBody['status'], question?: string, options?: string[]) {
     this.body.status = status;
     this.body.endedAt = now();
     if (question) this.body.question = question.slice(0, 1200);
+    if (question && options?.length) this.body.options = options.slice(0, 6);
     for (const phase of this.body.phases) if (phase.status === 'running') phase.status = status === 'done' ? 'done' : 'failed';
     this.flush();
   }
@@ -115,5 +129,44 @@ export function miniTitle(prompt: unknown, given?: unknown): string {
 export function trailingQuestion(text: string) {
   const tail = text.trim().split(/\n\s*\n/).at(-1)?.trim() ?? '';
   if (!tail.endsWith('?') || tail.length > 600) return '';
-  return /\b(would you like|do you want|should i|could you|can you|which|what|please (confirm|choose|let me know))\b/i.test(tail) ? tail : '';
+  return /\b(would you like|do you want|should i|shall i|may i|could you|can you|can i|which|what|ok(ay)? to|approve|please (confirm|choose|let me know))\b/i.test(tail) ? tail : '';
+}
+
+/** Told to every relayed Claude/Codex/Gemini run, so a question comes back in a shape Marion turns into an action card. */
+export const ASK_OWNER_LINE = 'If you need the owner\'s approval, a decision or a missing detail before going on, stop and end your reply with one short question as its own last paragraph, then a final line "Options: first | second | third" (2-4 short choices). Otherwise finish the work without asking.';
+
+const APPROVAL = /\b(approve|ok(ay)? to|go ahead|proceed|permission|allow me|may i|shall i|should i|can i|do you want me to|want me to|confirm)\b/i;
+
+/**
+ * A relayed CLI's reply that needs the owner: its closing question plus choices for an action card. Choices come
+ * from an "Options: a | b" line or a short list under the question; a yes/no approval gets Approve/Don't approve.
+ */
+export function ownerRequest(text: string): { question: string; options: string[] } | null {
+  const lines = text.trim().split('\n');
+  let options: string[] = [];
+  const last = lines.at(-1)?.trim() ?? '';
+  const marker = /^\**options?\**\s*[:\-]\s*(.+)$/i.exec(last);
+  if (marker) {
+    options = marker[1].split(/\s*\|\s*|\s*\/\s*/).map(o => o.replace(/^[`*_"']+|[`*_"'.]+$/g, '').trim()).filter(Boolean);
+    lines.pop();
+  } else {
+    // A short bulleted/numbered list after the question ("1. Keep it", "- Replace it").
+    const list: string[] = [];
+    while (lines.length && /^\s*(?:[-*•]|\d+[.)]|[A-D][.)])\s+\S/.test(lines.at(-1)!)) list.unshift(lines.pop()!.replace(/^\s*(?:[-*•]|\d+[.)]|[A-D][.)])\s+/, '').replace(/\*\*/g, '').trim());
+    if (list.length >= 2 && list.length <= 6 && list.every(item => item.length <= 80)) options = list;
+    else lines.push(...list.map(item => `- ${item}`));
+  }
+  const body = lines.join('\n').trim();
+  const question = options.length ? (body.split(/\n\s*\n/).at(-1)?.trim().split('\n').at(-1)?.trim() ?? '') : trailingQuestion(body);
+  if (!question || !question.endsWith('?') || question.length > 600) return null;
+  if (!options.length && !trailingQuestion(question)) return null;
+  if (!options.length && APPROVAL.test(question)) options = ['Approve', "Don't approve"];
+  return { question, options: [...new Set(options)].slice(0, 6).map(o => o.slice(0, 80)) };
+}
+
+/** An interactive question card (tap an option or answer in your own words), plus the usual notification. */
+export function showQuestionCard(botId: string, userId: string, question: string, options: string[] = []) {
+  appendRow(botId, 'card', { type: 'card', card: 'question', question, options: options.slice(0, 6), status: 'pending' });
+  const asking = getBotRow(botId);
+  if (asking && !asking.hidden) notify(userId, { kind: 'question', botId, title: `${asking.name} has a question`, body: question });
 }

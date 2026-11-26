@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
 import { Check, ChevronDown, CircleAlert, CircleHelp, Eye, FilePen, FileText, Search, Terminal, X } from 'lucide-react';
 import type { WorkAgent, WorkCardBody, WorkStep } from '@shared/types';
+import { modelLabel } from '@shared/model-label';
 import { ProviderLogo } from '../ProviderLogo';
 
 const elapsed = (ms: number) => {
@@ -16,6 +17,13 @@ const STEP_ICON: Record<WorkStep['kind'], typeof Terminal> = {
 
 const STATUS: Record<WorkCardBody['status'], string> = { running: 'Working', done: 'Done', failed: 'Stopped on an error', stopped: 'Stopped', 'needs-input': 'Needs your input' };
 
+/** Lower-case state for the subtitle: "Claude · Opus 5.5 · working". */
+const STATE: Record<WorkCardBody['status'], string> = { running: 'working', done: 'done', failed: 'failed', stopped: 'stopped', 'needs-input': 'needs input' };
+
+/** The exact model on the card ("Opus 5.5", "6.2 Sol"); older cards only stored the ID. */
+const modelOf = (agent: WorkAgent) => agent.modelLabel || (agent.model ? modelLabel(agent.provider, agent.model) : '');
+const effortName = (effort?: string | null) => effort ? (effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1)) : '';
+
 const names = (agents: WorkAgent[]) => {
   const counts = new Map<string, number>();
   for (const agent of agents) counts.set(agent.label.replace(/ \d+$/, ''), (counts.get(agent.label.replace(/ \d+$/, '')) ?? 0) + 1);
@@ -24,9 +32,10 @@ const names = (agents: WorkAgent[]) => {
 
 function AgentChip({ agent, active }: { agent: WorkAgent; active: boolean }) {
   return (
-    <span className={`work-node${active ? ' is-active' : ''}`} title={`${agent.label} (${agent.model})`}>
+    <span className={`work-node${active ? ' is-active' : ''}`} title={`${agent.label} (${[modelOf(agent) || agent.model, effortName(agent.effort) && `${effortName(agent.effort)} effort`].filter(Boolean).join(', ')})`}>
       <ProviderLogo provider={agent.provider} size={14} />
       <span>{agent.label}</span>
+      {modelOf(agent) && modelOf(agent) !== agent.label && <small className="work-node__model">{modelOf(agent)}</small>}
     </span>
   );
 }
@@ -92,6 +101,10 @@ export function WorkCard({ body }: { body: WorkCardBody }) {
   const workers = body.agents.filter(agent => agent.role === 'worker');
   const who = lead ? `${lead.label} orchestrating ${names(workers).join(', ')}` : names(body.agents).join(' and ');
   const shown = open ? body.steps : body.steps.slice(-4);
+  // One relayed assistant: "Claude · Opus 5.5 · working". Teams keep their summary (each chip shows its model).
+  const solo = !lead && body.agents.length === 1 ? body.agents[0] : null;
+  const soloModel = solo ? modelOf(solo) : '';
+  const soloEffort = solo ? effortName(solo.effort) : '';
 
   return (
     <div className={`work-card is-${body.status}`} role="group" aria-label={`${who}: ${STATUS[body.status]}`}>
@@ -101,7 +114,16 @@ export function WorkCard({ body }: { body: WorkCardBody }) {
         </span>
         <span className="work-card__who" title={body.detail || body.title}>
           <strong className="work-card__title">{body.title}</strong>
-          <span>{running ? `${names(body.agents).join(' and ')} ${body.agents.length > 1 ? 'are' : 'is'} working` : `${who}${body.status === 'done' ? ' · done' : ''}`}</span>
+          {solo ? (
+            <span className="work-card__sub" title={[solo.label, soloModel, soloEffort && `${soloEffort} effort`].filter(Boolean).join(' · ')}>
+              {solo.label}
+              {soloModel && <> · <span className="work-card__model">{soloModel}</span></>}
+              {soloEffort && <span className="work-card__effort"> · {soloEffort.toLowerCase()} effort</span>}
+              {` · ${STATE[body.status]}`}
+            </span>
+          ) : (
+            <span>{running ? `${names(body.agents).join(' and ')} ${body.agents.length > 1 ? 'are' : 'is'} working` : `${who}${body.status === 'done' ? ' · done' : ''}`}</span>
+          )}
         </span>
         <span className={`work-card__status is-${body.status}`}>
           {running && <span className="work-card__pulse" aria-hidden="true" />}

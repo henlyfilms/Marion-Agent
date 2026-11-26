@@ -1,8 +1,8 @@
 import { isUsageLimitError } from './usage-limit.js';
 import { availableLocalModels } from './models.js';
 import { modelReply } from './orchestration.js';
-import { subscriptionModels, subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
-import { miniTitle, trailingQuestion, WorkCard } from './work-feed.js';
+import { modelLabel, subscriptionModels, subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
+import { ASK_OWNER_LINE, miniTitle, ownerRequest, showQuestionCard, WorkCard } from './work-feed.js';
 import { leanLine, relayMedia } from './relay.js';
 import type { SessionTrack } from '../features/life-outbox.js';
 import type { UploadedAttachment } from '../attachments.js';
@@ -56,7 +56,10 @@ function toAgent(model: ChatModel, role: WorkAgent['role'], index: number, taken
   for (let n = 2; taken.has(label); n++) label = `${model.label} ${n}`;
   taken.add(label);
   const effort = model.defaultEffort ?? null;
-  return { id: `${role}-${index}`, label, provider: model.provider, model: model.id, role, selection: { provider: model.provider, model: model.id, effort, label: model.label } };
+  return {
+    id: `${role}-${index}`, label, provider: model.provider, model: model.id, role, modelLabel: modelLabel(model.provider, model.id, model.label), effort,
+    selection: { provider: model.provider, model: model.id, effort, label: model.label },
+  };
 }
 
 function jsonFrom(text: string): any {
@@ -69,7 +72,9 @@ function jsonFrom(text: string): any {
 async function callAgent(agent: Agent, prompt: string, signal: AbortSignal, card: WorkCard, folder?: Folder, images: UploadedAttachment[] = [], session?: SessionTrack, handoffProgress?: string[], handoffContinuation?: boolean) {
   // No wall-clock limit on a subagent: relayed runs are never timed out; only the owner stopping the run ends one early.
   if (agent.provider === 'local') return modelReply(agent.selection, prompt, signal);
-  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, signal, images, { folder, onStep: card.feed(agent.label), session, handoffProgress, handoffContinuation })).trim();
+  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, signal, images, {
+    folder, onStep: card.feed(agent.label), onModel: model => card.setModel(agent.id, model), session, handoffProgress, handoffContinuation,
+  })).trim();
 }
 
 export async function orchestrate(ctx: { userId: string; botId: string; signal?: AbortSignal; allowSubscriptionTeam?: boolean; turn?: { handoff?: boolean } }, args: any, folder?: Folder) {
@@ -128,8 +133,10 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
     const plan = jsonFrom(planText);
     if (plan?.question && !plan?.phases?.length) {
       card.step(lead.label, 'question', String(plan.question));
-      card.finish('needs-input', String(plan.question));
-      return { output: `${lead.label} needs the owner's answer before starting: ${plan.question}\nAsk the owner this with ask_user, then call orchestrate again with their answer added to the goal.`, summary: 'The orchestrator has a question' };
+      const asked = ownerRequest(String(plan.question)) ?? { question: String(plan.question), options: [] };
+      card.finish('needs-input', asked.question, asked.options);
+      showQuestionCard(ctx.botId, ctx.userId, asked.question, asked.options);
+      return { output: `${lead.label} needs the owner's answer before starting: ${plan.question}\nAn action card with that question is already showing (do not call ask_user again). When the owner answers, call orchestrate again with their answer added to the goal.`, summary: 'The orchestrator has a question' };
     }
     const phases: { title: string; tasks: { worker: Agent; task: string }[] }[] = (Array.isArray(plan?.phases) ? plan.phases : []).slice(0, MAX_PHASES).map((phase: any, index: number) => ({
       title: String(phase?.title ?? `Phase ${index + 1}`).slice(0, 80),
@@ -153,6 +160,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
             `The overall goal:\n${goal}`, results.length ? `Earlier phases produced:\n${results.join('\n\n').slice(-RESULT_CHARS)}` : '', extra,
             `Your task (phase "${phase.title}"):\n${task}`,
             'Do the task completely. Finish with a short summary of exactly what you did or produced (full code when you wrote code and there is no folder).',
+            ASK_OWNER_LINE,
           ].filter(Boolean).join('\n\n'), signal, card, folder, true, task);
           card.step(worker.label, 'note', 'Finished its task');
           return { worker, text };
@@ -191,11 +199,13 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
       }
       results.push(`### ${phase.title}\n${outputs.map(o => `${o.worker.label}: ${o.text.slice(0, RESULT_CHARS / outputs.length)}`).join('\n')}`);
       card.phase(index, outputs.every(o => o.text.startsWith('FAILED')) ? 'failed' : 'done');
-      const asked = outputs.map(o => trailingQuestion(o.text)).find(Boolean);
-      if (asked) {
+      const request = outputs.map(o => ownerRequest(o.text)).find(Boolean);
+      if (request) {
+        const asked = request.question;
         card.step(lead.label, 'question', asked);
-        card.finish('needs-input', asked);
-        return { output: `The team paused after "${phase.title}" because it needs the owner: ${asked}\nAsk the owner with ask_user, then call orchestrate again with the answer. Work so far:\n${results.join('\n\n').slice(-RESULT_CHARS)}`, summary: 'The team has a question' };
+        card.finish('needs-input', asked, request.options);
+        showQuestionCard(ctx.botId, ctx.userId, asked, request.options);
+        return { output: `The team paused after "${phase.title}" because it needs the owner: ${asked}\nAn action card with that question is already showing (do not call ask_user again). When the owner answers, call orchestrate again with the answer. Work so far:\n${results.join('\n\n').slice(-RESULT_CHARS)}`, summary: 'The team has a question' };
       }
     }
 

@@ -15,6 +15,7 @@ import type { UploadedAttachment } from '../attachments.js';
 import '../db-config.js';
 import { isDesktop } from '../lib/desktop-access.js';
 import type { ChatModel, ChatModelSelection, ChatProvider } from '../types.js';
+export { modelLabel } from '../model-label.js';
 
 export type SubscriptionProvider = Exclude<ChatProvider, 'local'>;
 const commands = { codex: 'codex', gemini: 'agy', claude: 'claude' };
@@ -22,7 +23,18 @@ const labels = { codex: 'Codex', gemini: 'Gemini', claude: 'Claude Code' };
 const standardEfforts = ['low', 'medium', 'high'];
 const extendedEfforts = [...standardEfforts, 'xhigh'];
 const claudeEfforts = [...extendedEfforts, 'max'];
-const defaultGemini = 'gemini-3.8-flash';
+/**
+ * The model each provider starts on when the owner hasn't picked one (relays, bot defaults, Settings, team and
+ * orchestrate all resolve through here): Claude Opus 5.5, Codex 6.2 Sol and Gemini 4 Neon, all on high effort.
+ */
+export const DEFAULT_SUBSCRIPTION_MODELS = { claude: 'claude-opus-5-5', codex: 'gpt-6.2-sol', gemini: 'gemini-4-neon' } as const;
+export const DEFAULT_SUBSCRIPTION_EFFORT = 'high';
+/** High when the model offers it, else the closest step down (medium), else whatever it has. */
+export function preferredEffort(efforts: readonly string[]): string | null {
+  return efforts.includes(DEFAULT_SUBSCRIPTION_EFFORT) ? DEFAULT_SUBSCRIPTION_EFFORT : efforts.includes('medium') ? 'medium' : efforts[0] ?? null;
+}
+/** The default model first, so name matches ("codex", "gemini") and pickers land on it. */
+const defaultFirst = <T>(models: T[], isDefault: (model: T) => boolean) => [...models].sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)));
 const claudeModels: ChatModel[] = [
   // Opus 5.5 on high effort is the default for every Claude run; the first entry feeds all fallbacks
   // (saved-preference fallback, picker default, "claude" name match, team defaults). Sonnet only when chosen explicitly.
@@ -35,10 +47,9 @@ export type SubscriptionSelection = ChatModelSelection & { provider: Subscriptio
 export function subscriptionSelection(userId: string, provider: SubscriptionProvider): SubscriptionSelection {
   const saved = db.prepare('SELECT model, effort FROM subscription_model_preferences WHERE user_id=? AND provider=?')
     .get(userId, provider) as { model: string; effort: string | null } | undefined;
-  const fallback = provider === 'claude' ? claudeModels[0]
-    : provider === 'gemini' ? { id: defaultGemini, defaultEffort: 'medium' } : undefined;
-  return { provider, model: saved?.model ?? fallback?.id ?? '', effort: saved ? saved.effort : fallback?.defaultEffort ?? null };
+  return { provider, model: saved?.model ?? DEFAULT_SUBSCRIPTION_MODELS[provider], effort: saved ? saved.effort : DEFAULT_SUBSCRIPTION_EFFORT };
 }
+
 
 export function executable(provider: SubscriptionProvider) {
   const bundledCodex = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex';
@@ -104,6 +115,21 @@ const agyArgs = [
   '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--settings', googleSettings,
   '--input-format', 'stream-json', '--output-format', 'stream-json',
 ];
+/**
+ * Auto mode for Gemini (Antigravity `agy --mode auto`): in a folder it may change, it runs shell commands and edits
+ * files on its own instead of stopping for approvals (still inside its --sandbox and the folder's allow rules).
+ */
+export const GEMINI_AUTO_MODE = 'auto';
+/**
+ * Auto mode for Codex, the app-server form of `codex --approve-for-me`: workspace-write sandbox, the model asks
+ * when it needs more (network, a path outside the folder) and Codex's own auto reviewer answers instead of
+ * blocking on the owner. Read-only folders and plain chat stay read-only with no approvals.
+ */
+export function codexThreadPolicy(folder?: { write: boolean }) {
+  return folder?.write
+    ? { sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' } as const
+    : { sandbox: 'read-only', approvalPolicy: 'never' } as const;
+}
 /** Claude Code always launches in auto mode (never dontAsk) unless a caller passes an explicit override. */
 export const CLAUDE_PERMISSION_MODE = 'auto';
 export const claudePermissionArgs = (mode: string = CLAUDE_PERMISSION_MODE) => ['--permission-mode', mode];
@@ -143,7 +169,7 @@ export function folderArgs(provider: 'claude' | 'gemini', folder: { path: string
   const open = folder.write ? ['read_file(*)', 'write_file(*)', 'command(*)'] : ['read_file(*)'];
   const settings = JSON.stringify({ modelProvider: '', allowNonWorkspaceAccess: false, permissions: { allow: allowed, deny: googleDeny.filter(rule => !open.includes(rule)) } });
   return [
-    '--mode', folder.write ? 'accept-edits' : 'plan', '--sandbox', '--disable-slash-commands', '--settings', settings,
+    '--mode', folder.write ? GEMINI_AUTO_MODE : 'plan', '--sandbox', '--disable-slash-commands', '--settings', settings,
     '--add-dir', folder.path, '--input-format', 'stream-json', '--output-format', 'stream-json',
   ];
 }
@@ -186,7 +212,8 @@ type CodexModel = {
 
 export const initializeCodex = { id: 1, method: 'initialize', params: { clientInfo: { name: 'marion_agent', title: 'Marion Agent', version: '1.0.0' } } };
 const listCodexModels = { id: 5, method: 'model/list', params: { includeHidden: false, limit: 100 } };
-const defaultCodexModel = (models: CodexModel[]) => models.find(m => m.isDefault) ?? models[0];
+const defaultCodexModel = (models: CodexModel[]) =>
+  models.find(m => m.model === DEFAULT_SUBSCRIPTION_MODELS.codex) ?? models.find(m => m.isDefault) ?? models[0];
 
 let codexCatalog: { expires: number; models: Promise<CodexModel[]> } | undefined;
 let geminiCatalog: { expires: number; models: Promise<ChatModel[]> } | undefined;
@@ -209,7 +236,7 @@ export async function subscriptionModels(provider: SubscriptionProvider): Promis
     }
     try {
       const models = await geminiCatalog.models;
-      return { models, defaultModel: models.find(model => model.id === defaultGemini)?.id ?? models[0]?.id };
+      return { models, defaultModel: models[0]?.id };
     } catch (error) { geminiCatalog = undefined; throw error; }
   }
   if (!codexCatalog || codexCatalog.expires < Date.now()) {
@@ -219,13 +246,13 @@ export async function subscriptionModels(provider: SubscriptionProvider): Promis
   try { models = await codexCatalog.models; }
   catch (error) { codexCatalog = undefined; throw error; }
   if (!models.length) throw new Error('No Codex models are available for this ChatGPT account.');
+  const defaultModel = defaultCodexModel(models)?.model;
   return {
-    models: models.map((model): ChatModel => ({
-      provider, id: model.model, label: model.displayName || model.model,
-      efforts: model.supportedReasoningEfforts?.map(item => item.reasoningEffort) ?? [],
-      defaultEffort: model.defaultReasoningEffort ?? null,
-    })),
-    defaultModel: defaultCodexModel(models)?.model,
+    models: defaultFirst(models, model => model.model === defaultModel).map((model): ChatModel => {
+      const efforts = model.supportedReasoningEfforts?.map(item => item.reasoningEffort) ?? [];
+      return { provider, id: model.model, label: model.displayName || model.model, efforts, defaultEffort: preferredEffort(efforts) ?? model.defaultReasoningEffort ?? null };
+    }),
+    defaultModel,
   };
 }
 
@@ -249,10 +276,11 @@ async function discoverGeminiModels(program: string): Promise<ChatModel[]> {
       byId.set(id, model);
     }
     if (!byId.size) throw new Error('No Gemini models were listed for this Antigravity account.');
-    return [...byId.values()].map(model => {
+    const models = [...byId.values()].map(model => {
       const efforts = claudeEfforts.filter(effort => model.efforts.includes(effort));
-      return { ...model, efforts, defaultEffort: efforts.includes('medium') ? 'medium' : efforts[0] ?? null };
+      return { ...model, efforts, defaultEffort: preferredEffort(efforts) };
     });
+    return defaultFirst(models, model => model.id === DEFAULT_SUBSCRIPTION_MODELS.gemini);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 }
 
@@ -417,13 +445,19 @@ async function spawnSubscriptionReply(
         ? agyArgs.map(arg => arg === googleSettings ? googleSettingsWithPhotos : arg)
         : [...providerArgs[provider]];
     if (provider !== 'codex') {
-      args.push('--model', model);
       const catalog = provider === 'claude' ? claudeModels
         : geminiCatalog && geminiCatalog.expires > Date.now() ? await geminiCatalog.models.catch(() => []) : [];
-      const fastEffort = catalog.find(option => option.id === model)?.efforts.includes('low') ? 'low' : effort;
-      const selectedEffort = options.fast ? fastEffort : effort;
+      // The built-in default (Gemini 4 Neon) falls back to the account's best model if this account doesn't list it.
+      const chosen = catalog.find(option => option.id === model)
+        ?? (model === DEFAULT_SUBSCRIPTION_MODELS[provider] ? catalog[0] : undefined);
+      const runModel = chosen?.id ?? model;
+      args.push('--model', runModel);
+      // No saved effort (older bots, first run): high, like everywhere else.
+      const baseEffort = effort ?? (chosen ? preferredEffort(chosen.efforts) : null);
+      const fastEffort = chosen?.efforts.includes('low') ? 'low' : baseEffort;
+      const selectedEffort = options.fast ? fastEffort : baseEffort;
       if (selectedEffort) args.push('--effort', selectedEffort);
-      options.onModel?.({ ...selection, effort: selectedEffort });
+      options.onModel?.({ ...selection, model: runModel, label: chosen?.label ?? (runModel === model ? selection.label : undefined) ?? runModel, effort: selectedEffort });
       if (provider === 'claude' && images.length) args.push('--input-format', 'stream-json');
     }
     const codexImages = provider === 'codex' ? await Promise.all(images.map(async (image, index) => {
@@ -587,16 +621,19 @@ async function codexReply(
   let reply = '';
   let limit: unknown;
   const startThread = (models: CodexModel[]) => {
-    const model = selection.model ? models.find(entry => entry.model === selection.model) : defaultCodexModel(models);
+    // The built-in default (6.2 Sol) falls back to the account's own default if this account doesn't list it.
+    const model = models.find(entry => entry.model === selection.model)
+      ?? (!selection.model || selection.model === DEFAULT_SUBSCRIPTION_MODELS.codex ? defaultCodexModel(models) : undefined);
     if (!model?.model) throw new Error(selection.model
       ? `Codex model ${selection.model} is unavailable for this account. Choose another model.`
       : 'No Codex model is available for this ChatGPT account.');
     const supports = (effort: string) => model.supportedReasoningEfforts?.some(item => item.reasoningEffort === effort);
-    if (options.fast) actualEffort = supports('low') ? 'low' : supports('none') ? 'none' : selection.effort;
+    actualEffort ??= preferredEffort(model.supportedReasoningEfforts?.map(item => item.reasoningEffort) ?? []);
+    if (options.fast) actualEffort = supports('low') ? 'low' : supports('none') ? 'none' : actualEffort;
     if (actualEffort && !supports(actualEffort)) throw new Error(`Choose a supported reasoning effort for ${model.model}.`);
     options.onModel?.({ ...selection, model: model.model, label: model.displayName || selection.label, effort: actualEffort });
     write({ id: 3, method: 'thread/start', params: {
-      cwd, model: model.model, modelProvider: 'openai', sandbox: options.folder?.write ? 'workspace-write' : 'read-only', approvalPolicy: 'never', ephemeral: true, serviceTier: 'default',
+      cwd, model: model.model, modelProvider: 'openai', ...codexThreadPolicy(options.folder), ephemeral: true, serviceTier: 'default',
       baseInstructions: options.folder
         ? `You are working inside the user's folder "${options.folder.label}" (${options.folder.path}), your working directory, with ${options.folder.write ? 'read and write' : 'read-only'} access. Do the task there, never touch anything outside it, and finish with a short summary of what you did.`
         : 'Answer as a chat assistant using the messages and attachments the user provides. Use the response format requested by Marion. Do not use native CLI tools.',
@@ -625,7 +662,7 @@ async function codexReply(
         if (result?.account?.type !== 'chatgpt') throw new Error('Run codex login and use your ChatGPT account.');
         // The app server still checks the account and opens a fresh restricted thread.
         const cached = codexCatalog && codexCatalog.expires > Date.now() ? await codexCatalog.models.catch(() => []) : [];
-        if (cached.length && (!selection.model || cached.some(model => model.model === selection.model))) startThread(cached);
+        if (cached.length && (!selection.model || selection.model === DEFAULT_SUBSCRIPTION_MODELS.codex || cached.some(model => model.model === selection.model))) startThread(cached);
         else write(listCodexModels);
         break;
       case 5: {
