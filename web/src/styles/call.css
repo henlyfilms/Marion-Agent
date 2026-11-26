@@ -64,7 +64,6 @@
   transition: transform 140ms ease, background-color 160ms ease;
 }
 .call-stage__btn:hover { background: var(--color-bg-hover); transform: scale(1.05); }
-.call-stage__btn:active { transform: scale(.95); }
 .call-stage__btn.is-on { background: var(--color-ink); color: var(--color-bg-elevated); }
 .call-stage__btn--end { border: 0; background: #e5484d; color: #fff; }
 .call-stage__btn--end:hover { background: #d13a40; }

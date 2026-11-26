@@ -48,9 +48,6 @@
 .team-add:hover:not(:disabled), .team-chip:hover { background: var(--color-bg-hover); }
 .team-add:disabled { opacity: .5; }
 .team-chip img { width: 14px; height: 14px; }
-.team-backup { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px dashed var(--color-border-secondary); border-radius: 12px; }
-.team-backup > span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
-.team-backup small { color: var(--color-text-secondary); font-size: 12px; }
 .team-error { margin: 0; color: var(--color-danger-text, #d05050); font-size: 12px; }
 @media (max-width: 630px) {
   .team-row { flex-wrap: wrap; }

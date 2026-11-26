@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { Bot, ChatModel } from '@shared/types';
-import { Phone, PhoneOff } from 'lucide-react';
 import { configApi } from '../lib/configApi';
-import { callModelFor, endLocalCall, isLocalCallActive, setChatCallModel, setDefaultCallModel, defaultCallModel, startLocalCall, useLocalCall } from '../voice/localCall';
+import { callModelFor, setChatCallModel, setDefaultCallModel, defaultCallModel, useLocalCall } from '../voice/localCall';
 import { useStore } from '../store';
-import { voiceApi, type VoiceOptions } from '../voice/api';
-import { endCall, isCallActive, previewVoice, startCall, useVoice } from '../voice/call';
+import { callVoices, voiceApi, type CallVoices, type VoiceOptions } from '../voice/api';
+import { useConfigUI } from '../configStore';
+import { previewVoice } from '../voice/call';
 import { Icon } from './Icon';
 
 const FALLBACK: VoiceOptions = {
@@ -40,16 +40,21 @@ function NativeSelect<T extends string | number>({ label, value, options, onChan
 export function VoiceSettings({ bot }: { bot: Bot }) {
   const [opts, setOpts] = useState<VoiceOptions>(FALLBACK);
   const [availability, setAvailability] = useState<Awaited<ReturnType<typeof voiceApi.status>>>();
-  const localCall = useLocalCall(s => s.botId === bot.id && isLocalCallActive(s));
   useLocalCall(s => s.status);
   const [models, setModels] = useState<ChatModel[]>([]);
+  const [macVoices, setVoices] = useState<CallVoices>({ mac: [], custom: [] });
+  useEffect(() => {
+    const load = () => callVoices().then(setVoices).catch(() => {});
+    load();
+    window.addEventListener('marion-agent:voices-changed', load);
+    return () => window.removeEventListener('marion-agent:voices-changed', load);
+  }, []);
   useEffect(() => {
     if (!availability?.localSpeech) return;
     configApi.chatModels(bot.id, true).then(result => setModels(result.models)).catch(() => {});
   }, [bot.id, availability?.localSpeech]);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
 
   useEffect(() => {
     voiceApi.status().then(status => {
@@ -81,6 +86,29 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
     finally { setPreviewing(false); }
   };
 
+  const voiceValue = /^(mac|custom):/.test(bot.voice) && [...macVoices.mac.map(v => `mac:${v.name}`), ...macVoices.custom.map(v => v.id)].includes(bot.voice) ? bot.voice : '';
+  const voiceOptions = [
+    { value: '', label: 'Mac default' },
+    ...macVoices.custom.map(v => ({ value: v.id, label: `${v.name} (yours)` })),
+    ...macVoices.mac.filter(v => v.language.startsWith('en')).map(v => ({ value: `mac:${v.name}`, label: v.name })),
+    ...macVoices.mac.filter(v => !v.language.startsWith('en')).map(v => ({ value: `mac:${v.name}`, label: `${v.name} · ${v.language}` })),
+    { value: '__manage', label: 'Add your own voice…' },
+  ];
+  const previewLocal = async () => {
+    if (previewing) return;
+    setPreviewing(true); setError(null);
+    try {
+      const res = await fetch('/api/voice/speech', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ botId: bot.id, text: `Hi, I'm ${bot.name}. This is how I sound on calls.` }) });
+      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? 'Preview unavailable');
+      const url = URL.createObjectURL(await res.blob());
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+      await new Promise(resolve => { audio.onended = () => { URL.revokeObjectURL(url); resolve(null); }; });
+    } catch (e) { setError((e as Error).message); }
+    finally { setPreviewing(false); }
+  };
+
   if (!availability?.realtime || availability.localSpeech) {
     const chosen = callModelFor(bot.id);
     const key = (m: { provider: string; model: string }) => `${m.provider}:${m.model}`;
@@ -103,16 +131,20 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
           <NativeSelect label="Default call model" value={fallback ? key(fallback) : ''} options={[{ value: '', label: 'Each chat’s model' }, ...modelOptions.slice(1)]} onChange={(value) => pick(value, true)} />
         </div>
         <div className="panel-row panel-row--setting">
+          <span>Voice</span>
+          <span className="voice-setting__right">
+            <button type="button" className="voice-preview" onClick={() => void previewLocal()} disabled={previewing} title={`Hear ${bot.name}'s voice`}>{previewing ? 'Playing…' : 'Preview'}</button>
+            <NativeSelect label="Call voice" value={voiceValue} options={voiceOptions} onChange={(voice) => {
+              if (voice === '__manage') { useConfigUI.getState().openAppSettings('audio'); return; }
+              void save({ voice: voice || 'default' });
+            }} />
+          </span>
+        </div>
+        <div className="panel-row panel-row--setting">
           <span>Speed</span>
           <NativeSelect label="Speed" value={bot.voiceSpeed} options={opts.speeds.map((v) => ({ value: v, label: speedLabel(v) }))} onChange={(voiceSpeed) => save({ voiceSpeed })} />
         </div>
       </>}
-      {availability?.realtime && availability.localSpeech && !localCall && <button type="button" className="panel-row panel-row--action" onClick={() => inCall ? endCall() : startCall(bot.id)}>
-        {inCall ? 'End Grok realtime call' : 'Start Grok realtime call'}
-      </button>}
-      {availability?.localSpeech && !inCall && <button type="button" className={`panel-row panel-row--action panel-row--call${localCall ? ' is-active' : ''}`} onClick={() => localCall ? endLocalCall() : startLocalCall(bot)}>
-        {localCall ? <PhoneOff size={14} /> : <Phone size={14} />} {localCall ? 'End call' : `Call ${bot.name}`}
-      </button>}
       {error && <div className="voice-error">{error}</div>}
     </div>;
   }
@@ -136,9 +168,6 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
         <span>Language</span>
         <NativeSelect label="Language" value={bot.voiceLanguage} options={opts.languages.map((l) => ({ value: l.code, label: l.name }))} onChange={(voiceLanguage) => save({ voiceLanguage })} />
       </div>
-      <button type="button" className={`panel-row panel-row--action panel-row--call${inCall ? ' is-active' : ''}`} onClick={() => (inCall ? endCall() : startCall(bot.id))}>
-        {inCall ? <PhoneOff size={14} /> : <Phone size={14} />} {inCall ? 'End call' : `Call ${bot.name}`}
-      </button>
       {error && <div className="voice-error">{error}</div>}
     </div>
   );

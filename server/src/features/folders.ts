@@ -28,9 +28,14 @@ const home = homedir();
 /** Folders a bot may never be given: the whole home folder, system areas and app data. */
 const forbidden = [home, join(home, 'Library'), join(home, '.ssh'), join(home, '.claude'), join(home, '.codex'), join(home, '.gemini')];
 
+/** Bots the owner gave full access (Bot settings → Access, confirmed twice): their whole home folder. */
+export const hasFullAccess = (botId: string) => Boolean((db.prepare('SELECT full_access FROM bots WHERE id=?').get(botId) as { full_access?: number } | undefined)?.full_access);
+export const FULL_ACCESS_LABEL = 'Whole Mac';
+
 export function botFolders(botId: string): BotFolder[] {
-  return (db.prepare('SELECT path, label, write FROM bot_folders WHERE bot_id=? ORDER BY created_at').all(botId) as any[])
+  const shared = (db.prepare('SELECT path, label, write FROM bot_folders WHERE bot_id=? ORDER BY created_at').all(botId) as any[])
     .map(row => ({ path: row.path, label: row.label, write: Boolean(row.write) }));
+  return hasFullAccess(botId) && isDesktop ? [{ path: home, label: FULL_ACCESS_LABEL, write: true }, ...shared] : shared;
 }
 
 async function checkFolder(input: string) {
@@ -48,25 +53,27 @@ async function checkFolder(input: string) {
 
 export async function addBotFolder(botId: string, input: string, label?: string, write = true): Promise<BotFolder[]> {
   const path = await checkFolder(input);
-  const existing = botFolders(botId);
+  const existing = storedFolders(botId);
   if (!existing.some(folder => folder.path === path) && existing.length >= MAX_FOLDERS) throw new Error(`A bot can have up to ${MAX_FOLDERS} folders.`);
   const name = (label?.trim() || basename(path)).slice(0, 60);
   db.prepare(`INSERT INTO bot_folders(bot_id,path,label,write,created_at) VALUES (?,?,?,?,?)
     ON CONFLICT(bot_id,path) DO UPDATE SET label=excluded.label, write=excluded.write`).run(botId, path, name, write ? 1 : 0, Date.now());
-  return botFolders(botId);
+  return storedFolders(botId);
 }
 
+export const storedFolders = (botId: string) => botFolders(botId).filter(folder => !(folder.path === home && folder.label === FULL_ACCESS_LABEL));
+
 export function updateBotFolder(botId: string, path: string, patch: { label?: string; write?: boolean }): BotFolder[] {
-  const current = botFolders(botId).find(folder => folder.path === path);
+  const current = storedFolders(botId).find(folder => folder.path === path);
   if (!current) throw new Error('That folder isn’t shared with this bot.');
   db.prepare('UPDATE bot_folders SET label=?, write=? WHERE bot_id=? AND path=?')
     .run((patch.label?.trim() || current.label).slice(0, 60), (patch.write ?? current.write) ? 1 : 0, botId, path);
-  return botFolders(botId);
+  return storedFolders(botId);
 }
 
 export function removeBotFolder(botId: string, path: string): BotFolder[] {
   db.prepare('DELETE FROM bot_folders WHERE bot_id=? AND path=?').run(botId, path);
-  return botFolders(botId);
+  return storedFolders(botId);
 }
 
 const runFile = promisify(execFile);
@@ -149,5 +156,6 @@ export async function moveInFolder(botId: string, args: { folder?: string; moves
 export function foldersPromptLine(botId: string) {
   const folders = botFolders(botId);
   if (!folders.length) return '';
-  return `Folders on the owner's Mac shared with you: ${folders.map(folder => `"${folder.label}" (${folder.path}, ${folder.write ? 'read and write' : 'read only'})`).join('; ')}. Use folder_list and folder_move for them yourself. For work that needs looking inside files (sorting screenshots by what they show, editing documents), call ask_subscription with that folder: Claude Code, Codex or Gemini then works directly inside it. Tell them the full task; they know nothing else about it.`;
+  const full = hasFullAccess(botId) ? 'The owner gave you FULL ACCESS to their Mac: "Whole Mac" is their home folder, and Claude Code, Codex or Gemini can work anywhere in it (ask_subscription or orchestrate with folder "Whole Mac"). Still confirm anything destructive or irreversible with the owner first. ' : '';
+  return `${full}Folders on the owner's Mac shared with you: ${folders.map(folder => `"${folder.label}" (${folder.path}, ${folder.write ? 'read and write' : 'read only'})`).join('; ')}. Use folder_list and folder_move for them yourself. For work that needs looking inside files (sorting screenshots by what they show, editing documents), call ask_subscription with that folder: Claude Code, Codex or Gemini then works directly inside it. Tell them the full task; they know nothing else about it.`;
 }

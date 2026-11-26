@@ -348,10 +348,20 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const lastMicTone = useRef(micTone);
   if (micText) lastMicTone.current = micTone;
   const hasMessage = shown.trim().length > 0 || files.length > 0;
+  // The composer floats over the conversation: tell the chat how tall it is so the last message clears it.
+  const areaObserver = useRef<ResizeObserver>();
+  const measureArea = useCallback((node: HTMLDivElement | null) => {
+    areaObserver.current?.disconnect();
+    if (!node) return;
+    const chat = node.closest<HTMLElement>('.chat');
+    if (!chat) return;
+    areaObserver.current = new ResizeObserver(() => chat.style.setProperty('--composer-h', `${Math.ceil(node.getBoundingClientRect().height)}px`));
+    areaObserver.current.observe(node);
+  }, []);
   const multiline = shown.includes('\n') || lines > 1;
 
   return (
-    <div className={`composer-area${dropping ? ' is-dropping' : ''}`}
+    <div ref={measureArea} className={`composer-area${dropping ? ' is-dropping' : ''}`}
       onDragEnter={event => {
         if (!event.dataTransfer.types.includes('Files')) return;
         event.preventDefault();

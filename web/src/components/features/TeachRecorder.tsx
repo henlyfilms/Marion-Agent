@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Circle, Mic, MicOff, Square, X } from 'lucide-react';
-import { featuresApi, useFeatureUI } from '../../lib/featuresApi';
+import { Circle, History, Mic, MicOff, Square, Trash2, Upload, X } from 'lucide-react';
+import { featuresApi, useFeatureUI, type TeachRecording } from '../../lib/featuresApi';
+import { relativeShort } from '../../lib/time';
 import { displayName, useStore } from '../../store';
 import { voiceApi } from '../../voice/api';
 import { micErrorMessage, openMic } from '../../voice/audio';
@@ -39,6 +40,43 @@ export function spread<T>(items: T[], max: number): T[] {
 
 type Phase = 'setup' | 'recording' | 'review' | 'sending';
 
+/** Key moments from an uploaded screen recording: step through the video and keep frames where the screen changed. */
+async function framesFromFile(file: File): Promise<{ frames: Frame[]; seconds: number }> {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.muted = true; video.preload = 'auto'; video.src = url; video.playsInline = true;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve();
+      video.onerror = () => reject(new Error('This video can’t be opened here. Try an .mp4, .mov or .webm file.'));
+    });
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    if (!duration || !video.videoWidth) throw new Error('The video has no picture.');
+    const canvas = document.createElement('canvas');
+    const scratch = document.createElement('canvas');
+    scratch.width = 32; scratch.height = 18;
+    const scale = Math.min(1, FRAME_WIDTH / video.videoWidth);
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    const step = Math.max(0.5, duration / 120);
+    const candidates: Frame[] = [];
+    let lastPrint: Uint8Array | null = null;
+    let lastKept = -Infinity;
+    for (let t = 0; t <= duration; t += step) {
+      await new Promise<void>(resolve => { video.onseeked = () => resolve(); video.currentTime = Math.min(t, duration - 0.05); });
+      canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const print = fingerprint(canvas, scratch);
+      if (lastPrint && difference(print, lastPrint) <= 0.04 && t - lastKept < 15) continue;
+      lastPrint = print; lastKept = t;
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.72));
+      if (blob) candidates.push({ blob, url: '', at: Math.round(t * 1000) });
+    }
+    return { frames: spread(candidates, MAX_FRAMES).map(f => ({ ...f, url: URL.createObjectURL(f.blob) })), seconds: Math.round(duration) };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export function TeachRecorder({ botId }: { botId: string }) {
   const bot = useStore(s => s.bots.find(b => b.id === botId));
   const close = () => useFeatureUI.getState().set({ teachBotId: null });
@@ -53,6 +91,53 @@ export function TeachRecorder({ botId }: { botId: string }) {
   const [error, setError] = useState('');
   const session = useRef<{ stop: () => void } | null>(null);
   const started = useRef(0);
+  const savedId = useRef<string | null>(null);
+  const source = useRef<'screen' | 'upload'>('screen');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [history, setHistory] = useState<TeachRecording[] | null>(null);
+  const [importing, setImporting] = useState(false);
+  useEffect(() => { featuresApi.recordings(botId).then(r => setHistory(r.recordings)).catch(() => setHistory([])); }, [botId]);
+
+  /** Saved the moment a recording ends, so closing the window loses nothing (Settings → General → Bots sets how long). */
+  const keep = async (kept: Frame[], seconds: number, extra: { narration?: string } = {}) => {
+    const form = new FormData();
+    if (savedId.current) form.append('id', savedId.current);
+    form.append('title', title.trim());
+    form.append('narration', extra.narration ?? narration);
+    form.append('notes', notes);
+    form.append('seconds', String(seconds));
+    form.append('source', source.current);
+    if (!savedId.current) {
+      form.append('times', kept.map(f => f.at).join(','));
+      kept.forEach((f, i) => form.append('frames', f.blob, `step-${i + 1}.jpg`));
+    }
+    try { savedId.current = (await featuresApi.saveRecording(botId, form)).id; } catch { /* history is best effort */ }
+  };
+
+  const importFile = async (file: File) => {
+    setError(''); setImporting(true);
+    try {
+      const { frames: kept, seconds } = await framesFromFile(file);
+      if (!kept.length) throw new Error('No key moments were found in that video.');
+      source.current = 'upload'; savedId.current = null;
+      if (!title.trim()) setTitle(file.name.replace(/\.[^.]+$/, '').slice(0, 120));
+      setFrames(kept); setElapsed(seconds); setNarration(''); setPhase('review');
+      void keep(kept, seconds);
+    } catch (e) { setError((e as Error).message); } finally { setImporting(false); }
+  };
+
+  const reopen = async (recording: TeachRecording) => {
+    setError(''); setImporting(true);
+    try {
+      const kept = await Promise.all(recording.frames.map(async frame => {
+        const blob = await fetch(`/api/recordings/${recording.id}/${frame.name}`, { credentials: 'include' }).then(r => { if (!r.ok) throw new Error('A frame is missing.'); return r.blob(); });
+        return { blob, url: URL.createObjectURL(blob), at: frame.at };
+      }));
+      savedId.current = recording.id; source.current = recording.source;
+      setTitle(recording.title); setNarration(recording.narration); setNotes(recording.notes);
+      setFrames(kept); setElapsed(recording.seconds); setPhase('review');
+    } catch (e) { setError((e as Error).message); } finally { setImporting(false); }
+  };
 
   useEffect(() => () => { session.current?.stop(); }, []);
   useEffect(() => () => { frames.forEach(f => URL.revokeObjectURL(f.url)); }, [frames]);
@@ -93,6 +178,7 @@ export function TeachRecorder({ botId }: { botId: string }) {
     let lastPrint: Uint8Array | null = null;
     let lastKept = 0;
     started.current = Date.now();
+    savedId.current = null;
     setFrames([]);
     setElapsed(0);
     setPhase('recording');
@@ -135,9 +221,12 @@ export function TeachRecorder({ botId }: { botId: string }) {
         mic?.getTracks().forEach(t => t.stop());
         window.setTimeout(() => {
           const kept = spread(candidates, MAX_FRAMES).map(f => ({ ...f, url: URL.createObjectURL(f.blob) }));
+          const seconds = Math.round((Date.now() - started.current) / 1000);
           setFrames(kept);
-          setElapsed(Math.round((Date.now() - started.current) / 1000));
+          setElapsed(seconds);
           setPhase('review');
+          source.current = 'screen'; savedId.current = null;
+          void keep(kept, seconds);
           if (audio.length) void transcribe(new Blob(audio, { type: recorder?.mimeType || 'audio/webm' }));
         }, 150);
       };
@@ -158,6 +247,7 @@ export function TeachRecorder({ botId }: { botId: string }) {
       }
       const text = await voiceApi.transcribe(blob, bot?.voiceLanguage, undefined, status.nativeSpeech);
       setNarration(current => current || text);
+      if (savedId.current) void keep([], 0, { narration: text });
     } catch (e) {
       setError(`Couldn’t transcribe the narration: ${(e as Error).message}. Type it in the notes instead.`);
     } finally { setTranscribing(false); }
@@ -175,6 +265,7 @@ export function TeachRecorder({ botId }: { botId: string }) {
     frames.forEach((f, i) => form.append('frames', f.blob, `step-${i + 1}.jpg`));
     try {
       await featuresApi.teach(botId, form);
+      void keep([], elapsed);
       close();
     } catch (e) {
       setError((e as Error).message);
@@ -201,6 +292,27 @@ export function TeachRecorder({ botId }: { botId: string }) {
             {narrate ? <Mic size={16} /> : <MicOff size={16} />} {narrate ? 'Narrate with the microphone' : 'No narration'}
           </button>
           <p className="teach-modal__hint">You’ll pick a window or screen next. Up to 10 minutes. Marion keeps up to {MAX_FRAMES} key moments, not the whole video.</p>
+          <div className="teach-modal__or"><span>or</span></div>
+          <button type="button" className="teach-modal__upload" onClick={() => fileInput.current?.click()} disabled={importing}>
+            <Upload size={16} /> {importing ? 'Reading the video…' : 'Upload a screen recording'}
+            <small>.mov, .mp4 or .webm. Marion picks the key moments from it.</small>
+          </button>
+          <input ref={fileInput} type="file" accept="video/*,.mov,.mp4,.webm,.m4v" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file); }} />
+          {!!history?.length && (
+            <div className="teach-history">
+              <div className="teach-history__head"><History size={13} /> Recent recordings</div>
+              {history.slice(0, 6).map(recording => (
+                <div key={recording.id} className="teach-history__row">
+                  <button type="button" className="teach-history__open" onClick={() => void reopen(recording)} disabled={importing}>
+                    <img src={recording.frames[0] ? `/api/recordings/${recording.id}/${recording.frames[0].name}` : undefined} alt="" />
+                    <span><b>{recording.title || 'Untitled recording'}</b><small>{recording.source === 'upload' ? 'Uploaded' : 'Recorded'} {relativeShort(recording.createdAt) === 'now' ? 'just now' : `${relativeShort(recording.createdAt)} ago`} · {recording.frames.length} moments · kept until {new Date(recording.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></span>
+                  </button>
+                  <button type="button" className="icon-btn icon-btn--sm" aria-label={`Delete ${recording.title || 'recording'}`} title="Delete"
+                    onClick={() => featuresApi.deleteRecording(recording.id).then(() => setHistory(list => list?.filter(r => r.id !== recording.id) ?? null)).catch(() => {})}><Trash2 size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
         </>}
         {phase === 'recording' && <div className="teach-modal__recording">
           <span className="teach-modal__dot" aria-hidden="true" />

@@ -5,9 +5,9 @@
   --palette-foreground: #251d29;
   --palette-accent: #633775;
 
-  --color-bg-pane: var(--palette-background);
-  --color-bg-chrome: color-mix(in srgb, var(--palette-background) 97%, var(--palette-accent));
-  --color-bg-sidebar: color-mix(in srgb, var(--palette-background) 93%, var(--palette-accent));
+  --color-bg-pane: var(--palette-chat, var(--palette-background));
+  --color-bg-chrome: var(--palette-panel, color-mix(in srgb, var(--palette-background) 97%, var(--palette-accent)));
+  --color-bg-sidebar: var(--palette-sidebar, color-mix(in srgb, var(--palette-background) 93%, var(--palette-accent)));
   --color-bg-elevated: color-mix(in srgb, var(--palette-background) 95%, white);
   --color-bg-elevated-hover: color-mix(in srgb, var(--color-bg-elevated) 94%, var(--palette-foreground));
   --color-bg-active-solid: color-mix(in srgb, var(--palette-background) 83%, var(--palette-accent));
@@ -34,7 +34,7 @@
   --color-border-focus: var(--palette-accent);
   --color-on-primary: #fff;
   --color-bubble-agent: var(--color-bg-tertiary);
-  --color-bubble-user: var(--color-primary);
+  --color-bubble-user: var(--palette-bubble, var(--color-primary));
 
   --color-bg-scrim: #00000080;
   --color-bot-pink: #F93498;

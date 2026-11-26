@@ -19,6 +19,7 @@ import { ToolkitLogo } from '../ToolkitLogo';
 import { AudioSettings, ComposioSettings, LocalModelSettings, SubscriptionSettings } from './LocalSettings';
 import { ConfirmButton, Switch } from './ui';
 import { LifeLinkSection, NotificationsSection } from '../features/FeatureSettings';
+import { featuresApi, type AgentSettings } from '../../lib/featuresApi';
 import { DEFAULT_DICTATION_SHORTCUT, dictationShortcut, setDictationShortcut, shortcutFor, shortcutLabel } from '../../voice/shortcut';
 
 type Row = { id: AppSection | 'usage' | 'sessions'; label: string; icon: ReactNode; value?: ReactNode };
@@ -250,10 +251,27 @@ function ThemeTile({ value, current, onPick }: { value: Theme; current: Theme; o
 }
 
 const CUSTOM_ROWS: { key: keyof CustomTheme; label: string; sub: string }[] = [
-  { key: 'background', label: 'Background', sub: 'Windows, sidebar and panels' },
+  { key: 'background', label: 'Background', sub: 'The base every surface starts from' },
   { key: 'foreground', label: 'Text', sub: 'Words and icons' },
   { key: 'accent', label: 'Accent', sub: 'Buttons, switches and highlights' },
+  { key: 'sidebar', label: 'Sidebar', sub: 'The chat list on the left' },
+  { key: 'panel', label: 'Side panel', sub: 'The panel on the right and the window frame' },
+  { key: 'chat', label: 'Chat', sub: 'Behind the conversation and cards' },
+  { key: 'bubble', label: 'Your messages', sub: 'Your chat bubbles (instead of each bot’s color)' },
 ];
+/** What an unset surface currently looks like, read from the live page. */
+const surfaceNow = (key: keyof CustomTheme) => {
+  const token = { sidebar: '--color-bg-sidebar', panel: '--color-bg-chrome', chat: '--color-bg-pane', bubble: '--color-bubble-user' }[key as 'sidebar'];
+  const probe = document.createElement('span');
+  probe.style.color = `var(${token})`;
+  document.body.append(probe);
+  const color = getComputedStyle(probe).color;
+  probe.remove();
+  // Chrome reports color-mix() results as color(srgb 0–1 …), plain colors as rgb(0–255 …).
+  const scale = color.startsWith('color(') ? 255 : 1;
+  const rgb = (color.match(/-?\d*\.?\d+(e-?\d+)?/g) ?? []).slice(0, 3).map(n => Number(n) * scale);
+  return `#${rgb.map(n => Math.round(n).toString(16).padStart(2, '0')).join('')}`;
+};
 
 /** Three colors make a whole theme; every change shows straight away. */
 function CustomThemeEditor() {
@@ -261,21 +279,25 @@ function CustomThemeEditor() {
   const setCustom = useConfigUI((s) => s.setCustomTheme);
   const [editing, setEditing] = useState<keyof CustomTheme | null>(null);
   useOnlyOneOpen(editing !== null, () => setEditing(null));
-  const changed = (Object.keys(DEFAULT_CUSTOM_THEME) as (keyof CustomTheme)[]).some(k => custom[k] !== DEFAULT_CUSTOM_THEME[k]);
+  const changed = CUSTOM_ROWS.some(({ key }) => custom[key] !== DEFAULT_CUSTOM_THEME[key]);
+  const valueOf = (key: keyof CustomTheme) => custom[key] ?? surfaceNow(key);
   return (
     <div className="custom-theme" onKeyDown={event => { if (editing && event.key === 'Escape') { event.stopPropagation(); setEditing(null); } }}>
       {CUSTOM_ROWS.map(row => (
         <div key={row.key} className="custom-theme__item">
           <button type="button" className={`custom-theme__row${editing === row.key ? ' is-open' : ''}`} aria-expanded={editing === row.key}
             onClick={() => setEditing(current => current === row.key ? null : row.key)}>
-            <span className="custom-theme__swatch" style={{ background: custom[row.key] }} aria-hidden="true" />
+            <span className="custom-theme__swatch" style={{ background: valueOf(row.key) }} aria-hidden="true" />
             <span className="custom-theme__text"><b>{row.label}</b><small>{row.sub}</small></span>
-            <code>{custom[row.key].toUpperCase()}</code>
+            <code>{custom[row.key] ? custom[row.key]!.toUpperCase() : 'Auto'}</code>
             <ChevronRight size={15} className="custom-theme__chevron" aria-hidden="true" />
           </button>
           <Reveal open={editing === row.key}>
             <div className="custom-theme__picker">
-              <ColorPicker label={row.label} value={custom[row.key]} onChange={hex => setCustom({ ...useConfigUI.getState().customTheme, [row.key]: hex })} />
+              <ColorPicker label={row.label} value={valueOf(row.key)} onChange={hex => setCustom({ ...useConfigUI.getState().customTheme, [row.key]: hex })} />
+              {custom[row.key] && !(['background', 'foreground', 'accent'] as string[]).includes(row.key) && (
+                <button type="button" className="link-btn link-btn--small" onClick={() => { const next = { ...useConfigUI.getState().customTheme }; delete next[row.key]; setCustom(next); }}>Use automatic color</button>
+              )}
             </div>
           </Reveal>
         </div>
@@ -329,6 +351,65 @@ function RecentlyDeleted() {
   );
 }
 
+/** How bots work: app control, live work steps, and how long teaching recordings are kept. */
+function BotsSection() {
+  const [state, setState] = useState<{ settings: AgentSettings; options: number[] } | null>(null);
+  const [count, setCount] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    featuresApi.agentSettings().then(r => setState({ settings: r.settings, options: r.recordingDayOptions })).catch(e => setError((e as Error).message));
+    featuresApi.recordings().then(r => setCount(r.recordings.length)).catch(() => {});
+  }, []);
+  const save = async (patch: Partial<AgentSettings>) => {
+    if (!state) return;
+    const before = state.settings;
+    setState({ ...state, settings: { ...before, ...patch } });
+    setError('');
+    try { const r = await featuresApi.saveAgentSettings(patch); setState(current => current && { ...current, settings: r.settings }); }
+    catch (e) { setState(current => current && { ...current, settings: before }); setError((e as Error).message); }
+  };
+  if (!state) return error ? <p className="cfg-field__hint" role="alert">{error}</p> : null;
+  const { settings, options } = state;
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Bots</div>
+      <div className="cfg-card">
+        <div className="cfg-row">
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">Bots can change Marion Agent</div>
+            <div className="cfg-row__sub">Any bot can rename, recolor, create, delete (recoverably) and switch the model of your bots when you ask it to.</div>
+          </div>
+          <Switch on={settings.appControl} onChange={appControl => void save({ appControl })} label="Bots can change Marion Agent" />
+        </div>
+        <div className="cfg-row">
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">Live work steps</div>
+            <div className="cfg-row__sub">Show each command and edit while Claude, Codex or Gemini work. Off shows only who is working and for how long. Uses no extra usage either way.</div>
+          </div>
+          <Switch on={settings.liveFeed} onChange={liveFeed => void save({ liveFeed })} label="Show live work steps" />
+        </div>
+        <div className="cfg-row">
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">Keep screen recordings</div>
+            <div className="cfg-row__sub">Teach-by-recording drafts stay in history, even if you close the window by accident.{count ? ` ${count} saved now.` : ''}</div>
+          </div>
+          <select className="text-input cfg-select" aria-label="Keep screen recordings for" value={settings.recordingDays} onChange={event => void save({ recordingDays: Number(event.target.value) })}>
+            {options.map(days => <option key={days} value={days}>{days === 1 ? '1 day' : `${days} days`}</option>)}
+          </select>
+        </div>
+        <div className="cfg-row">
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">Recording history</div>
+            <div className="cfg-row__sub">{count === null ? 'Checking…' : count ? `${count} recording${count === 1 ? '' : 's'} saved` : 'Nothing saved'}</div>
+          </div>
+          <ConfirmButton confirmLabel="Clear all" disabled={!count} onConfirm={async () => { await featuresApi.clearRecordings(); setCount(0); }}>Clear history</ConfirmButton>
+        </div>
+      </div>
+      {error && <p className="cfg-field__hint" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 function GeneralSection() {
   const theme = useConfigUI((s) => s.theme);
   const setTheme = useConfigUI((s) => s.setTheme);
@@ -349,6 +430,7 @@ function GeneralSection() {
         <Reveal open={theme === 'custom'}><CustomThemeEditor /></Reveal>
         <div className="cfg-field__hint">System follows your device’s light or dark setting. Custom uses the colors you pick.</div>
       </section>
+      <BotsSection />
       <RecentlyDeleted />
       <section className="cfg-section">
         <div className="cfg-section__label">Chat</div>

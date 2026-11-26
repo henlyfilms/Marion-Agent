@@ -19,7 +19,11 @@ import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
 import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
 import { teamDelegate, teamDiscuss } from './orchestration.js';
-import { botFolders, listFolder, moveInFolder, resolveBotFolder } from '../features/folders.js';
+import { botFolders, hasFullAccess, listFolder, moveInFolder, resolveBotFolder } from '../features/folders.js';
+import { appControlTool, runAppControl } from '../features/app-control.js';
+import { agentSettings } from '../features/agent-settings.js';
+import { orchestrate } from './orchestrate.js';
+import { trailingQuestion, WorkCard } from './work-feed.js';
 import { lifePlannerTools, lifeToolsEnabled, runLifePlannerTool, type LifePlannerTool } from '../features/life-link.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
@@ -256,9 +260,49 @@ export const TOOLS: ToolDef[] = [
       const task = folder
         ? `${prompt}\n\nWork only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.`
         : prompt;
-      const text = await subscriptionReply(subscriptionSelection(ctx.userId, provider), task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), [], { folder });
-      return { output: text, summary: folder ? `${provider} worked in ${folder.label}` : `Received a reply from ${provider}` };
+      const selection = subscriptionSelection(ctx.userId, provider);
+      const name = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[provider as 'claude' | 'codex' | 'gemini'];
+      const card = new WorkCard(ctx.botId, ctx.userId, {
+        title: prompt.split('\n')[0].slice(0, 120), reporter: getBotRow(ctx.botId)?.name,
+        agents: [{ id: 'worker-0', label: selection.label || name, provider, model: selection.model, role: 'worker' }],
+      });
+      const who = selection.label || name;
+      try {
+        const text = await subscriptionReply(selection, task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), [], { folder, onStep: card.feed(who) });
+        const question = trailingQuestion(text);
+        if (question) card.step(who, 'question', question);
+        card.finish(question ? 'needs-input' : 'done', question || undefined);
+        return {
+          output: question ? `${text}\n\n${name} is asking the owner something. Relay it with ask_user (short options) and stop.` : text,
+          summary: folder ? `${provider} worked in ${folder.label}` : `Received a reply from ${provider}`,
+        };
+      } catch (error) {
+        card.step(who, 'error', String((error as Error).message ?? error));
+        card.finish(ctx.signal?.aborted ? 'stopped' : 'failed');
+        throw error;
+      }
     },
+  },
+  {
+    name: 'orchestrate',
+    description: 'Run a model team when the owner names an orchestrator and subagents (e.g. "use 6.2 Astra as the orchestrator and run Gemini 4 Neon subagents"). The orchestrator plans phases, subagents do the work, the orchestrator reviews it; progress shows live in the chat. You only relay and report: never do the work yourself.',
+    parameters: obj({
+      goal: { type: 'string', description: 'The owner\'s full request, with every detail' },
+      orchestrator: { type: 'string', description: 'Model name as the owner said it' },
+      workers: { type: 'array', items: { type: 'string' }, description: 'Subagent model names as the owner said them' },
+      worker_count: { type: 'integer', description: 'How many subagents to run (default: one per name)' },
+      folder: { type: 'string', description: 'Optional shared folder to work in (name or path)' },
+      title: { type: 'string', description: 'A short title for the work' },
+    }, ['goal', 'orchestrator', 'workers']),
+    activity: 'messaging_named',
+    label: 'Orchestrating a team',
+    impl: async (args, ctx) => orchestrate(ctx, args, args.folder ? resolveBotFolder(ctx.botId, args.folder) : undefined),
+  },
+  {
+    ...appControlTool,
+    activity: 'working',
+    label: 'Changing Marion Agent',
+    impl: async (args, ctx) => runAppControl(ctx, args),
   },
   {
     name: 'team_models',
@@ -715,7 +759,8 @@ export const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
 export function functionSchemas(userId?: string, botId?: string) {
   const life = userId ? lifeToolsEnabled(userId, botId) : false;
   const folders = botId ? botFolders(botId).length > 0 : false;
-  return TOOLS.filter(t => (life || !lifeTools.has(t.name)) && (folders || !t.name.startsWith('folder_')))
+  const appControl = userId ? agentSettings(userId).appControl : true;
+  return TOOLS.filter(t => (life || !lifeTools.has(t.name)) && (folders || !t.name.startsWith('folder_')) && (appControl || t.name !== 'marion_app'))
     .map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
 }
 
@@ -726,7 +771,13 @@ export type Decision = 'allow' | 'ask' | 'block';
 /** Composio meta tools that only discover tools. Others (remote workbench/bash, proxy calls) can run any action. */
 const DISCOVERY_META_TOOLS = new Set(['COMPOSIO_SEARCH_TOOLS', 'COMPOSIO_GET_TOOL_SCHEMAS']);
 
-export function policyFor(userId: string, toolName: string, args: any): { decision: Decision; key: string; toolkit?: string; title: string } {
+export function policyFor(userId: string, toolName: string, args: any, botId?: string): { decision: Decision; key: string; toolkit?: string; title: string } {
+  // A bot with full access (confirmed twice by the owner) hands work to the CLIs without asking each time.
+  if (botId && (toolName === 'ask_subscription' || toolName === 'orchestrate') && hasFullAccess(botId)) return { decision: 'allow', key: toolName, title: toolName };
+  if (toolName === 'orchestrate') {
+    const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, 'orchestrate') as any;
+    return { decision: p?.mode === 'always_allow' ? 'allow' : p?.mode === 'blocked' ? 'block' : 'ask', key: 'orchestrate', title: 'Run a model team (orchestrator and subagents)' };
+  }
   // Approval is required for every prompt sent to the optional hosted connector.
   // A task inside a folder the owner already shared with this bot can be set to "Always allow".
   if (toolName === 'ask_subscription' && args?.folder) {

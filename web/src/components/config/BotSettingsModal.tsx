@@ -9,7 +9,7 @@ import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
 import { useStore } from '../../store';
 import { featuresApi, type BotFolder, type BotProfileData, type LifeLink } from '../../lib/featuresApi';
-import { Folder, Share } from 'lucide-react';
+import { Folder, Share, ShieldAlert } from 'lucide-react';
 import { ToolkitLogo } from '../ToolkitLogo';
 import { Icon } from '../Icon';
 import { Modal } from '../modals/Modal';
@@ -250,10 +250,62 @@ function AccessTab({ bot }: { bot: Bot }) {
           <div className="cfg-page__sub">What {bot.name} can reach. Anything shared here {bot.name} can also hand to Claude Code, Codex or Gemini when it asks them for help.</div>
         </div>
       </div>
+      <FullAccessSection bot={bot} />
       <FoldersSection bot={bot} />
       <LifeAccessSection bot={bot} />
       <AppsSection bot={bot} />
     </div>
+  );
+}
+
+/**
+ * Full access, for this bot only: its CLIs (Claude Code, Codex, Gemini) may work anywhere in the home
+ * folder and run without asking each time. Two steps to turn on: the switch, then a confirm after
+ * ticking that you understand. Off again with one tap.
+ */
+function FullAccessSection({ bot }: { bot: Bot }) {
+  const [on, setOn] = useState<boolean | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [understood, setUnderstood] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { featuresApi.folders(bot.id).then(r => setOn(Boolean(r.fullAccess))).catch(() => setOn(false)); }, [bot.id]);
+  const set = async (enabled: boolean) => {
+    setBusy(true); setError('');
+    try {
+      const r = await featuresApi.setFullAccess(bot.id, enabled, enabled ? `give ${bot.name} full access` : undefined);
+      setOn(r.fullAccess); setAsking(false); setUnderstood(false);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  if (on === null) return null;
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Full access</div>
+      <div className={`cfg-card full-access${on ? ' is-on' : ''}`}>
+        <div className="cfg-row">
+          <ShieldAlert size={16} strokeWidth={1.8} className="access-folder__icon" />
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">Give {bot.name} access to everything</div>
+            <div className="cfg-row__sub">{on ? `${bot.name} and the assistants it uses can work anywhere in your home folder and run commands on this Mac without asking first.` : `Only ${bot.name}. Lets it (and Claude Code, Codex or Gemini working for it) reach your whole home folder and run commands without asking each time.`}</div>
+          </div>
+          <Switch on={on || asking} disabled={busy} label={`Full access for ${bot.name}`} onChange={next => { if (!next) { setAsking(false); if (on) void set(false); } else setAsking(true); }} />
+        </div>
+        {asking && !on && (
+          <div className="full-access__confirm" role="alertdialog" aria-label="Confirm full access">
+            <p><b>Are you sure?</b> {bot.name} could read, change or delete any file in your home folder and run any command, and it won’t stop to ask. Other bots are not affected.</p>
+            <label className="full-access__check">
+              <input type="checkbox" checked={understood} onChange={event => setUnderstood(event.target.checked)} />
+              I understand and want to give {bot.name} full access
+            </label>
+            <div className="full-access__actions">
+              <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => { setAsking(false); setUnderstood(false); }}>Cancel</button>
+              <button type="button" className="cfg-btn cfg-btn--danger" disabled={!understood || busy} onClick={() => void set(true)}>{busy ? 'Turning on…' : 'Turn on full access'}</button>
+            </div>
+          </div>
+        )}
+      </div>
+      {error && <div className="cfg-error">{error}</div>}
+    </section>
   );
 }
 

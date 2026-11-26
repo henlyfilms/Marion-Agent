@@ -4,6 +4,7 @@ import { api, openPopup } from '../../lib/api';
 import { useStore } from '../../store';
 import { Icon } from '../Icon';
 import { ToolkitLogo } from '../ToolkitLogo';
+import { WorkCard } from './WorkCard';
 
 type Card<K extends CardBody['card']> = Extract<CardBody, { card: K }>;
 
@@ -203,6 +204,7 @@ export function CardRow({ row }: { row: Row }) {
     case 'question': return <QuestionCard row={row} body={b} />;
     case 'connect': return <ConnectCard row={row} body={b} />;
     case 'draft': return <DraftCard body={b} />;
+    case 'work': return <WorkCard body={b} />;
     default: return null;
   }
 }

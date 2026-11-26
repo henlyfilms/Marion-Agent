@@ -1,0 +1,44 @@
+// marion_app: bots can list, create, rename, recolor, reshape, star, delete/restore bots; the setting turns it off.
+// Usage: npm run build && node tests/app-control.mjs
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), 'marion-app-')), 'a.db');
+process.env.MARION_LOCAL_MODEL_URL = 'http://127.0.0.1:9/v1';
+const { db } = await import('../server/dist/db.js');
+await import('../server/dist/features/schema.js');
+await import('../server/dist/db-config.js');
+(await import('../server/dist/agent/subagents.js')).initSubagents();
+const { createBotRecord } = await import('../server/dist/features/bots.js');
+const { runAppControl } = await import('../server/dist/features/app-control.js');
+const { saveAgentSettings } = await import('../server/dist/features/agent-settings.js');
+const { functionSchemas } = await import('../server/dist/agent/tools.js');
+db.prepare('INSERT INTO users(id,email,name,created_at) VALUES (?,?,?,?)').run('u1', 'a@example.com', 'A', Date.now());
+const barry = createBotRecord('u1', { name: 'Barry', avatarColor: 'violet' });
+createBotRecord('u1', { name: 'Moose', avatarColor: 'blue' });
+const ctx = { userId: 'u1', botId: barry.id };
+const row = name => db.prepare('SELECT * FROM bots WHERE name=?').get(name);
+
+assert.ok(functionSchemas('u1', barry.id).some(t => t.name === 'marion_app'), 'every bot gets marion_app by default');
+assert.match((await runAppControl(ctx, { action: 'list_bots' })).output, /Moose/);
+await runAppControl(ctx, { action: 'update_bot', bot: 'moose', color: 'pink' });
+assert.equal(row('Moose').avatar_color, 'magenta', 'pink maps to magenta');
+await runAppControl(ctx, { action: 'update_bot', bot: 'Moose', color: '#12ab34', glow: true, shape: 'strawberry', starred: true });
+assert.equal(row('Moose').avatar_color, '#12ab34');
+assert.equal(row('Moose').avatar_glow, 1);
+assert.equal(row('Moose').avatar_shape, 'strawberry');
+await runAppControl(ctx, { action: 'update_bot', bot: 'me', name: 'Barry Two' });
+assert.ok(row('Barry Two'), 'a bot can rename itself');
+await runAppControl(ctx, { action: 'create_bot', name: 'Scout', job: 'Finds things', color: 'green' });
+assert.equal(row('Scout').avatar_color, 'green');
+await runAppControl(ctx, { action: 'delete_bot', bot: 'Scout' });
+assert.ok(row('Scout').deleted_at, 'deleted is recoverable');
+await runAppControl(ctx, { action: 'restore_bot', bot: 'Scout' });
+assert.equal(row('Scout').deleted_at, null);
+assert.match((await runAppControl(ctx, { action: 'delete_bot', bot: 'me' })).output, /can't delete itself/);
+await assert.rejects(runAppControl(ctx, { action: 'update_bot', bot: 'Moose', color: 'plaid' }), /isn't a bot color/);
+saveAgentSettings('u1', { appControl: false });
+assert.ok(!functionSchemas('u1', barry.id).some(t => t.name === 'marion_app'), 'setting off hides the tool');
+assert.match((await runAppControl(ctx, { action: 'list_bots' })).output, /turned off/);
+console.log('app-control: all checks passed');

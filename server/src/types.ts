@@ -213,7 +213,34 @@ export type CardBody =
       text: string;
       approvalId: string;
       status: 'pending' | 'sent' | 'discarded';
-    };
+    }
+  | WorkCardBody;
+
+/** Who is doing the work in a work card: a model reached through a CLI or a local server. */
+export interface WorkAgent { id: string; label: string; provider: ChatProvider; model: string; role: 'orchestrator' | 'worker' }
+export interface WorkStep { at: number; agent: string; kind: 'command' | 'edit' | 'read' | 'search' | 'note' | 'review' | 'approve' | 'error' | 'question'; text: string }
+export interface WorkPhase { title: string; status: 'pending' | 'running' | 'done' | 'failed' }
+
+/**
+ * Live work from Claude, Codex or Gemini (one assistant, or an orchestrated team). The bot that
+ * started it only reports: this card mirrors what the models are doing, at no model cost.
+ */
+export interface WorkCardBody {
+  type: 'card';
+  card: 'work';
+  title: string;
+  /** The chat's own model, which only relays and reports. */
+  reporter?: string;
+  agents: WorkAgent[];
+  phases: WorkPhase[];
+  /** Newest last; only reviews, approvals and questions when Settings → Live work steps is off. */
+  steps: WorkStep[];
+  live: boolean;
+  status: 'running' | 'done' | 'failed' | 'stopped' | 'needs-input';
+  startedAt: number;
+  endedAt?: number;
+  question?: string;
+}
 
 export interface EventBody {
   type: 'event';

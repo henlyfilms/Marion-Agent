@@ -54,7 +54,7 @@
   box-shadow: var(--bubble-ring); overflow-wrap: anywhere;
 }
 .bubble.is-agent { background: linear-gradient(180deg, #FFFFFF29 0%, #FFFFFF00 100%), var(--color-bubble-agent); color: var(--color-ink); }
-.bubble.is-user { background: linear-gradient(180deg, #FFFFFF0F 0%, #FFFFFF00 100%), var(--bot-bubble, var(--color-bubble-user)); color: var(--bot-on-action, var(--color-on-primary)); }
+.bubble.is-user { background: linear-gradient(180deg, #FFFFFF0F 0%, #FFFFFF00 100%), var(--palette-bubble, var(--bot-bubble, var(--color-bubble-user))); color: var(--palette-bubble-ink, var(--bot-on-action, var(--color-on-primary))); }
 .bubble__plain { white-space: pre-wrap; }
 /* Grouped bubble "tail" corners (README: bottom-left on first, top-left on last). Mirrored for user bubbles. */
 .bubble.is-agent.is-first { border-bottom-left-radius: 6px; }
@@ -196,7 +196,6 @@
   background: var(--bot-action, var(--color-primary)); color: var(--bot-on-action, #FFFFFF); flex-shrink: 0; transition: background-color 120ms, transform 120ms;
 }
 .composer__cta:hover:not(:disabled) { background: var(--bot-action-hover, var(--color-bg-primary-hover)); }
-.composer__cta:active:not(:disabled) { transform: scale(0.94); }
 .composer__error {
   max-width: 960px; margin: 0 auto 8px; padding: 6px 12px; border-radius: 12px; background: var(--color-danger-bg); color: var(--color-danger-text);
   font-size: 13px; line-height: 18px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -213,27 +212,44 @@
 @keyframes marion-loading { from { opacity: 0.35; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
 .local-voice { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 auto 8px; padding: 12px; max-width: min(90%, 750px); border: 1px solid var(--color-border); border-radius: 12px; }
 
-.chat { min-width: 0; background: var(--color-bg-pane); }
+.chat { min-width: 0; background: var(--color-bg-pane); --composer-h: 112px; }
+/* No title bar: the conversation runs to the top edge and the bot floats over it as a small glass pill. */
 .chat__header {
-  position: relative; order: -1; height: auto; min-height: 55px; flex-shrink: 0;
-  justify-content: space-between; gap: 8px; padding: 9px calc(22px + var(--conversation-actions-width)) 8px 14px;
-  background: var(--color-bg-pane); border-bottom: 1px solid var(--color-border-tertiary);
-  pointer-events: auto;
+  position: absolute; z-index: 7; left: 0; right: 0; top: 0; height: 56px; min-height: 0;
+  display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 calc(22px + var(--conversation-actions-width));
+  background: none; border: 0; pointer-events: none;
 }
-.chat__header-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.chat__header > * { pointer-events: auto; }
+.chat__header-main { flex: 0 1 auto; min-width: 0; display: flex; justify-content: center; }
 .chat__header .sidebar-back { display: none; }
 .chat__pill-anchor { max-width: 100%; }
 .chat__pill {
-  min-height: 36px; padding: 4px 10px 4px 8px; background: transparent;
-  border: 1px solid transparent; border-radius: 12px; box-shadow: none;
-  transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  min-height: 36px; padding: 4px 14px 4px 5px; gap: 8px; border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-bg-elevated) 72%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
+  border: 0.5px solid color-mix(in srgb, var(--palette-foreground) 12%, transparent);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.18), 0 1px 2px rgb(0 0 0 / 0.12);
+  transition: background-color 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
 }
-.chat__pill:is(:hover, [aria-expanded="true"]) { border-color: var(--color-border-tertiary); }
+.chat__pill:is(:hover, [aria-expanded="true"]) { background: color-mix(in srgb, var(--color-bg-elevated-hover) 82%, transparent); }
 .chat__pill > .bot-avatar { flex-shrink: 0; }
-.chat__pill-name { font-size: 15px; font-weight: 650; }
-@media (min-width: 921px) {
-  .app.has-details .chat__header { padding-right: 14px; }
+.chat__pill-name { font-size: 14px; font-weight: 600; }
+.chat .transcript { padding-top: 64px; padding-bottom: calc(var(--composer-h) + 12px); }
+.chat .jump-btn { bottom: calc(var(--composer-h) + 10px); }
+/* The composer floats: messages scroll behind it, and only the pills and the box itself are drawn. */
+.chat .composer-area { position: absolute; z-index: 6; left: 0; right: 0; bottom: 0; background: none; pointer-events: none; }
+.chat .composer-area > * { pointer-events: auto; }
+.chat .composer__models { pointer-events: none; }
+.chat .composer__models > * { pointer-events: auto; }
+.chat .composer {
+  background: color-mix(in srgb, var(--color-bg-pane) 78%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4);
 }
+.chat .chat-model__trigger {
+  background: color-mix(in srgb, var(--color-bg-chrome) 70%, transparent);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.chat .chat-model__memory { padding: 4px 8px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--color-bg-chrome) 70%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
 @media (max-width: 920px) {
   .app.has-details .conversation-actions { visibility: hidden; }
 }

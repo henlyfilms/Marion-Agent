@@ -151,8 +151,10 @@ const BotButton = memo(function BotButton({ bot, selected, running, awaiting, va
         <span className="bot-row__name">{displayName(bot)}{bot.pinned && variant === 'row' && <Icon name="star" size={12} className="bot-row__star" aria-label="Starred" />}</span>
         {variant !== 'featured' && <span className="bot-row__preview">{previewFor(bot, running, awaiting)}</span>}
       </span>
-      {variant !== 'featured' && (!!bot.lastPreview || !!bot.contextTokens || running) && <span className="bot-row__meta">
-        {running && !awaiting
+      {variant !== 'featured' && (!!bot.lastPreview || !!bot.contextTokens || running || !!awaiting) && <span className="bot-row__meta">
+        {awaiting
+          ? <span className="bot-row__needs" title={`Waiting for you: ${awaiting}`}>Needs input</span>
+          : running
           ? <span className="bot-row__spinner" role="img" aria-label="Working" />
           : bot.lastPreview && <time className="bot-row__time" dateTime={new Date(bot.lastActivityAt).toISOString()}>{activityTime(bot.lastActivityAt)}</time>}
         {bot.kind !== 'room' && bot.contextTokens ? <span className={`bot-row__context ${contextTone(bot.contextTokens)}`} title={`Context: ${bot.contextTokens.toLocaleString()} of 1,000,000 tokens`}

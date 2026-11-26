@@ -4,6 +4,7 @@
 // tools, records call start/end rows, and proxies TTS (voice preview) and STT (composer dictation).
 import { nativePlayback, nativeTranscription, speakOnMac, transcribeOnMac } from './native-speech.js';
 import { remoteAccessFor } from './lib/auth.js';
+import { addCustomVoice, customVoices, macVoices, removeCustomVoice, speakWithVoice } from './features/voices.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import OpenAI from 'openai';
@@ -223,11 +224,34 @@ voiceApi.post('/speech', async (c) => {
   const bot = p.botId && ownBot(c.get('user').id, p.botId);
   if (p.botId && !bot) return c.json({ error: 'Bot not found.' }, 404);
   try {
-    const audio = await speakOnMac(p.text, clampSpeed(p.speed ?? (bot ? bot.voice_speed : 1)), c.req.raw.signal);
+    const speed = clampSpeed(p.speed ?? (bot ? bot.voice_speed : 1));
+    const chosen = await speakWithVoice(c.get('user').id, (p as { voice?: string }).voice ?? bot?.voice, p.text, speed, c.req.raw.signal);
+    if (chosen && 'audio' in chosen) return c.body(new Uint8Array(chosen.audio), 200, { 'Content-Type': chosen.type, 'Cache-Control': 'no-store' });
+    const audio = await speakOnMac(p.text, speed, c.req.raw.signal, chosen && 'macVoice' in chosen ? chosen.macVoice : undefined);
     return c.body(audio, 200, { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' });
-  } catch {
-    return c.json({ error: 'Could not play the Mac speech voice.' }, 502);
+  } catch (error) {
+    return c.json({ error: (error as Error).message?.startsWith('"') || /speech server/.test((error as Error).message) ? (error as Error).message : 'Could not play the Mac speech voice.' }, 502);
   }
+});
+
+/** Voices for calls on this Mac: installed macOS voices plus the owner's own (Settings → Audio → Voices). */
+voiceApi.get('/voices', async (c) => c.json({
+  mac: nativePlayback && !remoteAccessFor(c) ? await macVoices() : [],
+  custom: customVoices(c.get('user').id).map(({ id, name, url, model, voice, sampleName }) => ({ id: `custom:${id}`, name, url, model, voice, sampleName })),
+}));
+voiceApi.post('/voices', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.json({ error: 'Keep the voice file under 25 MB.' }, 413) }), async (c) => {
+  if (remoteAccessFor(c)) return c.json({ error: 'Add voices on the Mac itself.' }, 403);
+  const form = await c.req.formData().catch(() => null);
+  if (!form) return c.json({ error: 'Send the voice as a form.' }, 400);
+  const sample = form.get('sample');
+  try {
+    const voice = await addCustomVoice(c.get('user').id, { name: form.get('name'), url: form.get('url'), model: form.get('model'), voice: form.get('voice'), sample: sample instanceof File && sample.size ? sample : null });
+    return c.json({ voice: { id: `custom:${voice.id}`, name: voice.name } });
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+voiceApi.delete('/voices/:id', async (c) => {
+  await removeCustomVoice(c.get('user').id, c.req.param('id').replace(/^custom:/, ''));
+  return c.json({ ok: true });
 });
 
 voiceApi.use('*', async (c, next) => {

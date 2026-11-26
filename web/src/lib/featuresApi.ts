@@ -18,6 +18,8 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export interface BotFolder { path: string; label: string; write: boolean }
+export interface AgentSettings { appControl: boolean; liveFeed: boolean; recordingDays: number }
+export interface TeachRecording { id: string; botId: string; title: string; narration: string; notes: string; seconds: number; frames: { name: string; at: number }[]; source: 'screen' | 'upload'; createdAt: number; expiresAt: number }
 export interface ProfileSkill { name: string; description: string; body: string }
 export interface ProfileRoutine { name: string; prompt: string; schedule: string; enabled: boolean }
 export interface BotProfileData {
@@ -88,7 +90,14 @@ export const featuresApi = {
   addDevice: (subscription: PushSubscriptionJSON, label: string) => req<{ ok: true }>('POST', '/notifications/devices', { ...subscription, label }),
   removeDevice: (endpoint: string) => req<{ ok: true }>('DELETE', '/notifications/devices', { endpoint }),
   testNotification: () => req<{ devices: number; delivered: number }>('POST', '/notifications/test'),
-  folders: (botId: string) => req<{ folders: BotFolder[]; suggestion: string | null }>('GET', `/bots/${botId}/folders`),
+  folders: (botId: string) => req<{ folders: BotFolder[]; fullAccess?: boolean; suggestion: string | null }>('GET', `/bots/${botId}/folders`),
+  setFullAccess: (botId: string, enabled: boolean, confirm?: string) => req<{ fullAccess: boolean }>('PUT', `/bots/${botId}/full-access`, { enabled, confirm }),
+  agentSettings: () => req<{ settings: AgentSettings; recordingDayOptions: number[] }>('GET', '/agent-settings'),
+  saveAgentSettings: (patch: Partial<AgentSettings>) => req<{ settings: AgentSettings }>('PUT', '/agent-settings', patch),
+  recordings: (botId?: string) => req<{ recordings: TeachRecording[]; keepDays: number }>('GET', `/recordings${botId ? `?botId=${encodeURIComponent(botId)}` : ''}`),
+  saveRecording: (botId: string, form: FormData) => req<{ id: string }>('POST', `/bots/${botId}/recordings`, form),
+  deleteRecording: (id: string) => req<{ ok: boolean }>('DELETE', `/recordings/${encodeURIComponent(id)}`),
+  clearRecordings: () => req<{ removed: number }>('DELETE', '/recordings'),
   addFolder: (botId: string, body: { path?: string; pick?: boolean; label?: string; write?: boolean }) => req<{ folders: BotFolder[]; cancelled?: boolean }>('POST', `/bots/${botId}/folders`, body),
   updateFolder: (botId: string, body: { path: string; label?: string; write?: boolean }) => req<{ folders: BotFolder[] }>('PATCH', `/bots/${botId}/folders`, body),
   removeFolder: (botId: string, path: string) => req<{ folders: BotFolder[] }>('DELETE', `/bots/${botId}/folders`, { path }),

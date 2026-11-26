@@ -20,12 +20,14 @@ import { reflectBot } from './features/improve.js';
 import { codingSessionMessages, listCodingSessions, type SessionProvider } from './features/sessions.js';
 import { startUpdate, updateStatus } from './features/app-update.js';
 import { remoteAccessFor } from './lib/auth.js';
-import { addBotFolder, botFolders, pickFolder, removeBotFolder, screenshotFolder, updateBotFolder } from './features/folders.js';
+import { clearRecordings, deleteRecording, listRecordings, recordingFrame, saveRecording } from './features/recordings.js';
+import { agentSettings, RECORDING_DAY_OPTIONS, saveAgentSettings } from './features/agent-settings.js';
+import { addBotFolder, hasFullAccess, storedFolders, pickFolder, removeBotFolder, screenshotFolder, updateBotFolder } from './features/folders.js';
 
 /** Templates, bot profiles, context and compaction, computer sleep, teaching, notifications and the Marion Life link. */
 export const featuresApi = new Hono<AuthVars>();
 // Scope the auth check to these paths only: a '*' here would also run for sign-in routes mounted after it.
-for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/app/update']) featuresApi.use(path, requireUser);
+for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/app/update', '/recordings', '/recordings/*', '/agent-settings']) featuresApi.use(path, requireUser);
 
 const ownBot = (userId: string, botId: string) =>
   db.prepare('SELECT * FROM bots WHERE id=? AND user_id=?').get(botId, userId) as any;
@@ -255,6 +257,49 @@ featuresApi.post('/bots/:id/teach', bodyLimit({ maxSize: MAX_FRAMES * MAX_FRAME_
   return c.json({ row });
 });
 
+// ---------- teach-by-recording history ----------
+
+featuresApi.post('/bots/:id/recordings', bodyLimit({ maxSize: MAX_FRAMES * MAX_FRAME_BYTES + 256 * 1024, onError: c => c.json({ error: 'The recording is too large.' }, 413) }), async (c) => {
+  const userId = c.get('user').id;
+  const b = ownBot(userId, c.req.param('id'));
+  if (!b || b.kind === 'room') return c.json({ error: 'not found' }, 404);
+  const form = await c.req.formData().catch(() => null);
+  if (!form) return c.json({ error: 'Send the recording as a form.' }, 400);
+  const frames: { data: Buffer; at: number; ext: string }[] = [];
+  const times = String(form.get('times') ?? '').split(',').map(Number);
+  for (const file of form.getAll('frames').slice(0, MAX_FRAMES)) {
+    if (typeof file === 'string' || !file.size || file.size > MAX_FRAME_BYTES) continue;
+    const data = Buffer.from(await file.arrayBuffer());
+    const jpeg = data[0] === 0xff && data[1] === 0xd8;
+    const png = data.subarray(0, 4).toString('hex') === '89504e47';
+    if (jpeg || png) frames.push({ data, at: Number.isFinite(times[frames.length]) ? times[frames.length] : 0, ext: jpeg ? 'jpg' : 'png' });
+  }
+  const id = await saveRecording(userId, b.id, {
+    id: typeof form.get('id') === 'string' ? String(form.get('id')) : undefined,
+    title: String(form.get('title') ?? '').trim().slice(0, 120), narration: String(form.get('narration') ?? '').slice(0, 20_000),
+    notes: String(form.get('notes') ?? '').slice(0, 4000), seconds: Math.max(0, Math.min(3600, Number(form.get('seconds')) || 0)),
+    source: String(form.get('source') ?? 'screen'), frames,
+  });
+  return c.json({ id });
+});
+
+featuresApi.get('/recordings', async (c) => c.json({ recordings: await listRecordings(c.get('user').id, c.req.query('botId') || undefined), keepDays: agentSettings(c.get('user').id).recordingDays }));
+featuresApi.get('/recordings/:id/:frame', async (c) => {
+  const data = await recordingFrame(c.get('user').id, c.req.param('id'), c.req.param('frame'));
+  if (!data) return c.json({ error: 'not found' }, 404);
+  return c.body(new Uint8Array(data), 200, { 'Content-Type': c.req.param('frame').endsWith('.png') ? 'image/png' : 'image/jpeg', 'Cache-Control': 'private, max-age=3600' });
+});
+featuresApi.delete('/recordings/:id', async (c) => c.json({ ok: await deleteRecording(c.get('user').id, c.req.param('id')) }));
+featuresApi.delete('/recordings', async (c) => c.json({ removed: await clearRecordings(c.get('user').id) }));
+
+// ---------- how bots work (Settings → General → Bots) ----------
+
+featuresApi.get('/agent-settings', (c) => c.json({ settings: agentSettings(c.get('user').id), recordingDayOptions: RECORDING_DAY_OPTIONS }));
+featuresApi.put('/agent-settings', async (c) => {
+  try { return c.json({ settings: saveAgentSettings(c.get('user').id, await c.req.json()) }); }
+  catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
 // ---------- notifications ----------
 
 featuresApi.get('/notifications', (c) => {
@@ -302,7 +347,19 @@ featuresApi.post('/notifications/test', async (c) => {
 featuresApi.get('/bots/:id/folders', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  return c.json({ folders: botFolders(b.id), suggestion: await screenshotFolder().catch(() => null) });
+  return c.json({ folders: storedFolders(b.id), fullAccess: hasFullAccess(b.id), suggestion: await screenshotFolder().catch(() => null) });
+});
+
+/** Full access is per bot and only switched on from the Mac itself, after the owner confirms twice in the app. */
+featuresApi.put('/bots/:id/full-access', async (c) => {
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b || b.kind === 'room') return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.enabled !== 'boolean') return c.json({ error: 'Choose on or off.' }, 400);
+  if (body.enabled && (remoteAccessFor(c) || body.confirm !== `give ${b.name} full access`)) return c.json({ error: 'Turn on full access on the Mac and confirm it.' }, 403);
+  db.prepare('UPDATE bots SET full_access=? WHERE id=?').run(body.enabled ? 1 : 0, b.id);
+  appendRow(b.id, 'event', { type: 'event', event: 'computer', text: body.enabled ? `Full access turned on for ${b.name}` : `Full access turned off for ${b.name}` });
+  return c.json({ fullAccess: body.enabled });
 });
 
 featuresApi.post('/bots/:id/folders', async (c) => {
@@ -312,7 +369,7 @@ featuresApi.post('/bots/:id/folders', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   try {
     const path = body.pick ? await pickFolder() : String(body.path ?? '');
-    if (!path) return c.json({ folders: botFolders(b.id), cancelled: true });
+    if (!path) return c.json({ folders: storedFolders(b.id), cancelled: true });
     return c.json({ folders: await addBotFolder(b.id, path, typeof body.label === 'string' ? body.label : undefined, body.write !== false) });
   } catch (error) { return c.json({ error: (error as Error).message }, 400); }
 });

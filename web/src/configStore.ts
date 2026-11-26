@@ -43,7 +43,9 @@ export function applyTheme(t: Theme) {
   const { scheme, background } = themeColors(resolved);
   root.dataset.theme = resolved;
   root.dataset.colorScheme = scheme;
-  for (const [name, value] of Object.entries(themeStyle(resolved))) root.style.setProperty(name, value);
+  for (const [name, value] of Object.entries(themeStyle(resolved))) {
+    if (value) root.style.setProperty(name, value); else root.style.removeProperty(name);
+  }
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', background);
 }
 

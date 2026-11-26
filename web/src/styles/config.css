@@ -243,7 +243,6 @@
   transition: background-color 150ms var(--ease-out);
 }
 .custom-theme__row:hover, .custom-theme__row.is-open { background: var(--color-bg-hover); }
-.custom-theme__row:active { transform: scale(0.99); }
 .custom-theme__swatch { width: 28px; height: 28px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 0.5px var(--color-border-primary), 0 1px 3px #0000001f; }
 .custom-theme__text { display: grid; flex: 1; min-width: 0; }
 .custom-theme__text b { font-size: 13px; font-weight: 600; color: var(--color-ink); }
@@ -254,3 +253,18 @@
 .custom-theme__picker { display: grid; justify-items: center; padding: 4px 0 8px; }
 .custom-theme__picker .color-picker { width: 280px; box-shadow: none; background: var(--color-bg-pane); }
 .custom-theme__foot { display: flex; justify-content: flex-end; padding: 6px 4px 2px; }
+.cfg-select { flex: none; width: auto; min-width: 104px; height: 32px; padding-block: 0; }
+.full-access.is-on { box-shadow: color-mix(in srgb, var(--color-danger) 45%, transparent) 0 0 0 1px inset; }
+.full-access__confirm { display: flex; flex-direction: column; gap: 10px; margin: 0 12px 12px; padding: 12px; border-radius: 12px; background: var(--color-danger-bg); font-size: 13px; line-height: 18px; animation: rise 260ms var(--ease-ios) both; }
+.full-access__confirm p { margin: 0; color: var(--color-ink); }
+.full-access__check { display: flex; align-items: center; gap: 8px; color: var(--color-ink); cursor: pointer; }
+.full-access__check input { width: 15px; height: 15px; accent-color: var(--color-danger); }
+.full-access__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.voices-manager { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.voices-manager__form { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.voices-manager__pair { display: flex; gap: 8px; }
+.voices-manager__pair .text-input { flex: 1; min-width: 0; }
+.voices-manager__file { display: flex; align-items: center; min-height: 36px; padding: 0 12px; border: 1px dashed var(--color-border-secondary); border-radius: 10px; font-size: 13px; color: var(--color-text-secondary); cursor: pointer; }
+.voices-manager__file input { display: none; }
+.voices-manager__file:hover { background: var(--color-bg-hover); }
+.voices-manager__actions { display: flex; justify-content: flex-end; gap: 8px; }

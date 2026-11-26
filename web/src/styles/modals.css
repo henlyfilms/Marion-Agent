@@ -32,7 +32,6 @@
   transition: background-color 150ms var(--ease-out);
 }
 .stem-picker__control:hover:not(:disabled) { background: var(--color-bg-hover); }
-.stem-picker__control:active:not(:disabled) { transform: scale(0.97); }
 .stem-picker__colors { width: 100%; }
 .stem-picker__colors .reveal__inner { display: grid; justify-items: center; gap: 4px; }
 .shape-cell { display: grid; place-items: center; min-width: 0; height: 40px; border-radius: 10px; }
@@ -52,7 +51,7 @@
 }
 button.swatch-cell { outline: none; }
 .swatch, .swatch-cell .swatch { transition: box-shadow 150ms var(--ease-out), transform 180ms var(--ease-spring); }
-.swatch-cell:active .swatch { transform: scale(0.9); }
+
 .swatch-cell input + .swatch { pointer-events: none; }
 /* Rainbow swatch = "any color". Once a custom color is picked it shows that color inside a thin rainbow ring. */
 .swatch--rainbow { background: conic-gradient(from 200deg, #ff5f6d, #ffc371, #f9f871, #6bd88a, #4fc3f7, #7c6cf2, #e86bd0, #ff5f6d); }

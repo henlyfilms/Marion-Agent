@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, Crown, Plus, Trash2, Users, X } from 'lucide-react';
+import { Crown, Plus, Trash2, Users, X } from 'lucide-react';
 import type { ChatModel, ChatModelSelection, ChatProvider, TeamMember } from '@shared/types';
 import { configApi } from '../../lib/configApi';
 import { useSelectedBot, useStore } from '../../store';
@@ -29,7 +29,6 @@ export function TeamModal() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [backup, setBackup] = useState<{ installed: boolean; name?: string }>();
 
   useEffect(() => {
     if (!bot) return;
@@ -43,7 +42,6 @@ export function TeamModal() {
       setModels(catalog.models);
       setUnavailable(catalog.unavailable);
     }).catch(cause => live && setError((cause as Error).message)).finally(() => live && setLoading(false));
-    configApi.orchestrationBackup().then(result => live && setBackup(result.t3Code)).catch(() => {});
     return () => { live = false; };
   }, [bot?.id]);
 
@@ -173,12 +171,6 @@ export function TeamModal() {
           </button>
         </label>
 
-        {backup?.installed && (
-          <div className="team-backup">
-            <span><b>Backup: {backup.name}</b><small>If Team mode can't do a job, run the agents side by side in T3 Code.</small></span>
-            <button type="button" className="team-add" onClick={() => configApi.openOrchestrationBackup().catch(cause => setError((cause as Error).message))}>Open <ArrowUpRight size={13} /></button>
-          </div>
-        )}
         {error && <p className="team-error" role="alert">{error}</p>}
       </div>
 

@@ -32,13 +32,11 @@
 /* The shell never scrolls sideways, even when focus lands in an off-screen panel. */
 .app { overflow: clip; }
 
-/* Buttons press in a touch, like iOS controls. */
-:is(.icon-btn, .btn, .cfg-btn, .account__btn, .sheet-row, .sheet-done, .update-pill, .session-filter button, .sidebar-island, .composer__btn, .composer__cta, .cat-pill, .app-row__connect):active:not(:disabled) {
-  transform: scale(0.97);
-}
+/* Buttons don't zoom when pressed (owner's call): only their colour changes. */
 :is(.icon-btn, .btn, .cfg-btn, .account__btn, .sheet-row, .sheet-done, .update-pill, .session-filter button) {
-  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
+button:active, [role="button"]:active { transform: none; }
 /* Chat rows don't press in: picking a chat just highlights it softly (no zoom). */
 .bot-row { transition: background-color 200ms var(--ease-out); }
 .bot-row:active { transform: none; }

@@ -46,13 +46,14 @@ export function ChatView() {
         </button>
         <div className="chat__header-main">
           <span className="chat__pill-anchor">
-          <button type="button" className="chat__pill" onClick={() => setMenu(!menu)} aria-expanded={menu}
+          <button type="button" className="chat__pill" onClick={() => setMenu(!menu)} aria-expanded={menu} title={displayName(bot)}
             {...contextMenu(displayName(bot), () => { setMenu(false); return botMenuItems(bot); })}>
-            <BotAvatarFor bot={bot} size={24} />
-            <span className="chat__pill-name">{displayName(bot)}</span>
+            <BotAvatarFor bot={bot} size={26} />
+            <span className="chat__pill-name">{bot.name}</span>
           </button>
           {menu && (
             <Menu
+              align="center"
               onClose={() => setMenu(false)}
               items={[
                 ...botMenuItems(bot),

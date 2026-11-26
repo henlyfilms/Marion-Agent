@@ -111,13 +111,16 @@
 
 .details__identity { flex-direction: row; justify-content: center; gap: 6px; padding: 3px 12px 9px; }
 .details__name { width: auto; max-width: 75%; padding: 2px; text-align: left; font-size: 14px; }
-.panel-row--computer { display: flex; flex-direction: column-reverse; align-items: stretch; gap: 8px; height: auto; padding: 8px; }
-.panel-row--computer .panel-row__text { align-items: center; padding-block: 2px; width: 100%; min-width: 0; }
-.panel-row--computer .panel-row__title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.panel-row--computer .panel-row__meta { width: 100%; max-width: 100%; text-align: center; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
-.computer-thumb { width: 100%; height: auto; aspect-ratio: 16/9; background: var(--color-bg-tertiary); }
-.computer-thumb img { object-fit: contain; }
-.computer-thumb__face { width: 32px; height: 32px; }
-.computer-thumb__z1 { left: calc(50% + 15px); top: calc(50% - 22px); }
-.computer-thumb__z2 { left: calc(50% + 21px); top: calc(50% - 29px); }
-.panel-card--teach { margin-top: 8px; }
+/* Bot's computer: one compact row (name, status, small live thumbnail) plus the sleep switch. */
+.panel-row--computer { height: auto; min-height: 56px; gap: 10px; padding: 8px 8px 8px 10px; }
+.panel-row--computer .panel-row__text { gap: 1px; }
+.computer-thumb { width: 72px; height: 44px; }
+.computer-thumb img { object-fit: cover; }
+.computer-thumb__face { width: 22px; height: 22px; }
+.computer-thumb__z1 { left: calc(50% + 11px); top: 6px; }
+.computer-thumb__z2 { left: calc(50% + 16px); top: 1px; }
+.panel-card .panel-row--switch { min-height: 36px; padding: 6px 8px 6px 10px; gap: 8px; border-top: 0.5px solid var(--color-border-tertiary); border-radius: 0 0 8px 8px; }
+/* One rhythm for the whole panel: 12px between cards, 20px between groups, cards share one inset. */
+.details__sections { gap: 20px; padding: 8px 14px 16px; }
+.details__sections > section { gap: 12px; }
+.section-label { padding: 0 10px; }

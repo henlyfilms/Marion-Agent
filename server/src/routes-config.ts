@@ -5,8 +5,6 @@ import { availableLocalModels, localEfforts, saveLocalModel, selectedLocalModel 
 import { getChatProvider, saveChatProvider, subscriptionAvailability, subscriptionModels, subscriptionSelection } from './agent/subscriptions.js';
 import { chatModelForBot } from './agent/chat-model.js';
 import { orchestrationFor, saveOrchestration, TeamSettingsError, validateTeamSettings } from './agent/orchestration-settings.js';
-import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { desktopAccessHeader, hasDesktopAccess, isDesktop } from './lib/desktop-access.js';
 import { env } from './env.js';
 import { db, now } from './db.js';
@@ -284,19 +282,6 @@ configApi.put('/bots/:id/orchestration', async (c) => {
   saveOrchestration(bot.id, settings);
   emitBot(bot.id);
   return c.json({ settings, bot: getBot(bot.id) });
-});
-
-/** T3 Code is the backup orchestrator: Marion only finds and opens it (it runs its own agents). */
-const t3Apps = ['/Applications/T3 Code.app', '/Applications/T3 Code (Beta).app', '/Applications/T3 Code (Nightly).app'];
-configApi.get('/orchestration/backup', (c) => {
-  const app = isDesktop ? t3Apps.find(path => existsSync(path)) : undefined;
-  return c.json({ t3Code: app ? { installed: true, name: app.split('/').pop()!.replace(/\.app$/, '') } : { installed: false } });
-});
-configApi.post('/orchestration/backup/open', (c) => {
-  const app = isDesktop ? t3Apps.find(path => existsSync(path)) : undefined;
-  if (!app || process.platform !== 'darwin') return c.json({ error: 'T3 Code isn’t installed on this Mac.' }, 404);
-  execFile('open', ['-a', app], () => {});
-  return c.json({ ok: true });
 });
 
 const toMemory = (m: any): Memory => ({ id: m.id, botId: m.bot_id, text: m.text, createdAt: m.created_at, source: m.source === 'learned' ? 'learned' : 'chat' });

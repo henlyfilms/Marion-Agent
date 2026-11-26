@@ -5,7 +5,7 @@ import { LocalMemory } from '../LocalMemory';
 import { useStore } from '../../store';
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../../voice/audio';
 import { playDictationSound, setSoundsEnabled, soundsEnabled } from '../../voice/sounds';
-import { voiceApi } from '../../voice/api';
+import { addCallVoice, callVoices, removeCallVoice, voiceApi, type CallVoices } from '../../voice/api';
 
 export function SubscriptionSettings() {
   const [data, setData] = useState<ChatProviderSettings>();
@@ -206,7 +206,75 @@ export function AudioSettings() {
         }} />
         Enable interface sounds
       </label>
+      {availability?.nativePlayback && <VoicesManager />}
     </section>
+  );
+}
+
+/** Your own call voices: a voice file (for voice-cloning servers) and/or a speech model server address. */
+function VoicesManager() {
+  const [voices, setVoices] = useState<CallVoices['custom']>([]);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [voiceName, setVoiceName] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const load = () => callVoices().then(r => setVoices(r.custom)).catch(() => {});
+  useEffect(() => { void load(); }, []);
+  const changed = () => { void load(); window.dispatchEvent(new Event('marion-agent:voices-changed')); };
+  const add = async () => {
+    setBusy(true); setMessage('');
+    const form = new FormData();
+    form.append('name', name); form.append('url', url); form.append('model', model); form.append('voice', voiceName);
+    if (file) form.append('sample', file);
+    try {
+      await addCallVoice(form);
+      setAdding(false); setName(''); setUrl(''); setModel(''); setVoiceName(''); setFile(null);
+      setMessage('Voice added. Pick it in any chat’s side panel under Voice chat.');
+      changed();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="voices-manager">
+      <div className="cfg-section__label">Call voices</div>
+      <p className="cfg-field__hint">Every voice installed on this Mac is in each chat’s Voice menu. Add more in System Settings → Accessibility → Spoken Content, or add your own here.</p>
+      <div className="cfg-card">
+        {voices.map(voice => (
+          <div key={voice.id} className="cfg-row">
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">{voice.name}</div>
+              <div className="cfg-row__sub">{[voice.url && `Model server ${voice.model ? `· ${voice.model}` : ''}`, voice.sampleName && `Voice file · ${voice.sampleName}`].filter(Boolean).join(' · ') || 'Voice'}</div>
+            </div>
+            <button type="button" className="cfg-btn cfg-btn--ghost-danger" onClick={() => removeCallVoice(voice.id).then(changed).catch(error => setMessage((error as Error).message))}>Remove</button>
+          </div>
+        ))}
+        {!adding && <div className="cfg-row"><button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => setAdding(true)}>Add a voice…</button></div>}
+        {adding && (
+          <form className="voices-manager__form" onSubmit={event => { event.preventDefault(); void add(); }}>
+            <input className="text-input" placeholder="Name, e.g. My voice" value={name} onChange={event => setName(event.target.value)} aria-label="Voice name" autoFocus />
+            <label className="voices-manager__file">
+              <input type="file" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg" onChange={event => setFile(event.target.files?.[0] ?? null)} />
+              <span>{file ? file.name : 'Voice file (optional): a 10–30 second clip of the voice'}</span>
+            </label>
+            <input className="text-input" placeholder="Speech server, e.g. http://127.0.0.1:8880/v1/audio/speech" value={url} onChange={event => setUrl(event.target.value)} aria-label="Speech model server address" />
+            <div className="voices-manager__pair">
+              <input className="text-input" placeholder="Model (optional)" value={model} onChange={event => setModel(event.target.value)} aria-label="Model" />
+              <input className="text-input" placeholder="Voice name on the server (optional)" value={voiceName} onChange={event => setVoiceName(event.target.value)} aria-label="Voice on the server" />
+            </div>
+            <p className="cfg-field__hint">A voice file needs a voice-cloning model to speak (for example F5-TTS or Chatterbox running on this Mac): put its address above. Any OpenAI-style speech server works.</p>
+            <div className="voices-manager__actions">
+              <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => setAdding(false)}>Cancel</button>
+              <button type="submit" className="cfg-btn cfg-btn--primary" disabled={busy || !name.trim() || (!file && !url.trim())}>{busy ? 'Adding…' : 'Add voice'}</button>
+            </div>
+          </form>
+        )}
+      </div>
+      {message && <p className="cfg-field__hint" role="status">{message}</p>}
+    </div>
   );
 }
 

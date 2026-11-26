@@ -30,6 +30,23 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 let optionsPromise: Promise<VoiceOptions> | null = null;
 
+export interface CallVoices { mac: { name: string; language: string }[]; custom: { id: string; name: string; url: string; model: string; voice: string; sampleName: string | null }[] }
+export async function callVoices(): Promise<CallVoices> {
+  const res = await fetch('/api/voice/voices', { credentials: 'include' });
+  if (!res.ok) throw new Error('Could not load voices');
+  return res.json();
+}
+export async function addCallVoice(form: FormData): Promise<{ voice: { id: string; name: string } }> {
+  const res = await fetch('/api/voice/voices', { method: 'POST', credentials: 'include', body: form });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? 'Could not add the voice');
+  return body;
+}
+export async function removeCallVoice(id: string) {
+  const res = await fetch(`/api/voice/voices/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' });
+  if (!res.ok) throw new Error('Could not remove the voice');
+}
+
 export interface VoiceStatus { realtime: boolean; localSpeech: boolean; nativeSpeech?: boolean; nativePlayback?: boolean }
 
 let pendingStatus: Promise<VoiceStatus> | undefined;

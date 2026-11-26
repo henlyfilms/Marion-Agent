@@ -304,8 +304,12 @@ async function runTurn(botId: string, trigger: Trigger) {
         : stillPending ? `I need your approval in the chat for ${getLive(botId).awaiting?.reason ?? 'that action'}.`
         : (replyTextSince(botId, bot.generation, startSeq) || waitingOnUser(botId, bot.generation, startSeq)).slice(0, 4000),
     };
+    // A question card the bot (or a CLI it relayed) asked stays flagged as "needs input" until answered.
+    const question = !stillPending && sameChat && !ctrl.signal.aborted
+      ? db.prepare("SELECT 1 FROM rows WHERE bot_id=? AND generation=? AND seq>? AND kind='card' AND json_extract(body,'$.card')='question' AND json_extract(body,'$.status')='pending' LIMIT 1").get(botId, bot.generation, startSeq)
+      : undefined;
     setLive(botId, {
-      ...(!stillPending ? { isRunning: false, activity: null, awaiting: null, startedAt: null } : {}),
+      ...(!stillPending ? { isRunning: false, activity: null, awaiting: question ? { reason: 'your answer', since: now() } : null, startedAt: null } : {}),
       activeModel: undefined,
       ...(voiceReply ? { voiceReply } : {}),
       ...(sameChat && usage.length ? { modelUsage: usage } : {}),
@@ -353,13 +357,13 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
 
     // Was this call just approved/denied?
     const ap = st.approvalId ? (db.prepare('SELECT * FROM approvals WHERE id=?').get(st.approvalId) as any) : null;
-    let decision = policyFor(userId, c.name, args).decision;
+    let decision = policyFor(userId, c.name, args, botId).decision;
     if (ap && ap.call_id === c.call_id) {
       if (ap.status === 'pending') return true;
       decision = ap.status === 'denied' ? 'block' : 'allow';
       st.approvalId = '';
     } else if (decision === 'ask') {
-      const pol = policyFor(userId, c.name, args);
+      const pol = policyFor(userId, c.name, args, botId);
       const approvalId = newId('apr');
       const tk = pol.toolkit ? await toolkitInfo(pol.toolkit) : undefined;
       const card = appendRow(botId, 'card', {
@@ -384,7 +388,7 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
       updateRow(botId, c.rowSeq, { ...body, status: 'denied', summary: 'Not allowed' });
     } else {
       const act = activityFor(c.name);
-      const pol = policyFor(userId, c.name, args);
+      const pol = policyFor(userId, c.name, args, botId);
       const detail = c.name === 'send_to_bot' ? String(args.bot_name ?? '') : !toolMap.has(c.name) && pol.toolkit ? (await toolkitInfo(pol.toolkit))?.name ?? pol.toolkit : undefined;
       setLive(botId, { isRunning: true, activity: { kind: c.name === 'send_to_bot' ? 'messaging_named' : act.kind, detail, since: now() }, awaiting: null });
       try {

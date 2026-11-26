@@ -53,8 +53,6 @@ export const configApi = {
   orchestration: (botId: string) => req<{ settings: OrchestrationSettings; orchestrator: ChatModelSelection }>('GET', `/bots/${botId}/orchestration`),
   saveOrchestration: (botId: string, settings: { enabled: boolean; members: Omit<TeamMember, 'id'>[] | TeamMember[]; balanceUsage: boolean }) =>
     req<{ settings: OrchestrationSettings; bot: Bot }>('PUT', `/bots/${botId}/orchestration`, settings),
-  orchestrationBackup: () => req<{ t3Code: { installed: boolean; name?: string } }>('GET', '/orchestration/backup'),
-  openOrchestrationBackup: () => req<{ ok: true }>('POST', '/orchestration/backup/open'),
   chatModels: (botId: string, discover = false) => req<ChatModelSettings>('GET', `/bots/${botId}/chat-model${discover ? '?discover=1' : ''}`),
   selectChatModel: (botId: string, selection: ChatModelSelection) => req<{ selection: ChatModelSelection; bot: Bot }>('PUT', `/bots/${botId}/chat-model`, selection),
   deviceAccess: (kind: 'mobile' | 'browser', reveal = false) => req<{ origin: string | null; passphrase: string | null; sessionHours?: number; sessionChoices?: number[] }>('GET', `/settings/${kind}-access${reveal ? '?reveal=1' : ''}`),

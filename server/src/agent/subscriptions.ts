@@ -288,6 +288,43 @@ interface ReplyOptions {
   folder?: { path: string; label: string; write: boolean };
   onUsage?: (counts: TokenCounts) => void;
   onModel?: (model: SubscriptionSelection) => void;
+  /** Each step the CLI takes (a command, an edit, a file read…), for the live work feed. Costs nothing extra. */
+  onStep?: (kind: StepKind, text: string) => void;
+}
+
+type StepKind = 'command' | 'edit' | 'read' | 'search' | 'note' | 'error';
+const short = (value: unknown, max = 160) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+const baseName = (path: unknown) => short(path).split('/').filter(Boolean).slice(-2).join('/');
+
+/** Turn one tool call from any CLI into a feed line ("Ran npm test", "Edited src/app.ts"). */
+export function describeToolStep(name: string, input: Record<string, any> = {}): [StepKind, string] | undefined {
+  const tool = name.toLowerCase();
+  const command = input.command ?? input.CommandLine ?? input.cmd ?? input.commandLine;
+  const path = input.file_path ?? input.path ?? input.AbsolutePath ?? input.TargetFile ?? input.filePath;
+  if (command && /bash|shell|command|exec|run/.test(tool)) return ['command', `Ran ${short(Array.isArray(command) ? command.join(' ') : command, 140)}`];
+  if (/write|edit|replace|create_file|apply_patch|multi_edit/.test(tool)) return ['edit', path ? `Edited ${baseName(path)}` : 'Edited files'];
+  if (/read|view_file|open_file/.test(tool)) return ['read', path ? `Read ${baseName(path)}` : 'Read a file'];
+  if (/grep|glob|search|find|list_dir|ls/.test(tool)) return ['search', `Searched ${short(input.pattern ?? input.query ?? input.Query ?? path ?? 'the files', 80)}`];
+  if (/browser|web|fetch/.test(tool)) return ['search', `Looked up ${short(input.url ?? input.query ?? 'the web', 90)}`];
+  if (/todo|plan/.test(tool)) return ['note', 'Updated its plan'];
+  return ['note', `Used ${short(name, 40)}`];
+}
+
+function claudeSteps(line: string, onStep: NonNullable<ReplyOptions['onStep']>) {
+  const message = parseLine<any>(line);
+  if (message?.type !== 'assistant' || !Array.isArray(message.message?.content)) return;
+  for (const part of message.message.content) {
+    if (part?.type === 'tool_use') { const step = describeToolStep(String(part.name ?? ''), part.input ?? {}); if (step) onStep(...step); }
+    else if (part?.type === 'text' && typeof part.text === 'string' && part.text.trim().length > 12) onStep('note', short(part.text.split('\n')[0], 140));
+  }
+}
+
+function geminiSteps(line: string, onStep: NonNullable<ReplyOptions['onStep']>) {
+  const update = parseLine<any>(line)?.step_update;
+  if (!update || update.step_type !== 'tool') return;
+  const info = update.tool_info ?? {};
+  if (update.state === 'ACTIVE') { const step = describeToolStep(String(update.tool_name ?? info.name ?? ''), info.parameters ?? {}); if (step) onStep(...step); }
+  else if (update.state === 'ERROR') onStep('error', `${short(update.tool_name, 40)} failed: ${short(info.error?.message, 100)}`);
 }
 
 export async function subscriptionReply(
@@ -361,6 +398,7 @@ export async function subscriptionReply(
         child.stdin.end(provider === 'claude' ? prompt : JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n');
       }
       for await (const line of lines) {
+        if (options.onStep) (provider === 'claude' ? claudeSteps : geminiSteps)(line, options.onStep);
         if (provider === 'claude') {
           const message = parseLine<ClaudeResult>(line);
           if (message?.type !== 'result') continue;
@@ -515,6 +553,16 @@ async function codexReply(
         break;
     }
     if (!threadId || params?.threadId !== threadId) continue;
+    if (options.onStep && method === 'item/started') {
+      const item = params.item ?? {};
+      if (item.type === 'commandExecution') options.onStep('command', `Ran ${short(Array.isArray(item.command) ? item.command.join(' ') : item.command, 140)}`);
+      else if (item.type === 'fileChange') options.onStep('edit', `Edited ${(item.changes ?? []).map((change: any) => baseName(change.path)).filter(Boolean).slice(0, 3).join(', ') || 'files'}`);
+      else if (item.type === 'webSearch') options.onStep('search', `Searched the web for ${short(item.query, 80)}`);
+      else if (item.type === 'mcpToolCall') options.onStep('note', `Used ${short(item.tool, 40)}`);
+    }
+    if (options.onStep && method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.phase === 'commentary' && typeof params.item.text === 'string') {
+      options.onStep('note', short(params.item.text.split('\n')[0], 140));
+    }
     if (method === 'item/completed' && params.item?.type === 'agentMessage' && typeof params.item.text === 'string') {
       if (params.item.phase !== 'commentary') reply = params.item.text;
     }
