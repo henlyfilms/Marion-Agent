@@ -3,25 +3,28 @@
 // Usage: node --import tsx tests/auto-update.mjs
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const work = mkdtempSync(join(tmpdir(), 'marion-auto-update-'));
+process.on('exit', () => rmSync(work, { recursive: true, force: true }));
 const source = join(work, 'source');
 const git = (...args) => execFileSync('git', ['-C', source, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { encoding: 'utf8' }).trim();
 mkdirSync(join(source, 'scripts'), { recursive: true });
 writeFileSync(join(source, 'scripts', 'package-distributions.sh'), '#!/bin/bash\n');
-git('init', '-q');
+git('init', '-q', '-b', 'fixture-main');
 git('add', '.');
 git('commit', '-qm', 'first');
 const built = git('rev-parse', '--short=7', 'HEAD');
-writeFileSync(join(source, 'change.txt'), 'x');
+mkdirSync(join(source, 'server', 'src'), { recursive: true });
+writeFileSync(join(source, 'server', 'src', 'change.txt'), 'x');
 git('add', '.');
 git('commit', '-qm', 'second');
 
 process.env.DB_PATH = join(work, 'marion.db');
 process.env.MARION_SOURCE_DIR = source;
+process.env.MARION_APP_DATA = work;
 process.env.MARION_DESKTOP_TOKEN = 'token';
 process.env.MARION_BUILD_ID = `${built}.1700000000`;
 process.env.MARION_NO_SCHEDULER = '1';
@@ -67,10 +70,10 @@ assert.equal(updateSettings(userId).autoUpdate, true);
 console.log('PASS: the Auto-update switch is saved and respected.');
 
 // A dirty source folder is never auto-built; an up-to-date build does nothing.
-writeFileSync(join(source, 'change.txt'), 'edited');
+writeFileSync(join(source, 'server/src/change.txt'), 'edited');
 db.prepare("DELETE FROM user_settings WHERE key='app-update'").run();
 assert.equal(await tick({ at: now() + 14 * 3600_000 }), 'dirty');
-git('checkout', '--', 'change.txt');
+git('checkout', '--', 'server/src/change.txt');
 process.env.MARION_BUILD_ID = `${git('rev-parse', '--short=7', 'HEAD')}.1700000001`;
 assert.equal(await tick({ at: now() + 14 * 3600_000 }), 'current');
 console.log('PASS: auto-update skips a dirty source folder and an up-to-date build.');
@@ -89,7 +92,7 @@ setAppBuild(`${head}.1700000002`);
 assert.equal(installedBuild(built), head, 'the installed app build wins over what the old server and web bundle report');
 assert.equal((await updateStatus(installedBuild(built))).behind, 0, 'no "Update available" right after installing the latest build');
 assert.equal(await tick({ at: now() + 20 * 3600_000 }), 'current', 'and auto-update does not reinstall the build that is already installed');
-writeFileSync(join(source, 'newer.txt'), 'y');
+writeFileSync(join(source, 'server/src/newer.txt'), 'y');
 git('add', '.');
 git('commit', '-qm', 'third');
 assert.equal((await updateStatus(installedBuild(built))).behind, 1, 'a genuinely newer commit still shows as an update');
@@ -117,6 +120,7 @@ console.log('PASS: Install update only restarts the app; the background server a
 // ---- Commits that don't change the installed app never show "Update available" ----
 {
   const built2 = git('rev-parse', '--short=7', 'HEAD');
+  setAppBuild(built2);
   mkdirSync(join(source, 'tests'), { recursive: true });
   mkdirSync(join(source, 'docs'), { recursive: true });
   writeFileSync(join(source, 'tests', 'x.mjs'), 'x');
@@ -125,7 +129,7 @@ console.log('PASS: Install update only restarts the app; the background server a
   git('add', '.');
   git('commit', '-qm', 'tests and docs only');
   assert.equal((await updateStatus(built2)).behind, 0, 'a tests/docs/README-only commit is not an update for the installed app');
-  writeFileSync(join(source, 'app.txt'), 'z');
+  writeFileSync(join(source, 'server/src/app.txt'), 'z');
   git('add', '.');
   git('commit', '-qm', 'app change');
   const after = await updateStatus(built2);
@@ -135,6 +139,7 @@ console.log('PASS: Install update only restarts the app; the background server a
 
   // History rewrites: the installed commit is not an ancestor of HEAD, but the shipped files are identical.
   const installed = git('rev-parse', '--short=7', 'HEAD');
+  setAppBuild(installed);
   git('checkout', '-q', '-b', 'rewritten');
   writeFileSync(join(source, 'notes.md'), 'n');
   git('add', '.');
@@ -146,7 +151,7 @@ console.log('PASS: Install update only restarts the app; the background server a
   assert.equal((await updateStatus(installed)).behind, 0, 'a different HEAD with identical app files is not an update');
   git('branch', '-qD', 'rewritten');
   // An app change that was reverted leaves the app identical to what is installed.
-  writeFileSync(join(source, 'app.txt'), 'changed');
+  writeFileSync(join(source, 'server/src/app.txt'), 'changed');
   git('add', '.');
   git('commit', '-qm', 'app tweak');
   assert.equal((await updateStatus(installed)).behind, 1, 'the tweak is an update while it is in');
@@ -155,21 +160,56 @@ console.log('PASS: Install update only restarts the app; the background server a
   console.log('PASS: rewritten or reverted history with identical app files is not an update.');
 }
 
-// ---- Packaging stamps ONE commit everywhere, and the app retries its attach ----
+// ---- The installed marker wins before attach, even when the renderer and server are stale ----
 {
-  const root2 = new URL('../', import.meta.url);
-  const pack = readFileSync(new URL('scripts/package-distributions.sh', root2), 'utf8');
-  assert.equal((pack.match(/git rev-parse --short=7 HEAD 2>\/dev\/null \|\| echo dev\)"\s*$/gm) ?? []).length, 1, 'HEAD is read once for the stamp');
-  assert.match(pack, /export MARION_BUILD_COMMIT="\$commit"/, 'the web build gets the same pinned commit');
-  assert.match(pack, /printf '%s\.%s\\n' "\$commit" "\$\(date \+%s\)" > "\$resources\/BUILD_ID"/, 'BUILD_ID uses the pinned commit');
-  assert.ok(pack.indexOf('MARION_BUILD_COMMIT') < pack.indexOf('npm run build -w web'), 'pinned before the web build starts');
-  const vite = readFileSync(new URL('web/vite.config.ts', root2), 'utf8');
-  assert.match(vite, /process\.env\.MARION_BUILD_COMMIT/, 'vite stamps the pinned commit');
-  assert.match(host, /if \(!attached && body\.build !== buildId\) await attach\(\)/, 'a lost first attach is retried while the server is old');
-  assert.match(host, /attached = response\.ok/, 'attach success is tracked');
-  const { reportedAppBuild } = await import('../server/src/lib/lifecycle.ts');
-  assert.equal(reportedAppBuild(), head, 'the server exposes which app build it was told (health.appBuild)');
-  console.log('PASS: one pinned commit across BUILD_ID and web bundle; attach is retried until it lands.');
+  const { fingerprint } = await import('../server/src/lib/update-inputs.cjs');
+  const commit = git('rev-parse', 'HEAD');
+  const stamp = `${commit}.build-uuid.${fingerprint(source, commit)}`;
+  const resources = join(work, 'Marion Agent.app', 'Contents', 'Resources');
+  mkdirSync(resources, { recursive: true });
+  const marker = join(resources, 'BUILD_ID');
+  process.env.MARION_APP_BUILD_FILE = marker;
+  assert.equal((await updateStatus(built)).behind, 0, 'a missing marker during the rename does not fall back to the old server');
+  assert.equal((await updateStatus(built)).supported, false);
+  writeFileSync(marker, stamp);
+  writeFileSync(join(work, 'marion-update.json'), JSON.stringify({ state: 'installing', message: 'Swapping', at: Date.now() }));
+  const current = await updateStatus(built);
+  assert.equal(current.current, commit, 'cached attach and stale web build are not used');
+  assert.equal(current.behind, 0);
+  assert.equal(current.install.state, 'installing', 'the freshly launched server reads the same installer job state');
+  writeFileSync(join(work, 'marion-update.json'), JSON.stringify({ state: 'installing', target: stamp, message: 'Swapping', at: Date.now() }));
+  assert.equal((await updateStatus(built)).install.state, 'idle', 'the completed bundle swap clears the pending install before the installer exits');
+  assert.equal(await tick(), 'current');
+
+  // A real history replacement: remove the stamped commit object, not just its ref.
+  git('checkout', '-qb', 'replacement', 'HEAD~2');
+  git('commit', '-qm', 'same shipped tree, new history', '--allow-empty');
+  assert.equal(fingerprint(source, 'HEAD'), stamp.split('.')[2]);
+  git('branch', '-D', 'fixture-main');
+  git('reflog', 'expire', '--expire=now', '--all');
+  git('prune', '--expire=now');
+  assert.throws(() => git('cat-file', '-e', commit), 'stamped commit object is gone');
+  assert.equal((await updateStatus(built)).behind, 0, 'the shipped inputs remain current without the original commit');
+
+  for (const file of ['web/dist/index.html', 'server/dist/index.js', 'releases/old.zip', 'assets/icon.svg', 'scripts/render-icons.mjs', '.claude/settings.json']) {
+    mkdirSync(join(source, file, '..'), { recursive: true });
+    writeFileSync(join(source, file), 'not a Mac app input');
+  }
+  git('add', '.');
+  git('commit', '-qm', 'generated artifacts and source tooling');
+  assert.equal((await updateStatus(built)).behind, 0);
+  mkdirSync(join(source, 'web/public'), { recursive: true });
+  writeFileSync(join(source, 'web/public/sw.js'), 'changed app input');
+  git('add', '.');
+  git('commit', '-qm', 'real app input');
+  assert.equal((await updateStatus(built)).behind, 1);
+  // Simulate the exact installer swap without contacting Electron or touching /Applications.
+  const latest = git('rev-parse', 'HEAD');
+  writeFileSync(`${marker}.new`, `${latest}.second-build.${fingerprint(source, latest)}`);
+  renameSync(`${marker}.new`, marker);
+  assert.equal((await updateStatus(built)).behind, 0);
+  assert.equal(await tick(), 'current');
+  console.log('PASS: the installed marker survives stale attach, an atomic swap, generated files, and pruned history.');
 }
 
 // 2. The server only agrees to be replaced when it is idle, in one atomic step, and then takes no new work.
@@ -192,5 +232,4 @@ assert.deepEqual(retire(), { ok: true }, 'an idle server agrees to retire');
 assert.equal(isRetiring(), true, 'and from then on turns away new requests until the app stops it');
 console.log('PASS: the server refuses to be replaced while a bot or relayed session runs, and agrees atomically only when idle.');
 
-rmSync(work, { recursive: true, force: true });
 process.exit(0);

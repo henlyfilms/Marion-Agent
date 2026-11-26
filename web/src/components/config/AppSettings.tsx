@@ -186,7 +186,7 @@ function UpdatesSection() {
         <img src="/favicon.svg" width="56" height="56" alt="" className="update-card__icon" />
         <div className="update-card__text">
           <strong>Marion Agent</strong>
-          <span>Build {BUILD}{status?.latest && status.latest !== BUILD ? ` · latest ${status.latest}` : ''}</span>
+          <span>Build {(status?.current ?? BUILD).slice(0, 7)}{available && status?.latest ? ` · latest ${status.latest.slice(0, 7)}` : ''}</span>
           <span className="update-card__state" role="status">
             {busy ? status!.install.message
               : status?.install.state === 'failed' ? status.install.message

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { busyBotCount } from '../agent/loop.js';
 import { activeProviderRuns } from '../agent/subscriptions.js';
 import { appEnv } from '../env.js';
@@ -39,13 +40,26 @@ export function retire(): { ok: true } | { busy: number } {
  * knows which build is really installed, so the update check trusts this over what the old server reports about itself.
  */
 let appBuild: string | null = null;
-export const setAppBuild = (build: unknown) => {
-  const commit = typeof build === 'string' ? build.split('.')[0] : '';
-  if (/^[0-9a-f]{7,40}$/.test(commit)) appBuild = commit;
-};
-/** Lets the app see whether its attach call landed, and repeat it if not. */
-export const reportedAppBuild = () => appBuild;
-export const installedBuild = (reported: string | null) => appBuild ?? reported;
+const validBuild = (value: unknown): value is string => typeof value === 'string'
+  && /^[0-9a-f]{7,64}(?:\.[0-9a-z-]+(?:\.[0-9a-f]{64})?)?$/.test(value);
+export const setAppBuild = (build: unknown) => { if (validBuild(build)) appBuild = build; };
+export const reportedAppBuild = () => installedBuild(null);
+
+export function installedIdentity(reported: string | null) {
+  const marker = appEnv('APP_BUILD_FILE');
+  // Read the real bundle, not the detached runtime copy or the renderer's build.
+  // During the rename window an unreadable marker is unknown, never "old".
+  if (marker && appEnv('DESKTOP_TOKEN')) {
+    try {
+      const build = readFileSync(marker, 'utf8').trim();
+      return validBuild(build) ? build : null;
+    } catch { return null; }
+  }
+  const build = appBuild ?? appEnv('BUILD_ID') ?? reported;
+  return validBuild(build) || build === 'dev' ? build : null;
+}
+
+export const installedBuild = (reported: string | null, identity = installedIdentity(reported)) => identity?.split('.')[0] ?? null;
 
 export const setOwnerPid = (pid: number) => { if (Number.isInteger(pid) && pid > 1) ownerPid = pid; };
 

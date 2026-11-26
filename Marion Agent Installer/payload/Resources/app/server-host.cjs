@@ -19,7 +19,7 @@ const SESSION_FILE = 'server-session.json';
 const RUNTIME_DIR = 'server-runtime';
 const MAX_LOG = 5 * 1024 * 1024;
 
-const safe = value => String(value).replace(/[^\w.-]+/g, '-').slice(0, 80) || 'build';
+const safe = value => String(value).replace(/[^\w.-]+/g, '-').slice(0, 160) || 'build';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function createServerHost(options) {
@@ -45,7 +45,7 @@ function createServerHost(options) {
 
   async function health(token, timeout = 800) {
     try {
-      const response = await fetch(`${origin}/api/health`, { headers: { [accessHeader]: token }, signal: AbortSignal.timeout(timeout) });
+      const response = await fetch(`${origin}/api/health`, { headers: { [accessHeader]: token }, cache: 'no-store', signal: AbortSignal.timeout(timeout) });
       if (!response.ok) return null;
       const body = await response.json();
       return body?.app === 'marion-agent' ? body : null;
@@ -63,7 +63,7 @@ function createServerHost(options) {
     const dir = path.join(runtimeRoot, safe(buildId));
     const ready = { dir, node: path.join(dir, 'node'), backend: path.join(dir, 'marion', 'server'), entry: path.join(dir, 'server.cjs') };
     try {
-      if (fs.existsSync(path.join(dir, '.ready'))) return ready;
+      if (fs.existsSync(path.join(dir, '.ready')) && fs.readFileSync(path.join(dir, '.ready'), 'utf8') === buildId) return ready;
       fs.rmSync(dir, { recursive: true, force: true });
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       const mode = fs.constants.COPYFILE_FICLONE;
@@ -109,7 +109,7 @@ function createServerHost(options) {
         ...environment(),
         HOST: host, PORT: String(port), SERVER_URL: origin, APP_URL: origin,
         MARION_DESKTOP_TOKEN: token, MARION_DESKTOP_INSTANCE: instanceId, MARION_APP_DATA: dataDir,
-        MARION_BUILD_ID: buildId, MARION_OWNER_PID: String(ownerPid),
+        MARION_APP_BUILD_FILE: path.join(resources, 'BUILD_ID'), MARION_BUILD_ID: buildId, MARION_OWNER_PID: String(ownerPid),
       },
       detached: true,
       stdio: ['ignore', log, log],

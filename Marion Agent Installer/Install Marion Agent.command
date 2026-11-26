@@ -10,7 +10,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 [[ "$(uname -s)" == Darwin ]] || fail "Run this installer on your Mac."
 major="$(/usr/bin/sw_vers -productVersion | cut -d. -f1)"
 [[ "$major" -ge 13 ]] || fail "Marion Agent requires macOS 13 or later."
-[[ -f "$here/payload/Resources/app/main.cjs" ]] || fail "Unzip the whole installer and keep the payload folder next to this file."
+payload="$here/payload/Resources"
+[[ -f "$payload/app/main.cjs" ]] || fail "Unzip the whole installer and keep the payload folder next to this file."
+build="$(cat "$payload/BUILD_ID" 2>/dev/null)" || fail "The installer is missing its build identity."
+[[ "$build" =~ ^(dev|[0-9a-f]{7,64})\.[0-9a-z-]+(\.[0-9a-f]{64})?$ ]] || fail "The installer has an invalid build identity."
 
 if [[ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || true)" == 1 ]]; then
   arch=arm64
@@ -57,14 +60,30 @@ if [[ -e "$destination" || -L "$destination" ]]; then
   existing_inode="$(/usr/bin/stat -f %i "$destination")"
 fi
 
-app_running() { /bin/ps -axo comm= | /usr/bin/grep -Fx "$destination/Contents/MacOS/Electron" >/dev/null; }
+# Match only this bundle's Electron binary, not another copy with the same bundle ID
+# and never the detached server. The process path can contain spaces.
+app_pids() {
+  /bin/ps -axww -o pid=,comm= | MARION_INSTALL_EXE="$destination/Contents/MacOS/Electron" /usr/bin/awk '
+    { pid=$1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, ""); if ($0 == ENVIRON["MARION_INSTALL_EXE"]) print pid }'
+}
+app_running() { [[ -n "$(app_pids)" ]]; }
+closed_for_swap=0
 require_closed_app() {
   [[ -n "$existing_inode" ]] && app_running || return 0
   if [[ "$replace_running" == 1 ]]; then
     printf 'Restarting Marion Agent…\n'
-    /usr/bin/osascript -e 'tell application id "com.henlyfilms.marion-agent" to quit' >/dev/null 2>&1 || true
+    closed_for_swap=1
+    # Give this exact bundle a normal quit before falling back to its verified PID.
+    /usr/bin/osascript - "$destination" >/dev/null 2>&1 <<'APPLESCRIPT' || true
+on run argv
+  set bundlePath to (POSIX file (item 1 of argv)) as text
+  tell application bundlePath to quit
+end run
+APPLESCRIPT
     for _ in $(seq 1 60); do app_running || return 0; sleep 0.5; done
-    /usr/bin/pkill -TERM -f "$destination/Contents/MacOS/Electron" >/dev/null 2>&1 || true
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] && kill -TERM "$pid" 2>/dev/null || true # this bundle's /Contents/MacOS/Electron only
+    done < <(app_pids)
     for _ in $(seq 1 20); do app_running || return 0; sleep 0.5; done
   fi
   fail "Quit Marion Agent, then run this installer to update the existing app."
@@ -80,6 +99,9 @@ cleanup() {
       printf 'The previous app is available at %s\n' "$previous" >&2
       return
     fi
+  fi
+  if [[ "$installed" == 0 && "$closed_for_swap" == 1 && -d "$destination" ]] && ! app_running; then
+    /usr/bin/open "$destination" || true
   fi
   /bin/rm -rf "$work"
 }
@@ -109,7 +131,8 @@ printf 'Preparing Marion Agent…\n'
 bundle="$work/Marion Agent.app"
 resources="$bundle/Contents/Resources"
 /bin/cp "$here/payload/Info.plist" "$bundle/Contents/Info.plist"
-/usr/bin/ditto "$here/payload/Resources" "$resources"
+/usr/bin/ditto "$payload" "$resources"
+cmp -s "$payload/BUILD_ID" "$resources/BUILD_ID" || fail "The app’s build identity was not copied."
 mkdir "$resources/runtime"
 /bin/cp "$work/node-v24.22.3-darwin-$arch/bin/node" "$resources/runtime/node"
 /bin/cp "$work/node-v24.22.3-darwin-$arch/LICENSE" "$resources/runtime/LICENSE"
@@ -138,9 +161,15 @@ if [[ -f "$resources/speech/marion-transcribe" ]]; then
 fi
 sign --deep "$bundle"
 /usr/bin/codesign --verify --deep --strict "$bundle"
+same_destination() {
+  [[ ! -L "$destination" && "$(/usr/bin/stat -f %i "$destination" 2>/dev/null)" == "$existing_inode" ]]
+}
+if [[ -n "$existing_inode" ]]; then
+  same_destination || fail "Marion Agent changed while this update was preparing."
+fi
 require_closed_app
 if [[ -n "$existing_inode" ]]; then
-  [[ ! -L "$destination" && "$(/usr/bin/stat -f %i "$destination")" == "$existing_inode" ]] || fail "Marion Agent changed while this update was preparing."
+  same_destination || fail "Marion Agent changed while this update was preparing."
   /bin/mv "$destination" "$previous"
 else
   [[ ! -e "$destination" && ! -L "$destination" ]] || fail "Another copy of Marion Agent was installed at the same time."

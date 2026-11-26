@@ -2,13 +2,13 @@ import type { Bot, ChatModelSelection, MarionSession, NotificationSettings, Stat
 import { create } from 'zustand';
 import { ApiError } from './api';
 
-async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal, cache?: RequestCache): Promise<T> {
   const isForm = body instanceof FormData;
   const res = await fetch(`/api${path}`, {
     method, credentials: 'include',
     headers: body !== undefined && !isForm ? { 'Content-Type': 'application/json' } : undefined,
     body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
-    signal,
+    signal, cache,
   });
   if (!res.ok) {
     let msg = res.statusText;
@@ -89,7 +89,7 @@ export const featuresApi = {
   botSessions: (botId: string, filter: Omit<MarionSessionFilter, 'botId'> = {}) => req<{ sessions: MarionSession[]; running: number }>('GET', `/bots/${encodeURIComponent(botId)}/sessions${sessionParams(filter)}`),
   chatSessionMessages: (botId: string, generation: number) => req<{ messages: SessionMessage[] }>('GET', `/bots/${encodeURIComponent(botId)}/sessions/${generation}/messages`),
   sessionMessages: (id: string) => req<{ messages: SessionMessage[] }>('GET', `/sessions/${encodeURIComponent(id)}/messages`),
-  updateStatus: (current: string) => req<UpdateStatus>('GET', `/app/update?current=${encodeURIComponent(current)}`),
+  updateStatus: (current: string) => req<UpdateStatus>('GET', `/app/update?current=${encodeURIComponent(current)}`, undefined, undefined, 'no-store'),
   installUpdate: () => req<{ ok: true }>('POST', '/app/update', {}),
   setAutoUpdate: (autoUpdate: boolean) => req<{ autoUpdate: boolean }>('PUT', '/app/update/settings', { autoUpdate }),
   templates: () => req<{ templates: BotProfileData[] }>('GET', '/templates'),

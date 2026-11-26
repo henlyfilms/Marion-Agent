@@ -71,7 +71,8 @@ try {
 
   // 3. An update: the new build finds the old server busy and leaves it alone (bots keep running)...
   busy = 2;
-  const third = make('build-2', 1003);
+  const nextBuild = 'a'.repeat(40) + '.12345678-1234-1234-1234-123456789abc.' + 'b'.repeat(64);
+  const third = make(nextBuild, 1003);
   const during = await third.ensure();
   assert.equal(during.adopted, true);
   assert.equal(pidOf(), serverPid, 'a busy server is never replaced');
@@ -97,8 +98,8 @@ try {
   assert.equal(reloaded, 1, 'window reloads once');
   assert.notEqual(pidOf(), serverPid, 'a new server took over');
   assert.ok(!alive(serverPid), 'the old server is gone');
-  assert.match(readFileSync(join(dataDir, 'fake.env'), 'utf8'), /^build-2 1003 /);
-  assert.ok(existsSync(join(dataDir, 'server-runtime', 'build-2')) && !existsSync(join(dataDir, 'server-runtime', 'build-1')), 'old copy cleaned up');
+  assert.ok(readFileSync(join(dataDir, 'fake.env'), 'utf8').startsWith(`${nextBuild} 1003 `));
+  assert.ok(existsSync(join(dataDir, 'server-runtime', nextBuild)) && !existsSync(join(dataDir, 'server-runtime', 'build-1')), 'old copy cleaned up');
   console.log('PASS: once idle, the new build\'s server replaces it and the window is told to reload.');
 
   // 4. Deliberate "Quit and Stop Background Work" ends the server and forgets the session.

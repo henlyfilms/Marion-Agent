@@ -8,7 +8,8 @@ const API = process.env.MARION_API ?? 'http://127.0.0.1:8787';
 /** The commit this build was made from, so the app can tell when its source folder has moved on. */
 function buildCommit() {
   // The packaging script reads HEAD once and passes it down so the web bundle and BUILD_ID can never disagree.
-  if (/^[0-9a-f]{7,40}$/.test(process.env.MARION_BUILD_COMMIT ?? '')) return process.env.MARION_BUILD_COMMIT as string;
+  if (process.env.MARION_BUILD_COMMIT === 'dev') return 'dev';
+  if (/^[0-9a-f]{7,64}$/.test(process.env.MARION_BUILD_COMMIT ?? '')) return process.env.MARION_BUILD_COMMIT as string;
   try { return execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).trim(); }
   catch { return 'dev'; }
 }

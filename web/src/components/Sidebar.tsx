@@ -216,9 +216,16 @@ export function Sidebar() {
   ];
   useEffect(() => {
     if (!isLocalMac) return;
+    const refresh = () => void useAppUpdate.getState().check();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
     const first = window.setTimeout(() => void useAppUpdate.getState().check(), 4000);
     const timer = window.setInterval(() => void useAppUpdate.getState().check(), 30 * 60_000);
-    return () => { clearTimeout(first); clearInterval(timer); };
+    return () => {
+      clearTimeout(first); clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+    };
   }, [isLocalMac]);
 
   const saveOrder = async (choice: { sort: ChatSort } | ChatMove) => {

@@ -16,13 +16,13 @@ interface UpdateUI {
 export const BUILD = typeof __MARION_BUILD__ === 'string' ? __MARION_BUILD__ : 'dev';
 
 let poll = 0;
+let checking: Promise<void> | undefined;
 
 export const useAppUpdate = create<UpdateUI>((set, get) => ({
   status: null,
   checking: false,
   error: '',
-  check: async () => {
-    if (get().checking) return;
+  check: () => checking ??= (async () => {
     // File access off: never look in the source folder on the Desktop, so macOS never asks.
     if (prefGet('fileAccess') === '0') {
       set({ error: '', status: { supported: false, current: BUILD, latest: null, behind: 0, changes: [], dirty: false, install: { state: 'idle', message: '', at: 0 }, reason: 'Turn on File access in Settings → General to check for updates.' } });
@@ -30,19 +30,21 @@ export const useAppUpdate = create<UpdateUI>((set, get) => ({
     }
     set({ checking: true, error: '' });
     try { set({ status: await featuresApi.updateStatus(BUILD) }); }
-    catch (cause) { set({ error: (cause as Error).message }); }
+    catch (cause) { set({ status: null, error: (cause as Error).message }); }
     finally { set({ checking: false }); }
-  },
+  })().finally(() => { checking = undefined; }),
   setAuto: async (on) => {
     const before = get().status;
     set({ error: '', status: before ? { ...before, autoUpdate: on } : before });
     try { await featuresApi.setAutoUpdate(on); }
-    catch (cause) { set({ error: (cause as Error).message, status: before }); }
+    catch (cause) { set({ error: (cause as Error).message, status: get().status ? { ...get().status!, autoUpdate: before?.autoUpdate } : null }); }
   },
   install: async () => {
     set({ error: '' });
     try {
       await featuresApi.installUpdate();
+      // A check started before the POST can still describe the old state.
+      await checking;
       await get().check();
       // Follow the build until the app quits for the install.
       clearInterval(poll);
@@ -51,7 +53,11 @@ export const useAppUpdate = create<UpdateUI>((set, get) => ({
         if (state !== 'building' && state !== 'installing') { clearInterval(poll); return; }
         void get().check();
       }, 4000);
-    } catch (cause) { set({ error: (cause as Error).message }); }
+    } catch (cause) {
+      await checking;
+      await get().check();
+      set({ error: (cause as Error).message });
+    }
   },
 }));
 

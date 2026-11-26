@@ -16,6 +16,7 @@ let accessToken = '';
 const callbackPaths = new Set(['/api/apps/callback']);
 const popups = new Set();
 let serverHost;
+let buildId;
 let mainWindow;
 let appSession;
 let ready = false;
@@ -55,6 +56,13 @@ function configureSession() {
       .then(sources => callback(sources[0] ? { video: sources[0] } : {}))
       .catch(() => callback({}));
   }, { useSystemPicker: true });
+
+  // An older backend can keep serving chats during an update, but must not drive an
+  // install or show an update decision made by obsolete code. Polling resumes on reload.
+  appSession.webRequest.onBeforeRequest({ urls: ['http://127.0.0.1/*'] }, (details, callback) => {
+    const target = new URL(details.url);
+    callback({ cancel: target.origin === origin && target.pathname === '/api/app/update' && serverHost.state.build !== buildId });
+  });
 
   appSession.webRequest.onBeforeSendHeaders(
     { urls: ['http://127.0.0.1/*', 'ws://127.0.0.1/*'] },
@@ -190,9 +198,10 @@ async function start() {
   }
   const transcriber = path.join(resources, 'speech', 'marion-transcribe');
   const nativeSpeech = process.platform === 'darwin' && Number(process.getSystemVersion().split('.')[0]) >= 26 && existsSync(transcriber);
+  buildId = buildIdentity(resources);
   serverHost = createServerHost({
     dataDir, resources, appDir: __dirname, host, port, origin, accessHeader,
-    buildId: buildIdentity(resources),
+    buildId,
     ownerPid: process.pid,
     baseEnvironment: () => ({ ...pairingEnvironment(dataDir, 'mobile'), ...pairingEnvironment(dataDir, 'browser') }),
     environment: () => ({

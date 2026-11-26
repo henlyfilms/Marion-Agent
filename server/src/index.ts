@@ -62,11 +62,14 @@ app.use('*', async (c, next) => {
 });
 // Cookie auth: reject cross-origin form/text POSTs (JSON requests already need a CORS preflight, which we never allow).
 app.use('/api/*', csrf({ origin: env.trustedOrigins }));
-app.get('/api/health', (c) => c.json({
-  ok: true, app: 'marion-agent', model: env.localModelName, provider: 'local', desktopInstance: appEnv('DESKTOP_INSTANCE'),
-  // The Mac app reads these to adopt a server that kept running, and to swap in a new build only when nothing is running.
-  build: appEnv('BUILD_ID') ?? null, appBuild: reportedAppBuild(), busy: busyCount(), pid: process.pid,
-}));
+app.get('/api/health', (c) => {
+  c.header('Cache-Control', 'no-store');
+  return c.json({
+    ok: true, app: 'marion-agent', model: env.localModelName, provider: 'local', desktopInstance: appEnv('DESKTOP_INSTANCE'),
+    // The Mac app reads these to adopt a server that kept running, and to swap in a new build only when nothing is running.
+    build: appEnv('BUILD_ID') ?? null, appBuild: reportedAppBuild(), busy: busyCount(), pid: process.pid,
+  });
+});
 // The Mac app tells the server it is the owner now (after a relaunch or an update). Only the app's own token gets here.
 app.post('/api/desktop/attach', async (c) => {
   if (!appEnv('DESKTOP_TOKEN') || !hasDesktopAccess(c.req.header(desktopAccessHeader))) return c.json({ error: 'Forbidden' }, 403);

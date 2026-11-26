@@ -64,6 +64,6 @@ In Marion Life, go to **Settings → Connections → Marion Agent** and create a
 - `server/src/` contains the Hono API, SQLite storage, model integrations, and agent loop. `web/src/` contains the React UI. `desktop/` builds the Linux workspaces. See [Architecture](docs/ARCHITECTURE.md).
 - Run `npm run typecheck` and `npm run build`. For hot reload, set `APP_URL=http://127.0.0.1:5173` in the local configuration, then run `npm run dev -w server` and `npm run dev -w web -- --host 127.0.0.1` in separate terminals.
 - After building, run `node tests/features.mjs`, `node tests/local-model.mjs`, and `node tests/desktop-workspace.mjs` for isolated checks. Install Playwright browsers for the UI tests. `node tests/local-desktop.mjs` needs Docker and a running server with a disposable `DB_PATH`; set `CLEANUP_TEST_DESKTOPS=1` to remove its test containers, volumes, and networks.
-- On macOS with a working Swift toolchain, run `scripts/package-distributions.sh` after `npm ci`. It builds the source and installer ZIPs under `releases/`. The installer directory holds the launcher, Electron wrapper, plist, and app icon.
+- On macOS with a working Swift toolchain, run `scripts/package-distributions.sh` after `npm ci`. In a Git checkout it builds the committed snapshot at HEAD (not uncommitted edits). It writes the source and installer ZIPs under `releases/`. The installer directory holds the launcher, Electron wrapper, plist, and app icon.
 
 See [Security](SECURITY.md) before exposing a workspace and [Third-party notices](THIRD_PARTY_NOTICES.md) for attribution.

@@ -28,7 +28,6 @@ import { chatSessionMessages, listSessions } from './features/agent-sessions.js'
 import { computeStats, parseStatsRange } from './features/stats.js';
 import { codingSessionMessages, listCodingSessions, type SessionProvider } from './features/sessions.js';
 import { setAutoUpdate, startUpdate, updateSettings, updateStatus } from './features/app-update.js';
-import { installedBuild } from './lib/lifecycle.js';
 import { remoteAccessFor } from './lib/auth.js';
 import { clearRecordings, deleteRecording, listRecordings, recordingFrame, saveRecording } from './features/recordings.js';
 import { agentSettings, RECORDING_DAY_OPTIONS, saveAgentSettings } from './features/agent-settings.js';
@@ -555,8 +554,8 @@ featuresApi.get('/sessions/:id/messages', (c) => c.json({ messages: codingSessio
 
 featuresApi.get('/app/update', async (c) => {
   if (remoteAccessFor(c)) return c.json({ supported: false, reason: 'Check for updates on the Mac.' });
-  const current = c.req.query('current') ?? null;
-  return c.json({ ...await updateStatus(installedBuild(current && /^[0-9a-f]{7,40}$|^dev$/.test(current) ? current : null)), autoUpdate: updateSettings(c.get('user').id).autoUpdate });
+  c.header('Cache-Control', 'no-store');
+  return c.json({ ...await updateStatus(c.req.query('current') ?? null), autoUpdate: updateSettings(c.get('user').id).autoUpdate });
 });
 
 /** Settings → Updates → Auto-update (on by default). */
@@ -571,6 +570,7 @@ featuresApi.post('/app/update', async (c) => {
   if (remoteAccessFor(c)) return c.json({ error: 'Install updates on the Mac.' }, 403);
   const status = await updateStatus(null);
   if (!status.supported) return c.json({ error: status.reason ?? 'Updates aren’t available here.' }, 400);
+  if (status.behind === 0) return c.json({ error: 'Marion Agent is already up to date.' }, 409);
   if (status.dirty) return c.json({ error: 'The source folder has unsaved changes from another chat. Update once that work is committed.' }, 409);
   const result = startUpdate();
   return 'error' in result ? c.json(result, 409) : c.json(result);
