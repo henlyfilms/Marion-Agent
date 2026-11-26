@@ -53,6 +53,8 @@ interface PendingState {
   allowSubscriptionTeam?: boolean;
 }
 
+import { mergeQueuedUser, OVERRIDE_NOTE } from './chat-intent.js';
+
 const MAX_STEPS = 60;
 const KEEP_IMAGES = 3;
 /** Images handed to a subscription CLI in one turn (a screen-recording lesson sends up to 12 frames). */
@@ -65,11 +67,63 @@ const SUBSCRIPTION_WINDOW = 26;
 const queues = new Map<string, Promise<void>>();
 const aborts = new Map<string, AbortController>();
 
-export function enqueue(botId: string, trigger: Trigger) {
+function chain(botId: string, job: () => Promise<void>) {
   const prev = queues.get(botId) ?? Promise.resolve();
-  const next = prev.then(() => runTurn(botId, trigger)).catch((e) => console.error('[agent] turn failed', botId, e));
+  const next = prev.then(job).catch((e) => console.error('[agent] turn failed', botId, e));
   queues.set(botId, next);
   next.finally(() => { if (queues.get(botId) === next) queues.delete(botId); });
+}
+
+/** User messages that waited behind the running turn; they all run together as one merged turn. */
+const pendingUser = new Map<string, Extract<Trigger, { type: 'user' }>[]>();
+/** "Work on this first" messages: the next job in the bot's queue runs these before anything waiting. */
+const urgentUser = new Map<string, Trigger[]>();
+/** Bots whose current run was stopped by a message that already said so in the chat (no second "Stopped."). */
+const stopAnnounced = new Set<string>();
+
+export function enqueue(botId: string, trigger: Trigger) {
+  if (trigger.type === 'user' && trigger.queued) {
+    pendingUser.set(botId, [...(pendingUser.get(botId) ?? []), trigger]);
+    chain(botId, () => runWaiting(botId));
+    return;
+  }
+  chain(botId, () => runTurn(botId, trigger));
+}
+
+/** One queue slot for a waiting message: runs a "first" message if there is one, else all waiting messages as one turn. */
+async function runWaiting(botId: string) {
+  const first = urgentUser.get(botId)?.shift();
+  if (first) return runTurn(botId, first);
+  const items = pendingUser.get(botId) ?? [];
+  pendingUser.delete(botId);
+  if (!items.length) return; // an earlier slot already took them
+  const generation = getBotRow(botId)?.generation;
+  const live = items.filter(i => i.generation === undefined || i.generation === generation);
+  // runTurn counts one waiting message as started; count the rest of the merged (or skipped) ones here.
+  for (let n = 0; n < (live.length ? items.length - 1 : items.length); n++) startedWaiting(botId);
+  if (live.length) await runTurn(botId, mergeQueuedUser(live));
+}
+
+/** A stop message: abort the running work, drop everything waiting, and say so. */
+export function stopBot(botId: string) {
+  const cleared = (pendingUser.get(botId)?.length ?? 0) + (urgentUser.get(botId)?.length ?? 0);
+  pendingUser.delete(botId);
+  urgentUser.delete(botId);
+  waiting.delete(botId);
+  const running = aborts.get(botId);
+  if (running) { stopAnnounced.add(botId); running.abort(); }
+  appendRow(botId, 'message', { type: 'message', role: 'assistant', ack: true,
+    text: `Stopped.${cleared ? ` I also cleared ${cleared} queued message${cleared === 1 ? '' : 's'}.` : ''}` });
+  return { cleared, aborted: !!running };
+}
+
+/** A "work on this first" message: interrupt the running work and run this next. Messages already waiting stay queued behind it. */
+export function preemptWith(botId: string, trigger: Extract<Trigger, { type: 'user' }>) {
+  const first = { ...trigger, queued: undefined, text: `${OVERRIDE_NOTE}\n${trigger.text}` };
+  urgentUser.set(botId, [...(urgentUser.get(botId) ?? []), first]);
+  chain(botId, () => runWaiting(botId));
+  aborts.get(botId)?.abort();
+  appendRow(botId, 'message', { type: 'message', role: 'assistant', ack: true, text: 'On it — doing this first.' });
 }
 
 export function interrupt(botId: string) {
@@ -344,7 +398,7 @@ async function runTurn(botId: string, trigger: Trigger) {
   } catch (e: any) {
     const msg = ctrl.signal.aborted ? 'Stopped.' : `Something went wrong: ${e?.message ?? e}`;
     if (!ctrl.signal.aborted) failure = String(e?.message ?? e);
-    appendRow(botId, 'notice', { type: 'notice', text: msg, tone: ctrl.signal.aborted ? 'info' : 'error' });
+    if (!(ctrl.signal.aborted && stopAnnounced.delete(botId))) appendRow(botId, 'notice', { type: 'notice', text: msg, tone: ctrl.signal.aborted ? 'info' : 'error' });
     if (!ctrl.signal.aborted) console.error('[agent]', e);
   } finally {
     aborts.delete(botId);

@@ -128,30 +128,30 @@ try {
   assert.equal((await acks()).length, 1, 'a burst must get one acknowledgement');
   assert.equal(requests.length, 1);
 
-  // Finish the running job: both queued messages are answered, in order, and the bot sees they waited.
+  // Finish the running job: both queued messages are merged into ONE turn, in order, and the bot sees they waited.
   release();
-  await waitFor(async () => (await rows()).filter(row => row.body.role === 'assistant' && !row.body.ack && !row.body.streaming).length >= 3,
-    'the queued messages were not all answered');
-  assert.equal(requests.length, 3, `expected 3 model calls, got ${requests.length}`);
-  assert.ok(requests[1].includes('please fix the login bug') && requests[1].includes('sent this while you were busy'), 'the bot was not told the message waited');
-  assert.ok(requests[1].includes('1 more message is queued'), 'the bot was not told another message was queued behind it');
-  assert.ok(requests[2].includes('and also rename the button') && requests[2].includes('sent this while you were busy'));
+  await waitFor(async () => (await rows()).filter(row => row.body.role === 'assistant' && !row.body.ack && !row.body.streaming).length >= 2,
+    'the queued messages were not answered');
+  assert.equal(requests.length, 2, `expected 2 model calls (first job + one merged turn), got ${requests.length}`);
+  assert.ok(requests[1].includes('sent 2 messages while you were busy'), 'the bot was not told the messages were merged');
+  const at1 = requests[1].indexOf('1. please fix the login bug');
+  assert.ok(at1 >= 0 && at1 < requests[1].indexOf('2. and also rename the button'), 'merged messages out of order');
   const all = await rows();
   const order = all.filter(row => row.body.type === 'message').map(row => row.body.text);
   const at = (needle) => order.findIndex(text => text.includes(needle));
   const firstDone = at('Done with: first job');
   assert.ok(firstDone >= 0, 'first job never answered');
-  assert.ok(firstDone < at('Done with: please fix') && at('Done with: please fix') < at('Done with: and also rename'), 'replies out of order');
+  assert.ok(firstDone < at('Done with: 2. and also rename'), 'replies out of order');
   assert.equal(all.filter(row => row.body.ack).length, 1);
   assert.ok(!all.some(row => row.body.type === 'notice' && row.body.tone === 'error'), 'a turn failed');
 
   // Idle again: no acknowledgement, and the "Got it" line never reached the model's history.
   assert.equal((await send('thanks')).status, 200);
-  await waitFor(() => requests.length >= 4, 'idle message never ran');
+  await waitFor(() => requests.length >= 3, 'idle message never ran');
   await waitFor(async () => !(await rows()).some(row => row.body.streaming), 'idle reply never finished');
   assert.equal((await acks()).length, 1, 'an idle bot must not acknowledge');
   assert.ok(!requests.at(-1).includes('sent this while you were busy'));
-  console.log('PASS: busy bot acknowledges at once (one per burst), runs every queued message in order, and relayed sessions share no folder.');
+  console.log('PASS: busy bot acknowledges at once (one per burst), merges queued messages into one turn in order, and relayed sessions share no folder.');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
