@@ -243,14 +243,6 @@ export function disconnectLife(userId: string) {
   setSetting(userId, 'life-link', DEFAULTS);
 }
 
-/** Remove one chat's copy from Life (when the chat is deleted here). Best effort. */
-export async function forgetLifeChat(userId: string, botId: string, generation: number) {
-  const settings = lifeLinkSettings(userId);
-  const key = getSecret(keyName(userId));
-  if (!settings.enabled || !key) return;
-  await lifeTool(settings.endpoint, key, 'delete_agent_chat', { id: `${botId}:${generation}` }).catch(() => {});
-}
-
 interface ChatRow { bot_id: string; generation: number; rev: number; first_at: number; last_at: number; count: number }
 
 /** Chats changed since their last sync, for idle bots only (so half-finished replies aren't copied). */

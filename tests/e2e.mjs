@@ -4,9 +4,10 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:8787';
-const OUT = path.resolve(new URL('.', import.meta.url).pathname, 'out');
+const OUT = fileURLToPath(new URL('./out', import.meta.url));
 fs.mkdirSync(OUT, { recursive: true });
 const results = [];
 const step = async (name, fn) => {

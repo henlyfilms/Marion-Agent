@@ -39,11 +39,6 @@ export function setCheckins(userId: string, p: { enabled?: boolean; times?: stri
   return getCheckins(userId);
 }
 
-/** Record whether the last check-in produced a message (used to back off when the bot keeps staying silent). */
-export function noteCheckinOutcome(userId: string, sentMessage: boolean) {
-  db.prepare('UPDATE proactivity SET silent_streak = CASE WHEN ? THEN 0 ELSE silent_streak + 1 END WHERE user_id=?').run(sentMessage ? 1 : 0, userId);
-}
-
 function localParts(tz: string) {
   const f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   const p = Object.fromEntries(f.formatToParts(new Date()).map((x) => [x.type, x.value]));

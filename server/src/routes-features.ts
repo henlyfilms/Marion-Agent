@@ -19,6 +19,7 @@ import { reflectBot } from './features/improve.js';
 import { codingSessionMessages, listCodingSessions, type SessionProvider } from './features/sessions.js';
 import { startUpdate, updateStatus } from './features/app-update.js';
 import { remoteAccessFor } from './lib/auth.js';
+import { addBotFolder, botFolders, pickFolder, removeBotFolder, screenshotFolder, updateBotFolder } from './features/folders.js';
 
 /** Templates, bot profiles, context and compaction, computer sleep, teaching, notifications and the Marion Life link. */
 export const featuresApi = new Hono<AuthVars>();
@@ -250,6 +251,43 @@ featuresApi.post('/notifications/test', async (c) => {
   const result = await pushToDevices(userId, notification);
   notify(userId, { kind: 'finished', title: 'Marion Agent', body: `Test notification${result.devices ? ` · sent to ${result.delivered} of ${result.devices} device${result.devices === 1 ? '' : 's'}` : ''}` });
   return c.json(result);
+});
+
+// ---------- folders a bot may use (Bot settings → Access) ----------
+
+featuresApi.get('/bots/:id/folders', async (c) => {
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  return c.json({ folders: botFolders(b.id), suggestion: await screenshotFolder().catch(() => null) });
+});
+
+featuresApi.post('/bots/:id/folders', async (c) => {
+  if (remoteAccessFor(c)) return c.json({ error: 'Add folders on the Mac itself.' }, 403);
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const path = body.pick ? await pickFolder() : String(body.path ?? '');
+    if (!path) return c.json({ folders: botFolders(b.id), cancelled: true });
+    return c.json({ folders: await addBotFolder(b.id, path, typeof body.label === 'string' ? body.label : undefined, body.write !== false) });
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+featuresApi.patch('/bots/:id/folders', async (c) => {
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  if (remoteAccessFor(c) && body.write === true) return c.json({ error: 'Allow changes on the Mac itself.' }, 403);
+  try {
+    return c.json({ folders: updateBotFolder(b.id, String(body.path ?? ''), { label: typeof body.label === 'string' ? body.label : undefined, write: typeof body.write === 'boolean' ? body.write : undefined }) });
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+featuresApi.delete('/bots/:id/folders', async (c) => {
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  return c.json({ folders: removeBotFolder(b.id, String(body.path ?? '')) });
 });
 
 // ---------- Marion Life link ----------

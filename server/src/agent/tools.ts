@@ -19,6 +19,7 @@ import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
 import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
 import { teamDelegate, teamDiscuss } from './orchestration.js';
+import { botFolders, listFolder, moveInFolder, resolveBotFolder } from '../features/folders.js';
 import { lifePlannerTools, lifeToolsEnabled, runLifePlannerTool, type LifePlannerTool } from '../features/life-link.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
@@ -208,11 +209,42 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'folder_list',
+    description: 'List files in a folder on the owner\'s Mac that is shared with you (name, size, modified time). Folders end with /.',
+    parameters: obj({
+      folder: { type: 'string', description: 'Shared folder name or path' },
+      path: { type: 'string', description: 'Subfolder inside it' },
+      match: { type: 'string', description: 'Name filter with * wildcards, e.g. *.png' },
+      limit: { type: 'integer' },
+    }, ['folder']),
+    activity: 'working',
+    label: 'Looking in a folder',
+    impl: async (args, ctx) => {
+      const result = await listFolder(ctx.botId, args);
+      return { output: JSON.stringify(result), summary: `${result.total} items in ${result.folder}` };
+    },
+  },
+  {
+    name: 'folder_move',
+    description: 'Rename or move files inside a shared folder. Subfolders are created as needed; a "to" ending in / keeps the file name. Never overwrites.',
+    parameters: obj({
+      folder: { type: 'string', description: 'Shared folder name or path' },
+      moves: { type: 'array', maxItems: 500, items: obj({ from: { type: 'string' }, to: { type: 'string' } }, ['from', 'to']) },
+    }, ['folder', 'moves']),
+    activity: 'working',
+    label: 'Tidying a folder',
+    impl: async (args, ctx) => {
+      const result = await moveInFolder(ctx.botId, args);
+      return { output: JSON.stringify(result), summary: `Moved ${result.moved} file${result.moved === 1 ? '' : 's'}${result.failed.length ? `, ${result.failed.length} failed` : ''}` };
+    },
+  },
+  {
     name: 'ask_subscription',
     description: 'Send a specific request to Claude Code, Codex, or Gemini when the user asks to use that assistant. Returns its response to this chat.',
     parameters: obj({
       provider: { type: 'string', enum: ['claude', 'codex', 'gemini'] },
-      prompt: { type: 'string', description: 'The task to send to this provider' },
+      prompt: { type: 'string', description: 'The full task. The provider knows nothing else, so include every detail it needs' },
+      folder: { type: 'string', description: 'Optional: a folder shared with you (its name or path). The provider then works inside that folder on this Mac' },
     }, ['provider', 'prompt']),
     activity: 'working',
     label: 'Asking another assistant',
@@ -220,8 +252,12 @@ export const TOOLS: ToolDef[] = [
       const { provider, prompt } = args;
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
-      const text = await subscriptionReply(subscriptionSelection(ctx.userId, provider), prompt, ctx.signal ?? AbortSignal.timeout(180_000));
-      return { output: text, summary: `Received a reply from ${provider}` };
+      const folder = args.folder ? resolveBotFolder(ctx.botId, args.folder) : undefined;
+      const task = folder
+        ? `${prompt}\n\nWork only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.`
+        : prompt;
+      const text = await subscriptionReply(subscriptionSelection(ctx.userId, provider), task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), [], { folder });
+      return { output: text, summary: folder ? `${provider} worked in ${folder.label}` : `Received a reply from ${provider}` };
     },
   },
   {
@@ -678,7 +714,8 @@ export const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
 /** Tool schemas for a bot. Marion Life tools appear only when that bot may use the Life connection. */
 export function functionSchemas(userId?: string, botId?: string) {
   const life = userId ? lifeToolsEnabled(userId, botId) : false;
-  return TOOLS.filter(t => life || !lifeTools.has(t.name))
+  const folders = botId ? botFolders(botId).length > 0 : false;
+  return TOOLS.filter(t => (life || !lifeTools.has(t.name)) && (folders || !t.name.startsWith('folder_')))
     .map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
 }
 
@@ -691,6 +728,11 @@ const DISCOVERY_META_TOOLS = new Set(['COMPOSIO_SEARCH_TOOLS', 'COMPOSIO_GET_TOO
 
 export function policyFor(userId: string, toolName: string, args: any): { decision: Decision; key: string; toolkit?: string; title: string } {
   // Approval is required for every prompt sent to the optional hosted connector.
+  // A task inside a folder the owner already shared with this bot can be set to "Always allow".
+  if (toolName === 'ask_subscription' && args?.folder) {
+    const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, 'ask_subscription_folder') as any;
+    return { decision: p?.mode === 'always_allow' ? 'allow' : p?.mode === 'blocked' ? 'block' : 'ask', key: 'ask_subscription_folder', title: 'Assistant: work in a shared folder' };
+  }
   if (toolName === 'ask_subscription') return { decision: 'ask', key: toolName, title: 'Assistant: send this request to another provider' };
   if (toolName === 'ask_grok') return grok
     ? { decision: 'ask', key: toolName, title: 'send this prompt to Grok' }
