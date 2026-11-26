@@ -157,6 +157,8 @@ export interface MessageBody {
   role: 'user' | 'assistant';
   text: string;
   streaming?: boolean;
+  /** A short "Got it" sent right away when the user texts a busy bot. Chat-only: never part of the bot's history or its reply. */
+  ack?: boolean;
   attachments?: ChatAttachment[];
   /** Set when a message came from another bot, a routine or a voice call rather than the user typing. */
   from?: { kind: 'bot' | 'routine' | 'voice' | 'model'; id: string; name: string; provider?: ChatProvider };

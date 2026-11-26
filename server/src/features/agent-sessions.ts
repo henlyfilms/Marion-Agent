@@ -125,7 +125,7 @@ function chatSessions(userId: string, query: SessionQuery, limit: number): Mario
     .all(...(query.botId ? [userId, query.botId, limit] : [userId, limit])) as
     { bot_id: string; generation: number; n: number; first_at: number; last_at: number; name: string; current: number }[];
   const first = db.prepare(`SELECT body FROM rows WHERE bot_id=? AND generation=? AND kind='message' AND json_extract(body,'$.role')='user' ORDER BY seq LIMIT 1`);
-  const last = db.prepare(`SELECT body FROM rows WHERE bot_id=? AND generation=? AND kind='message' AND json_extract(body,'$.role')='assistant' ORDER BY seq DESC LIMIT 1`);
+  const last = db.prepare(`SELECT body FROM rows WHERE bot_id=? AND generation=? AND kind='message' AND json_extract(body,'$.role')='assistant' AND json_extract(body,'$.ack') IS NULL ORDER BY seq DESC LIMIT 1`);
   return groups.map(group => {
     const asked = oneLine(messageText((first.get(group.bot_id, group.generation) as { body: string } | undefined)?.body ?? ''), 200);
     const answered = oneLine(messageText((last.get(group.bot_id, group.generation) as { body: string } | undefined)?.body ?? ''), 400);

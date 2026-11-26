@@ -29,7 +29,9 @@ type VoiceTurn = { call: string; seq: number; fast: boolean };
 const VOICE_STYLE = 'On this call, lead with the answer in one or two short, spoken sentences. Use plain language and no formatting. Ask one question only if needed. Use tools for work that requires them and report the outcome briefly.';
 
 export type Trigger =
-  | { type: 'user'; text: string; attachments?: UploadedAttachment[]; generation?: number; local?: LocalSelection; subscription?: SubscriptionSelection; voice?: VoiceTurn; allowSubscriptionTeam?: boolean }
+  | { type: 'user'; text: string; attachments?: UploadedAttachment[]; generation?: number; local?: LocalSelection; subscription?: SubscriptionSelection; voice?: VoiceTurn; allowSubscriptionTeam?: boolean;
+      /** Sent while the bot was busy: it waited in the queue and is answered right after the earlier work. */
+      queued?: boolean }
   | { type: 'routine'; routineId: string; name: string; prompt: string }
   | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number; autoReply?: boolean }
   | { type: 'system'; text: string; attachments?: UploadedAttachment[]; local?: LocalSelection }
@@ -83,6 +85,46 @@ export function runInBotQueue<T>(botId: string, job: () => Promise<T>): Promise<
 }
 
 export const isBotBusy = (botId: string) => queues.has(botId);
+
+// ---------- messages that arrive while the bot is busy ----------
+
+/** Typed messages still waiting behind the running turn, and whether this wait already got its "Got it". */
+const waiting = new Map<string, { count: number; acked: boolean }>();
+
+/** The one-line "Got it" for a message sent while the bot is busy. Fixes get a fix-specific line. */
+export function acknowledgementFor(text: string) {
+  if (/\b(fix(es|ed)?|bugs?|broken|issues?|errors?|tweaks?|changes?|adjust|improve|update|add|remove|rename|redo|wrong|doesn'?t work|not working)\b/i.test(text)) return 'Got it — I’ll add those fixes ASAP once this finishes.';
+  if (/\?\s*$/.test(text.trim())) return 'Got it — I’ll answer that as soon as this finishes.';
+  return 'Got it — I’m on it as soon as this finishes.';
+}
+
+/**
+ * Called right after a typed message is saved and queued. If the bot is busy (a turn or a relayed session is running),
+ * say right away that the message was read. One "Got it" covers a burst of messages. It is a chat row only: it is
+ * never part of the model's history, so the bot's next turn doesn't see it or answer it.
+ */
+export function acknowledgeIfBusy(botId: string, text: string, opts: { alreadyBusy: boolean }) {
+  if (!opts.alreadyBusy) return null;
+  const state = waiting.get(botId) ?? { count: 0, acked: false };
+  state.count++;
+  waiting.set(botId, state);
+  if (state.acked) return null;
+  state.acked = true;
+  return appendRow(botId, 'message', { type: 'message', role: 'assistant', text: acknowledgementFor(text), ack: true });
+}
+
+/** A message that was counted as waiting never reached the queue (preparing it failed). */
+export function cancelWaiting(botId: string) { startedWaiting(botId); }
+
+/** A queued typed message is starting its turn. Returns how many more are still waiting behind it. */
+function startedWaiting(botId: string) {
+  const state = waiting.get(botId);
+  if (!state) return 0;
+  state.count = Math.max(0, state.count - 1);
+  state.acked = false; // anything sent while this turn runs is a new wait and gets its own "Got it"
+  if (!state.count) waiting.delete(botId);
+  return state.count;
+}
 /** How many bots have a turn running or waiting (the desktop app waits for 0 before it swaps in a new server build). */
 export const busyBotCount = () => queues.size;
 
@@ -98,7 +140,7 @@ function enqueueBotMessage(fromBotId: string, toBotId: string, text: string, dep
 function replyTextSince(botId: string, generation: number, afterSeq: number) {
   return (db.prepare("SELECT body FROM rows WHERE bot_id=? AND generation=? AND kind='message' AND seq>? ORDER BY seq").all(botId, generation, afterSeq) as any[])
     .map(row => JSON.parse(row.body))
-    .filter(body => body.role === 'assistant' && !body.from && body.text)
+    .filter(body => body.role === 'assistant' && !body.from && !body.ack && body.text)
     .map(body => String(body.text).trim())
     .filter(Boolean)
     .join('\n\n');
@@ -107,7 +149,7 @@ function replyTextSince(botId: string, generation: number, afterSeq: number) {
 function addUsageFooter(botId: string, generation: number, afterSeq: number, usage: ResponseUsage[]) {
   if (!usage.length) return;
   const row = db.prepare(`SELECT seq FROM rows WHERE bot_id=? AND generation=? AND kind='message' AND seq>?
-    AND json_extract(body, '$.role')='assistant' AND json_extract(body, '$.from') IS NULL ORDER BY seq DESC LIMIT 1`)
+    AND json_extract(body, '$.role')='assistant' AND json_extract(body, '$.from') IS NULL AND json_extract(body, '$.ack') IS NULL ORDER BY seq DESC LIMIT 1`)
     .get(botId, generation, afterSeq) as { seq: number } | undefined;
   const message = row && getRow(botId, row.seq);
   if (message?.body.type === 'message') updateRow(botId, message.seq, { ...message.body, streaming: false, usage });
@@ -160,9 +202,15 @@ function userContent(text: string, attachments?: UploadedAttachment[]) {
   ] : fullText;
 }
 
-function triggerItem(t: Trigger): any | null {
+/** Told to the bot in front of a message the user sent while it was busy. */
+const SENT_WHILE_BUSY = '[The user sent this while you were busy with the earlier work, which has now finished. The chat already told them you would get to it. Handle it now without repeating that.]';
+
+function triggerItem(t: Trigger, behind = 0): any | null {
   switch (t.type) {
-    case 'user': return { role: 'user', content: userContent(t.text, t.attachments) };
+    case 'user': {
+      const note = t.queued ? `${SENT_WHILE_BUSY}${behind ? ` ${behind} more message${behind === 1 ? ' is' : 's are'} queued after it and will arrive next.` : ''}\n` : '';
+      return { role: 'user', content: userContent(note + t.text, t.attachments) };
+    }
     case 'routine': return { role: 'user', content: `[Routine "${t.name}" is running now. Do this:]\n${t.prompt}` };
     case 'bot': return { role: 'user', content: t.autoReply
       ? `[Reply from ${t.fromName}, another Bot on the team, to your earlier message. Continue your work with it. Only message them again if you need more.]\n${t.text}`
@@ -175,6 +223,8 @@ function triggerItem(t: Trigger): any | null {
 // ---------- the turn ----------
 
 async function runTurn(botId: string, trigger: Trigger) {
+  // A message that waited in the queue is picked up now, even if the chat was reset in between (it is simply skipped then).
+  const behind = trigger.type === 'user' && trigger.queued ? startedWaiting(botId) : 0;
   const bot = getBotRow(botId);
   if (!bot) return;
   if (trigger.type === 'user' && trigger.generation !== undefined && trigger.generation !== bot.generation) return;
@@ -218,7 +268,7 @@ async function runTurn(botId: string, trigger: Trigger) {
       if (paused) return;
       if (st.outputs.some(output => output.__endTurn)) { completed = true; return; }
     } else {
-      const item = triggerItem(trigger);
+      const item = triggerItem(trigger, behind);
       if (item) appendHistory(botId, [item]);
     }
 

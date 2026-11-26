@@ -19,6 +19,7 @@ import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom } from './rooms.js';
 import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
 import { teamDelegate, teamDiscuss } from './orchestration.js';
+import { withFolder } from './folder-lock.js';
 import { botFolders, hasFullAccess, folderForTask, listFolder, moveInFolder } from '../features/folders.js';
 import { appControlTool, runAppControl } from '../features/app-control.js';
 import { agentSettings } from '../features/agent-settings.js';
@@ -286,14 +287,15 @@ export const TOOLS: ToolDef[] = [
       if (media.images.length) card.step(who, 'note', `Sent ${media.images.length} image${media.images.length === 1 ? '' : 's'} from your message`);
       try {
         let used: number | undefined;
-        const text = await subscriptionReply(selection, task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), media.images, {
+        // One relayed session at a time per project folder, so two runs never edit it (or its git state) together.
+        const text = await withFolder(folder, ctx.signal, () => card.step(who, 'note', `Waiting for another session in ${folder?.label} to finish first`), () => subscriptionReply(selection, task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), media.images, {
           folder, onStep: card.feed(who), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
           session: {
             id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
             request: prompt, title: miniTitle(prompt, args.title), folder: folder && { path: folder.path, label: folder.label },
             groupId: `${ctx.botId}:${generation}:${provider}:${plan.session.startedAt}`, rotated: plan.rotated,
           },
-        });
+        }));
         recordRelayTurn(plan.session, prompt, text, used);
         const question = trailingQuestion(text);
         if (question) card.step(who, 'question', question);
@@ -322,7 +324,11 @@ export const TOOLS: ToolDef[] = [
     }, ['goal', 'orchestrator', 'workers']),
     activity: 'messaging_named',
     label: 'Orchestrating a team',
-    impl: async (args, ctx) => orchestrate(ctx, args, args.folder ? await folderForTask(ctx.botId, args.folder) : undefined),
+    impl: async (args, ctx) => {
+      const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
+      // The whole team run holds the folder, so no other relayed session edits it meanwhile.
+      return withFolder(folder, ctx.signal, () => appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Waiting for another session in ${folder?.label} to finish first.` }), () => orchestrate(ctx, args, folder));
+    },
   },
   {
     ...appControlTool,

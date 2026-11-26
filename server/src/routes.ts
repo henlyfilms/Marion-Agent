@@ -14,7 +14,7 @@ import { archiveExists } from './features/deleted-archive.js';
 import { archiveDeletedBot, noteRestoredBot } from './features/life-outbox.js';
 import { createSession, destroySession, remoteAccessFor, remoteWorkspaceUser, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, chatTranscript, clearConversation, emitBot, getBot, getBotRow, toBot, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
-import { enqueue, interrupt, resolveApproval, runInBotQueue } from './agent/loop.js';
+import { acknowledgeIfBusy, cancelWaiting, enqueue, interrupt, isBotBusy, resolveApproval, runInBotQueue } from './agent/loop.js';
 import { planLabels, planOptions, readProvider, savePlanLabels, subscriptionUsage, usageProviders, withPlanLabel } from './agent/subscription-usage.js';
 import { chatModelForBot } from './agent/chat-model.js';
 import { subscriptionModels } from './agent/subscriptions.js';
@@ -514,14 +514,18 @@ api.post('/bots/:id/messages', bodyLimit({
     ...(call ? { from: { kind: 'voice' as const, id: call, name: 'Voice call' } } : {}),
     ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),
   }, attachments);
+  // A bot that is busy (a turn or a relayed session is running) says right away that it read this; the message itself
+  // waits in the bot's queue and is answered right after. Groups and voice calls don't get the line.
+  const waited = current.kind !== 'room' && !call && isBotBusy(b.id);
+  if (waited) acknowledgeIfBusy(b.id, text, { alreadyBusy: true });
   // Screen recordings reach the models as frames (the chat keeps the original file).
-  const media = await forModel(attachments);
+  const media = await forModel(attachments).catch((error) => { if (waited) cancelWaiting(b.id); throw error; });
   const mediaNote = media.note ? `[${media.note}]\n` : '';
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, media.attachments, notes + mediaNote);
   else {
     const voice = call ? { call, seq: row.seq, fast: !override } : undefined;
-    const turn = { type: 'user' as const, text: notes + mediaNote + text, attachments: media.attachments, generation: row.generation, voice,
+    const turn = { type: 'user' as const, text: notes + mediaNote + text, attachments: media.attachments, generation: row.generation, voice, queued: waited || undefined,
       allowSubscriptionTeam: isDesktop && !remoteAccessFor(c) };
     enqueue(b.id, provider === 'local'
       ? { ...turn, local: { model, label: selection.label, effort: voice?.fast ? 'low' : effort ?? 'medium' } }
