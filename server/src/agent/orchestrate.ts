@@ -19,7 +19,6 @@ import type { ChatModel, ChatModelSelection, ChatProvider, WorkAgent } from '../
 
 const MAX_PHASES = 5;
 const MAX_TASKS = 4;
-const CALL_MS = 15 * 60_000;
 const RESULT_CHARS = 6000;
 const providerNames: Record<ChatProvider, string> = { local: 'Local', codex: 'Codex', gemini: 'Gemini', claude: 'Claude' };
 
@@ -67,9 +66,9 @@ function jsonFrom(text: string): any {
 }
 
 async function callAgent(agent: Agent, prompt: string, signal: AbortSignal, card: WorkCard, folder?: Folder, images: UploadedAttachment[] = [], session?: SessionTrack) {
-  const stop = AbortSignal.any([signal, AbortSignal.timeout(CALL_MS)]);
-  if (agent.provider === 'local') return modelReply(agent.selection, prompt, stop);
-  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, stop, images, { folder, onStep: card.feed(agent.label), session })).trim();
+  // No wall-clock limit on a subagent: relayed runs have their own silence watchdog and the owner can stop the run.
+  if (agent.provider === 'local') return modelReply(agent.selection, prompt, signal);
+  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, signal, images, { folder, onStep: card.feed(agent.label), session })).trim();
 }
 
 export async function orchestrate(ctx: { userId: string; botId: string; signal?: AbortSignal; allowSubscriptionTeam?: boolean }, args: any, folder?: Folder) {
@@ -90,7 +89,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
     if (!model) throw new Error(`No model matches "${name}". Available: ${models.map(m => m.label).slice(0, 20).join(', ')}.`);
     workers.push(toAgent(model, 'worker', i, taken));
   }
-  const signal = ctx.signal ?? AbortSignal.timeout(60 * 60_000);
+  const signal = ctx.signal ?? new AbortController().signal;
   const bot = getBotRow(ctx.botId);
   // Every call here is its own fresh session (the plan, each task and each review are self-contained), so the
   // owner's screenshots / screen-recording frames travel with the planning and the work, and the Token optimizer

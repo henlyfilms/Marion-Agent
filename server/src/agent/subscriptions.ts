@@ -12,6 +12,7 @@ import { recordSessionEnd, type SessionFinish, type SessionTrack } from '../feat
 import type { UploadedAttachment } from '../attachments.js';
 import '../db-config.js';
 import { isDesktop } from '../lib/desktop-access.js';
+import { IdleGuard, relayIdleMs, silenceMessage } from './idle-guard.js';
 import type { ChatModel, ChatModelSelection, ChatProvider } from '../types.js';
 
 export type SubscriptionProvider = Exclude<ChatProvider, 'local'>;
@@ -386,8 +387,10 @@ async function spawnSubscriptionReply(
   if (!program) throw new Error(`Install ${labels[provider]} and check Settings → Models.`);
   const cwd = await mkdtemp(join(tmpdir(), 'marion-provider-'));
   const folder = options.folder;
-  const deadline = AbortSignal.timeout(folder ? 900_000 : 180_000);
-  const stop = AbortSignal.any([signal, deadline]);
+  // No wall-clock limit: a relayed session may run as long as it is working. Only a CLI that goes completely
+  // silent (no stdout, no stderr) for a long time is treated as hung.
+  const idle = new IdleGuard(relayIdleMs(Boolean(folder)));
+  const stop = AbortSignal.any([signal, idle.signal]);
   try {
     if (provider === 'claude') await requireClaudeSubscription(program, cwd, stop);
     const args = folder && provider !== 'codex' ? folderArgs(provider, folder, provider === 'gemini' && images.length ? [...new Set([cwd, await realpath(cwd).catch(() => cwd)])] : undefined)
@@ -424,12 +427,17 @@ async function spawnSubscriptionReply(
     });
     let diagnostic = '';
     child.stderr.setEncoding('utf8').on('data', chunk => {
+      idle.touch();
       diagnostic = (diagnostic + chunk).slice(-4096);
     });
+    child.stdout.on('data', () => idle.touch());
+    let exitCode: number | null = null;
+    let exitSignal: string | null = null;
+    const closed = new Promise<void>(done => child.once('close', (code, sig) => { exitCode = code; exitSignal = sig; done(); }));
     // stdin can close first when the executable exits or the user stops a reply.
     child.stdin.on('error', () => {});
-    let processError = false;
-    child.on('error', () => { processError = true; });
+    let processError = '';
+    child.on('error', error => { processError = error.message || 'failed to start'; });
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
     const write = (value: unknown) => child.stdin.write(JSON.stringify(value) + '\n');
 
@@ -465,7 +473,10 @@ async function spawnSubscriptionReply(
           if (/model.+(not found|unavailable|access)|access.+model/i.test(message.result ?? '')) {
             throw new Error(`Claude Code could not use ${model} with this account. Choose another model.`);
           }
-          throw new Error('Claude Code did not return a reply. Check your Claude sign-in and plan usage in Terminal.');
+          const reported = short(message.result ?? '', 400);
+          throw new Error(reported
+            ? `Claude Code reported an error: ${reported}`
+            : `Claude Code did not return a reply (${message.subtype ?? 'no result'}). Check your Claude sign-in and plan usage in Terminal.`);
         }
         const message = parseLine(line);
         if (message?.event !== 'result') continue;
@@ -474,23 +485,30 @@ async function spawnSubscriptionReply(
         diagnostic += ` ${typeof result?.error === 'string' ? result.error : ''}`;
         break;
       }
+      // The CLI ended without a reply: give it a moment to report its exit code before blaming it.
+      await Promise.race([closed, new Promise(done => setTimeout(done, 1000).unref())]);
     } finally {
+      idle.stop();
       lines.close();
       child.stdin.destroy();
       child.kill();
     }
     if (signal.aborted) throw signal.reason;
-    if (deadline.aborted) throw new Error(`${labels[provider]} took too long to respond. Try again.`);
-    if (processError) throw new Error(`Could not start ${labels[provider]} on this Mac.`);
+    if (idle.tripped) throw new Error(silenceMessage(labels[provider], idle.idleMs, diagnostic));
+    if (processError) throw new Error(`Could not start ${labels[provider]} on this Mac: ${processError}`);
     if (provider === 'gemini' && /authenticat|sign.in|log.in/i.test(diagnostic)) {
       throw new Error('Sign in with your personal Google account using agy acp --login in Terminal.');
     }
-    throw new Error(`${labels[provider]} did not return a reply. Check sign-in and usage in its own app.`);
+    // The real reason: how the CLI ended and its own last words (stderr).
+    const ended = exitSignal ? `was stopped by ${exitSignal}` : exitCode !== null && exitCode !== 0 ? `exited with code ${exitCode}` : 'ended without a reply';
+    const said = short(diagnostic, 400);
+    throw new Error(`${labels[provider]} ${ended}${said ? `: ${said}` : '. Check sign-in and usage in its own app.'}`);
   } catch (error) {
     if (signal.aborted) throw signal.reason;
-    if (deadline.aborted) throw new Error(`${labels[provider]} took too long to respond. Try again.`);
+    if (idle.tripped) throw new Error(silenceMessage(labels[provider], idle.idleMs, ''));
     throw error;
   } finally {
+    idle.stop();
     if (provider === 'gemini') await forgetAntigravityConversation(cwd);
     await rm(cwd, { recursive: true, force: true });
   }

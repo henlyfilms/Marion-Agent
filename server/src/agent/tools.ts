@@ -288,7 +288,7 @@ export const TOOLS: ToolDef[] = [
       try {
         let used: number | undefined;
         // One relayed session at a time per project folder, so two runs never edit it (or its git state) together.
-        const text = await withFolder(folder, ctx.signal, () => card.step(who, 'note', `Waiting for another session in ${folder?.label} to finish first`), () => subscriptionReply(selection, task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), media.images, {
+        const text = await withFolder(folder, ctx.signal, () => card.step(who, 'note', `Waiting for another session in ${folder?.label} to finish first`), () => subscriptionReply(selection, task, ctx.signal ?? new AbortController().signal, media.images, {
           folder, onStep: card.feed(who), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
           session: {
             id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
@@ -388,7 +388,7 @@ export const TOOLS: ToolDef[] = [
     }, ['assignments', 'mode']),
     activity: 'messaging_named',
     label: 'Working with the team',
-    impl: async (args, ctx) => teamDelegate(ctx.botId, args, ctx.signal ?? AbortSignal.timeout(600_000)),
+    impl: async (args, ctx) => teamDelegate(ctx.botId, args, ctx.signal ?? new AbortController().signal),
   },
   {
     name: 'team_discuss',
@@ -400,7 +400,7 @@ export const TOOLS: ToolDef[] = [
     }, ['topic']),
     activity: 'messaging_named',
     label: 'Team discussion',
-    impl: async (args, ctx) => teamDiscuss(ctx.botId, args, ctx.signal ?? AbortSignal.timeout(900_000)),
+    impl: async (args, ctx) => teamDiscuss(ctx.botId, args, ctx.signal ?? new AbortController().signal),
   },
   {
     name: 'remember',
