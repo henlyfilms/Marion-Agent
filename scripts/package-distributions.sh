@@ -21,7 +21,8 @@ cp -p "$installer/payload/Resources/MarionAgent.icns" "$resources/"
 cp -Rp "$installer/payload/Resources/app" "$resources/"
 # <commit>.<time>: lets a running app tell its own build from the server it left running, so an update swaps the
 # server only when nothing is running, and lets the server know which commit it was built from (auto-update).
-if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+# Only files that ship in the app matter (same exclusions as the app's update check).
+if [[ -n "$(git status --porcelain --untracked-files=no -- . ':(exclude)tests' ':(exclude)docs' ':(exclude)*.md' ':(exclude)data' ':(exclude).claude' 2>/dev/null)" ]]; then
   printf 'Warning: uncommitted changes are being packaged under commit %s. Commit first, or the app will offer this same build as an update.\n' "$(git rev-parse --short=7 HEAD 2>/dev/null || echo dev)" >&2
 fi
 # Read HEAD ONCE: BUILD_ID, the web bundle (via MARION_BUILD_COMMIT) and the warning above must all name the same commit,

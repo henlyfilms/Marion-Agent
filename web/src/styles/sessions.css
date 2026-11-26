@@ -128,16 +128,20 @@
 .msession-open:hover { background: var(--color-bg-hover); }
 
 /* The Sessions button beside a bot's name, and the panel it opens over the chat. */
-.chat__header-main { gap: 8px; }
+.chat__header-main { gap: 8px; max-width: 100%; }
 .chat__sessions {
   display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 13px; border-radius: var(--radius-full);
   font-size: 13px; font-weight: 550; color: var(--color-text-secondary); white-space: nowrap;
+  /* Never wider than the room the header leaves it: the label is the first thing to give way. */
+  flex: 0 1 auto; min-width: 38px; overflow: hidden;
   background: color-mix(in srgb, var(--color-bg-elevated) 72%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
   border: 0.5px solid color-mix(in srgb, var(--palette-foreground) 12%, transparent);
   box-shadow: 0 6px 24px rgb(0 0 0 / 0.18), 0 1px 2px rgb(0 0 0 / 0.12);
   transition: background-color 200ms var(--ease-out), color 200ms var(--ease-out);
 }
+.chat__sessions > svg, .chat__sessions > .icon { flex: none; }
+.chat__sessions-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chat__sessions:is(:hover, .is-open) { background: color-mix(in srgb, var(--color-bg-elevated-hover) 82%, transparent); color: var(--color-ink); }
 .chat__sessions-live { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-full); background: #18b26b; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
 .bot-sessions {
@@ -193,4 +197,20 @@
   .session-filter button { flex: 1; justify-content: center; padding: 0 6px; }
   .session-detail { animation-name: session-detail-push; }
   @keyframes session-detail-push { from { transform: translateX(100%); } to { transform: none; } }
+}
+
+/* Narrow or half-screen windows: the Bot pill, the Sessions pill and the three round buttons never overlap. The pills use
+   the room left of the buttons (not centred), the Bot's name shortens first, and Sessions becomes an icon. */
+.chat__header .chat__pill-anchor { flex: 0 1 auto; min-width: 0; }
+.chat__header .chat__pill { min-width: 0; max-width: 100%; }
+.chat__header .chat__pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1100px) {
+  .chat__header { justify-content: flex-start; padding-inline: 14px calc(var(--conversation-actions-width) + 22px); }
+  .chat__header-main { justify-content: flex-start; flex: 0 1 auto; }
+  .chat__sessions-label { display: none; }
+  .chat__sessions { padding: 0 10px; gap: 4px; }
+}
+@media (max-width: 700px) {
+  .chat__header { grid-template-columns: 44px minmax(0, 1fr) auto; padding-inline: 8px calc(152px + var(--toolbar-gap)); }
+  .chat__header .chat__sessions { grid-column: 3; grid-row: 1; align-self: center; }
 }

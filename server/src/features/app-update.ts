@@ -82,8 +82,13 @@ export async function updateStatus(current: string | null): Promise<UpdateStatus
     if (!current || current === 'dev') return { ...base, supported: true, latest, dirty };
     const known = await git(dir, 'cat-file', '-e', `${current}^{commit}`).then(() => true, () => false);
     if (!known) return { ...base, supported: true, latest, dirty, behind: 1, changes: ['A newer build is available.'] };
-    const behind = Number(await git(dir, 'rev-list', '--count', `${current}..HEAD`, ...APP_PATHSPEC)) || 0;
-    const changes = behind ? (await git(dir, 'log', '--format=%s', '-6', `${current}..HEAD`, ...APP_PATHSPEC)).split('\n').filter(Boolean) : [];
+    // Compare what ships, not history: if the app files of the installed commit and HEAD are identical (an amended,
+    // rebased, reverted or squashed history, or a rebuilt-from-the-same-tree commit), the installed build is current.
+    const sameApp = await git(dir, 'diff', '--quiet', current, 'HEAD', ...APP_PATHSPEC).then(() => true, () => false);
+    if (sameApp) return { ...base, supported: true, latest, dirty, behind: 0 };
+    const behind = Math.max(1, Number(await git(dir, 'rev-list', '--count', `${current}..HEAD`, ...APP_PATHSPEC)) || 0);
+    const listed = (await git(dir, 'log', '--format=%s', '-6', `${current}..HEAD`, ...APP_PATHSPEC)).split('\n').filter(Boolean);
+    const changes = listed.length ? listed : ['A newer build is available.'];
     return { ...base, supported: true, latest, dirty, behind, changes };
   } catch {
     return { ...base, supported: false, latest: null, reason: 'Couldn’t read the source folder.' };

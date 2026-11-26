@@ -13,7 +13,7 @@ export function BotSessionsButton({ bot, open, onToggle }: { bot: Pick<Bot, 'id'
     <button type="button" className={`chat__sessions${open ? ' is-open' : ''}`} aria-expanded={open} aria-controls="bot-sessions"
       title={`${bot.name}’s sessions`} onClick={onToggle}>
       <Icon name="clock" size={15} />
-      <span>Sessions</span>
+      <span className="chat__sessions-label">Sessions</span>
       {running > 0 && <span className="chat__sessions-live" aria-label={`${running} running`}>{running}</span>}
     </button>
   );

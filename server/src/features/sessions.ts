@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,7 +25,7 @@ export interface CodingSession {
 
 export interface SessionMessage { role: 'user' | 'assistant'; text: string; at?: number }
 
-const HOME = os.homedir();
+const HOME = process.env.MARION_SESSIONS_HOME || os.homedir();
 const ACTIVE_MS = 3 * 60_000;
 const LIMIT = 60;
 
@@ -227,13 +228,62 @@ function geminiSessions(): CodingSession[] {
   return out;
 }
 
+// ---------- running Claude Code processes ----------
+
+/** Working folders of the Claude Code (`claude`) processes running on this Mac right now, one entry per process. */
+export type ProcessProbe = () => string[];
+
+function probeClaudeProcesses(): string[] {
+  if (process.platform === 'win32') return [];
+  try {
+    const ps = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8', timeout: 2500, maxBuffer: 4 * 1024 * 1024 });
+    const pids = ps.split('\n').flatMap(line => {
+      const match = line.trim().match(/^(\d+)\s+(\S+)/);
+      if (!match || Number(match[1]) === process.pid) return [];
+      // The Claude Code CLI: `claude` (or .../claude), not helpers such as claude-code-guide or the desktop app's renderers.
+      return /(^|\/)claude$/.test(match[2]) ? [match[1]] : [];
+    });
+    if (!pids.length) return [];
+    const lsof = execFileSync('lsof', ['-a', '-d', 'cwd', '-Fpn', '-p', pids.join(',')], { encoding: 'utf8', timeout: 2500, maxBuffer: 1024 * 1024 });
+    return lsof.split('\n').filter(line => line.startsWith('n/')).map(line => line.slice(1));
+  } catch { return []; }
+}
+
+let probe: ProcessProbe = probeClaudeProcesses;
+/** Tests replace the process lookup so they never depend on what is running on the machine. */
+export const setClaudeProcessProbe = (next: ProcessProbe | null) => { probe = next ?? probeClaudeProcesses; cache = undefined; };
+
+/**
+ * A Claude Code session is working when its transcript was written lately, or when a `claude` process is running in its
+ * folder (a long tool call or a long think writes nothing for minutes). With N processes in one folder, the N newest
+ * transcripts of that folder are the live ones.
+ */
+export function markRunningClaude(sessions: CodingSession[], folders: string[]): CodingSession[] {
+  const live = new Map<string, number>();
+  for (const folder of folders) live.set(folder, (live.get(folder) ?? 0) + 1);
+  const claimed = new Map<string, number>();
+  return sessions.map(session => {
+    if (session.provider !== 'claude' || !session.path) return session;
+    if (session.active) { // already shown as working: it is one of that folder's live processes
+      if (live.has(session.path)) claimed.set(session.path, (claimed.get(session.path) ?? 0) + 1);
+      return session;
+    }
+    const left = (live.get(session.path) ?? 0) - (claimed.get(session.path) ?? 0);
+    if (left <= 0) return session;
+    claimed.set(session.path, (claimed.get(session.path) ?? 0) + 1);
+    return { ...session, active: true };
+  });
+}
+
 const readers: Record<SessionProvider, () => CodingSession[]> = { claude: claudeSessions, codex: codexSessions, gemini: geminiSessions };
 
 let cache: { at: number; sessions: CodingSession[] } | undefined;
 
 export function listCodingSessions(provider?: SessionProvider): CodingSession[] {
   if (!cache || Date.now() - cache.at > 4000) {
-    const sessions = (Object.keys(readers) as SessionProvider[]).flatMap(key => readers[key]());
+    const all = (Object.keys(readers) as SessionProvider[]).flatMap(key => readers[key]());
+    // Newest first, so a folder's live processes claim its newest transcripts.
+    const sessions = markRunningClaude(all.sort((a, b) => b.updatedAt - a.updatedAt), probe());
     cache = { at: Date.now(), sessions: sessions.sort((a, b) => Number(b.active) - Number(a.active) || b.updatedAt - a.updatedAt) };
   }
   return provider ? cache.sessions.filter(s => s.provider === provider) : cache.sessions;

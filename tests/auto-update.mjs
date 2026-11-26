@@ -132,6 +132,27 @@ console.log('PASS: Install update only restarts the app; the background server a
   assert.equal(after.behind, 1, 'a real app change after it still counts');
   assert.deepEqual(after.changes, ['app change']);
   console.log('PASS: only commits that change the installed app count as an update.');
+
+  // History rewrites: the installed commit is not an ancestor of HEAD, but the shipped files are identical.
+  const installed = git('rev-parse', '--short=7', 'HEAD');
+  git('checkout', '-q', '-b', 'rewritten');
+  writeFileSync(join(source, 'notes.md'), 'n');
+  git('add', '.');
+  git('commit', '-qm', 'notes only');
+  git('commit', '-q', '--amend', '-m', 'notes only (amended)');
+  git('checkout', '-q', '-');
+  git('reset', '-q', '--hard', 'rewritten~1');
+  git('commit', '-q', '--allow-empty', '-m', 'rewritten history');
+  assert.equal((await updateStatus(installed)).behind, 0, 'a different HEAD with identical app files is not an update');
+  git('branch', '-qD', 'rewritten');
+  // An app change that was reverted leaves the app identical to what is installed.
+  writeFileSync(join(source, 'app.txt'), 'changed');
+  git('add', '.');
+  git('commit', '-qm', 'app tweak');
+  assert.equal((await updateStatus(installed)).behind, 1, 'the tweak is an update while it is in');
+  git('revert', '--no-edit', 'HEAD');
+  assert.equal((await updateStatus(installed)).behind, 0, 'a reverted app change is not an update');
+  console.log('PASS: rewritten or reverted history with identical app files is not an update.');
 }
 
 // ---- Packaging stamps ONE commit everywhere, and the app retries its attach ----
