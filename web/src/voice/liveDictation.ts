@@ -158,6 +158,9 @@ export function useLiveDictation(onWords: (words: string) => void, onError: (err
   /** Typing or editing counts as being active: the quiet timeout never ends dictation while the user is working in the box. */
   const touch = useCallback(() => { if (active.current) active.current.lastWords = Date.now(); }, []);
 
-  useEffect(() => () => release(true), [release]);
-  return { state, interim, start, stop, touch };
+  /** Ends dictation right now and hands over everything heard so far, including the words still being worked out. */
+  const commit = useCallback(() => release(false), [release]);
+
+  useEffect(() => () => release(false), [release]);
+  return { state, interim, start, stop, commit, touch };
 }

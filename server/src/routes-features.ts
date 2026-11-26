@@ -22,6 +22,7 @@ import { chatSessionMessages, listSessions } from './features/agent-sessions.js'
 import { computeStats, parseStatsRange } from './features/stats.js';
 import { codingSessionMessages, listCodingSessions, type SessionProvider } from './features/sessions.js';
 import { setAutoUpdate, startUpdate, updateSettings, updateStatus } from './features/app-update.js';
+import { installedBuild } from './lib/lifecycle.js';
 import { remoteAccessFor } from './lib/auth.js';
 import { clearRecordings, deleteRecording, listRecordings, recordingFrame, saveRecording } from './features/recordings.js';
 import { agentSettings, RECORDING_DAY_OPTIONS, saveAgentSettings } from './features/agent-settings.js';
@@ -501,7 +502,7 @@ featuresApi.get('/sessions/:id/messages', (c) => c.json({ messages: codingSessio
 featuresApi.get('/app/update', async (c) => {
   if (remoteAccessFor(c)) return c.json({ supported: false, reason: 'Check for updates on the Mac.' });
   const current = c.req.query('current') ?? null;
-  return c.json({ ...await updateStatus(current && /^[0-9a-f]{7,40}$|^dev$/.test(current) ? current : null), autoUpdate: updateSettings(c.get('user').id).autoUpdate });
+  return c.json({ ...await updateStatus(installedBuild(current && /^[0-9a-f]{7,40}$|^dev$/.test(current) ? current : null)), autoUpdate: updateSettings(c.get('user').id).autoUpdate });
 });
 
 /** Settings → Updates → Auto-update (on by default). */

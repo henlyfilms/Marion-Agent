@@ -19,7 +19,7 @@ import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneI
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
 import { useConfigUI } from '../configStore';
 import { setDetailsOpen, useCompactLayout, useDetailsOpen } from '../lib/layout';
-import { getDraft, setDraft } from '../lib/drafts';
+import { getDraft, onDraftChange, setDraft } from '../lib/drafts';
 import { useMessageActions } from '../lib/messageActions';
 import { ATTACH_EVENT, SCREENSHOT_SHORTCUT_LABEL } from '../lib/screenshots';
 
@@ -96,6 +96,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     setDraft(bot.id, value);
     renderText(value);
   };
+  // A draft saved while this box was behind a settings sheet (late dictation) shows up as soon as it is written.
+  useEffect(() => onDraftChange(id => { if (id === bot.id) renderText(getDraft(bot.id)); }), [bot.id]);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -21,6 +21,9 @@ cp -p "$installer/payload/Resources/MarionAgent.icns" "$resources/"
 cp -Rp "$installer/payload/Resources/app" "$resources/"
 # <commit>.<time>: lets a running app tell its own build from the server it left running, so an update swaps the
 # server only when nothing is running, and lets the server know which commit it was built from (auto-update).
+if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+  printf 'Warning: uncommitted changes are being packaged under commit %s. Commit first, or the app will offer this same build as an update.\n' "$(git rev-parse --short=7 HEAD 2>/dev/null || echo dev)" >&2
+fi
 printf '%s.%s\n' "$(git rev-parse --short=7 HEAD 2>/dev/null || echo dev)" "$(date +%s)" > "$resources/BUILD_ID"
 
 cp -p .env.example .gitignore package.json package-lock.json README.md SECURITY.md THIRD_PARTY_NOTICES.md \

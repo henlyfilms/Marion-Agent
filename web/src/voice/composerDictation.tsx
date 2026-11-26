@@ -16,7 +16,8 @@ import { supportsLiveDictation, useLiveDictation } from './liveDictation';
 import { playDictationSound } from './sounds';
 import { createDictationRouter } from './dictationRouting';
 
-import { shiftRange, type TextEdit, type TextRange } from './dictationText';
+import { getDraft, setDraft, flushDrafts } from '../lib/drafts';
+import { insertDictated, shiftRange, type TextEdit, type TextRange } from './dictationText';
 export type { TextRange } from './dictationText';
 
 /** The chat box currently on screen: where dictated words go. */
@@ -42,6 +43,8 @@ interface Controls {
   start(botId: string, range?: TextRange): void;
   stop(): void;
   discard(): void;
+  /** Leaving the chat: end dictation now and keep every word heard, saved in that chat's draft. */
+  commit(): void;
 }
 
 let controls: Controls | undefined;
@@ -76,6 +79,7 @@ export const composerDictation: Controls & {
   start: (botId, range) => controls?.start(botId, range),
   stop: () => controls?.stop(),
   discard: () => controls?.discard(),
+  commit: () => controls?.commit(),
   noteEdit: (botId, edit) => {
     touchLive?.();
     if (origin?.botId === botId && origin.range) setOrigin({ botId, range: shiftRange(origin.range, edit) });
@@ -97,17 +101,33 @@ export function ComposerDictationHost() {
   useEffect(refreshStatus, []);
 
   const fail = (message: string) => routing.route(to => to.error(message));
+  // With no chat on screen (the user clicked out of it), words are saved straight into the draft of the chat
+  // they were dictated in, so coming back finds everything that was said.
+  const saveToDraft = (botId: string, words: string, range?: TextRange) => {
+    const heard = words.trim();
+    if (!heard) return;
+    setDraft(botId, insertDictated(getDraft(botId), heard, range).value);
+    flushDrafts();
+  };
   const insertRecorded = (text: string) => {
     const began = origin;
     setOrigin(undefined);
+    if (!chatTarget() && began) { saveToDraft(began.botId, text, began.range); return; }
     routing.route(to => to.insert(text, began?.botId === to.botId ? began.range : undefined));
   };
   // Live words land at the anchor, which then moves to just after them so the next words follow on.
-  const deliverWords = (words: string) => routing.route(to => {
-    const range = origin?.botId === to.botId ? origin.range : undefined;
-    const caret = to.words(words, range);
-    if (range && caret !== undefined) setOrigin({ botId: to.botId, range: { start: caret, end: caret } });
-  });
+  const deliverWords = (words: string) => {
+    const began = origin;
+    if (!chatTarget() && began) {
+      saveToDraft(began.botId, words, began.range);
+      return;
+    }
+    routing.route(to => {
+      const range = origin?.botId === to.botId ? origin.range : undefined;
+      const caret = to.words(words, range);
+      if (range && caret !== undefined) setOrigin({ botId: to.botId, range: { start: caret, end: caret } });
+    });
+  };
   const recorded = useDictation(insertRecorded, fail, language, 10 * 60_000, status?.nativeSpeech);
   const spoken = useLiveDictation(deliverWords, fail, language);
 
@@ -155,14 +175,21 @@ export function ComposerDictationHost() {
         spoken.stop(true);
         recorded.finish(true);
       },
+      commit() {
+        // Live words (finished and still being heard) are delivered now; a recording is sent for transcription and
+        // its text is saved into the draft when it arrives.
+        spoken.commit();
+        recorded.finish();
+      },
     };
     return () => { controls = undefined; };
   });
 
-  // Leaving chat cancels uncommitted speech and releases the mic. A bot-to-bot switch does neither.
+  // Leaving chat saves what was dictated (including the words still being heard) and releases the mic.
+  // A bot-to-bot switch does neither: dictation carries on into the chat you switched to.
   useLayoutEffect(() => {
     if (!activeBot || view !== 'chat' || appSettings || botSettings || (compact && !mobileChatOpen)) {
-      controls?.discard();
+      controls?.commit();
       useComposerDictation.setState({ state: 'idle', interim: '' });
     }
   }, [activeBot, view, appSettings, botSettings, compact, mobileChatOpen]);

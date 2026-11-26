@@ -33,6 +33,18 @@ export function retire(): { ok: true } | { busy: number } {
   return { ok: true };
 }
 
+/**
+ * The build of the Mac app that owns this server. After an update the new app can adopt a server that is still
+ * running the old build (it is swapped only when idle), and that server's own build id and web bundle are old. The app
+ * knows which build is really installed, so the update check trusts this over what the old server reports about itself.
+ */
+let appBuild: string | null = null;
+export const setAppBuild = (build: unknown) => {
+  const commit = typeof build === 'string' ? build.split('.')[0] : '';
+  if (/^[0-9a-f]{7,40}$/.test(commit)) appBuild = commit;
+};
+export const installedBuild = (reported: string | null) => appBuild ?? reported;
+
 export const setOwnerPid = (pid: number) => { if (Number.isInteger(pid) && pid > 1) ownerPid = pid; };
 
 const alive = (pid: number) => {

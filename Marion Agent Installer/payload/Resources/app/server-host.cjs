@@ -135,7 +135,7 @@ function createServerHost(options) {
     try {
       await fetch(`${origin}/api/desktop/attach`, {
         method: 'POST', headers: { [accessHeader]: state.token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid: ownerPid }), signal: AbortSignal.timeout(1500),
+        body: JSON.stringify({ pid: ownerPid, build: buildId }), signal: AbortSignal.timeout(1500),
       });
     } catch { /* the server keeps its previous owner; the app still works */ }
   }

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { db } from '../db.js';
 import { appEnv } from '../env.js';
-import { busyCount } from '../lib/lifecycle.js';
+import { busyCount, installedBuild } from '../lib/lifecycle.js';
 import { getSetting, setSetting } from './schema.js';
 
 /**
@@ -130,7 +130,7 @@ export type AutoUpdateOutcome = 'started' | 'off' | 'not-the-app' | 'unsupported
  */
 export async function autoUpdateTick(deps: { busy?: () => number; start?: typeof startUpdate; at?: number } = {}): Promise<AutoUpdateOutcome> {
   const at = deps.at ?? Date.now();
-  const build = appEnv('BUILD_ID')?.split('.')[0];
+  const build = installedBuild(appEnv('BUILD_ID')?.split('.')[0] ?? null);
   if (!appEnv('DESKTOP_TOKEN') || !build || !/^[0-9a-f]{7,40}$/.test(build)) return 'not-the-app';
   const owner = (db.prepare('SELECT user_id FROM desktop_workspace WHERE slot=1').get() as { user_id: string } | undefined)?.user_id
     ?? (db.prepare('SELECT id FROM users ORDER BY created_at LIMIT 1').get() as { id: string } | undefined)?.id;

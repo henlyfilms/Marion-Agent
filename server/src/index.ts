@@ -15,7 +15,7 @@ import { featuresApi } from './routes-features.js';
 import { startLifeSync } from './features/life-link.js';
 import { startLifeOutbox } from './features/life-outbox.js';
 import { recoverAgentSessions } from './features/agent-sessions.js';
-import { busyCount, isRetiring, retire, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
+import { busyCount, isRetiring, retire, setAppBuild, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
 import { startAutoUpdate } from './features/app-update.js';
 import { appEnv, env } from './env.js';
 import { api } from './routes.js';
@@ -68,8 +68,9 @@ app.get('/api/health', (c) => c.json({
 // The Mac app tells the server it is the owner now (after a relaunch or an update). Only the app's own token gets here.
 app.post('/api/desktop/attach', async (c) => {
   if (!appEnv('DESKTOP_TOKEN') || !hasDesktopAccess(c.req.header(desktopAccessHeader))) return c.json({ error: 'Forbidden' }, 403);
-  const body = await c.req.json().catch(() => ({})) as { pid?: unknown };
+  const body = await c.req.json().catch(() => ({})) as { pid?: unknown; build?: unknown };
   setOwnerPid(Number(body.pid));
+  setAppBuild(body.build);
   return c.json({ ok: true, busy: busyCount() });
 });
 // Atomic "is it idle? then I'm about to be replaced". 409 = something is running, so the server stays.

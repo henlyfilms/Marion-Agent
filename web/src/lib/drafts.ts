@@ -32,11 +32,16 @@ if (typeof window !== 'undefined') {
 
 export const getDraft = (botId: string) => all[botId] ?? '';
 
+/** Lets a chat box that is still mounted follow a draft saved behind its back (dictation finishing after you left). */
+const listeners = new Set<(botId: string) => void>();
+export const onDraftChange = (listener: (botId: string) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+
 export function setDraft(botId: string, text: string) {
   if ((all[botId] ?? '') === text) return;
   if (text) all[botId] = text;
   else delete all[botId];
   save();
+  listeners.forEach(listener => listener(botId));
 }
 
 export const clearDraft = (botId: string) => setDraft(botId, '');

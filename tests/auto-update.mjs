@@ -75,6 +75,26 @@ process.env.MARION_BUILD_ID = `${git('rev-parse', '--short=7', 'HEAD')}.17000000
 assert.equal(await tick({ at: now() + 14 * 3600_000 }), 'current');
 console.log('PASS: auto-update skips a dirty source folder and an up-to-date build.');
 
+// ---- No false "Update available" right after installing the latest build ----
+// The new app can adopt a server that is still running the OLD build (it is swapped only when idle), and that server's own
+// build id and web bundle are old. The app reports the build it really is when it attaches; the update check trusts that.
+const { setAppBuild, installedBuild } = await import('../server/src/lib/lifecycle.ts');
+const { updateStatus } = await import('../server/src/features/app-update.ts');
+const head = git('rev-parse', '--short=7', 'HEAD');
+process.env.MARION_BUILD_ID = `${built}.1700000000`; // the old server still running
+assert.equal((await updateStatus(installedBuild(built))).behind, 1, 'without the app reporting, an old server looks behind');
+setAppBuild('not-a-commit');
+assert.equal(installedBuild(built), built, 'a malformed build from the app is ignored');
+setAppBuild(`${head}.1700000002`);
+assert.equal(installedBuild(built), head, 'the installed app build wins over what the old server and web bundle report');
+assert.equal((await updateStatus(installedBuild(built))).behind, 0, 'no "Update available" right after installing the latest build');
+assert.equal(await tick({ at: now() + 20 * 3600_000 }), 'current', 'and auto-update does not reinstall the build that is already installed');
+writeFileSync(join(source, 'newer.txt'), 'y');
+git('add', '.');
+git('commit', '-qm', 'third');
+assert.equal((await updateStatus(installedBuild(built))).behind, 1, 'a genuinely newer commit still shows as an update');
+console.log('PASS: the installed app build decides "Update available", not the old server that kept running.');
+
 // ---- "Install update" never interrupts running bots or relayed sessions ----
 // 1. The app swap leaves the detached server (and the bots/relays it runs) alone: the installer only closes the Mac app,
 //    never signals node/server processes; the new app re-adopts the server and only replaces it once it is idle.
