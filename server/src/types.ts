@@ -4,7 +4,9 @@ import type { BerryShape, ClassicShape } from './avatarShapes.js';
 
 export type AvatarShape = ClassicShape | BerryShape;
 
-export type AvatarColor =
+/** A named bot color, or a custom six-digit hex color picked with the color picker. */
+export type AvatarColor = NamedAvatarColor | `#${string}`;
+export type NamedAvatarColor =
   | 'black' | 'brown' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'violet' | 'magenta' | 'gray';
 
 export interface User { id: string; email: string; name: string; avatarUrl: string | null }
@@ -18,6 +20,8 @@ export interface Bot {
   avatarShape: AvatarShape;
   avatarColor: AvatarColor;
   avatarStemColor: string | null;
+  /** Soft bloom around the avatar in its own color. */
+  avatarGlow?: boolean;
   mode: 'personal' | 'teammate';
   isPrimary: boolean;
   /** 'room' = group chat (members answer instead of the bot itself). */

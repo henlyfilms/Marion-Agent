@@ -53,7 +53,7 @@ async function ensureSubscribed() {
 function onTrigger(data: any) {
   const ids = [data?.id, data?.metadata?.id, data?.metadata?.nanoId].filter(Boolean);
   if (!ids.length) return;
-  const rows = db.prepare(`SELECT * FROM routines WHERE trigger_id IN (${ids.map(() => '?').join(',')}) AND enabled=1`).all(...ids) as any[];
+  const rows = db.prepare(`SELECT * FROM routines WHERE trigger_id IN (${ids.map(() => '?').join(',')}) AND enabled=1 AND bot_id NOT IN (SELECT id FROM bots WHERE deleted_at IS NOT NULL)`).all(...ids) as any[];
   for (const r of rows) {
     const payload = JSON.stringify(data.payload ?? data.originalPayload ?? {}, null, 1).slice(0, 8000);
     db.prepare('UPDATE routines SET last_run_at=? WHERE id=?').run(now(), r.id);

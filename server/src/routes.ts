@@ -10,7 +10,7 @@ import { isDesktop } from './lib/desktop-access.js';
 import { newId, token } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, remoteAccessFor, remoteWorkspaceUser, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
-import { allLive, appendRow, chatTranscript, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
+import { allLive, appendRow, chatTranscript, clearConversation, emitBot, getBot, getBotRow, toBot, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval, runInBotQueue } from './agent/loop.js';
 import { planLabels, planOptions, readProvider, savePlanLabels, subscriptionUsage, usageProviders, withPlanLabel } from './agent/subscription-usage.js';
 import { chatModelForBot } from './agent/chat-model.js';
@@ -26,7 +26,7 @@ import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
 import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type Toolkit } from './types.js';
 import { orderChats } from './chat-order.js';
-import { isBerryShape, isStemColor } from './avatarShapes.js';
+import { isAvatarColor, isBerryShape, isStemColor } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
 
 export const api = new Hono<AuthVars>();
@@ -298,6 +298,8 @@ api.patch('/bots/:id', async (c) => {
   if (p.avatarShape !== undefined && p.avatarShape !== b.avatar_shape && !isBerryShape(p.avatarShape)) {
     return c.json({ error: 'Choose a berry shape.' }, 400);
   }
+  if (p.avatarColor !== undefined && !isAvatarColor(p.avatarColor)) return c.json({ error: 'Choose a bot color.' }, 400);
+  if (p.avatarGlow !== undefined && typeof p.avatarGlow !== 'boolean') return c.json({ error: 'Choose whether the avatar glows.' }, 400);
   if (p.avatarStemColor !== undefined && p.avatarStemColor !== null && !isStemColor(p.avatarStemColor)) {
     return c.json({ error: 'Choose a six-digit hex stem color.' }, 400);
   }
@@ -309,7 +311,7 @@ api.patch('/bots/:id', async (c) => {
   if (p.compactAtTokens !== undefined && p.compactAtTokens !== null && !(Number.isInteger(p.compactAtTokens) && p.compactAtTokens >= 0 && p.compactAtTokens <= 1_000_000)) {
     return c.json({ error: 'Choose a compaction size between 0 and 1,000,000 tokens.' }, 400);
   }
-  const cols: Record<string, string> = { role: 'role', compactAtTokens: 'compact_at_tokens', name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
+  const cols: Record<string, string> = { role: 'role', compactAtTokens: 'compact_at_tokens', name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', avatarGlow: 'avatar_glow', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
   const changes = Object.entries(cols).filter(([key]) => p[key] !== undefined);
   if (changes.length === 1 && changes[0][0] === 'pinned') {
     db.prepare('UPDATE bots SET pinned=? WHERE id=?').run(Number(p.pinned), b.id);
@@ -331,13 +333,39 @@ api.delete('/bots/:id', async (c) => {
     if (!ownBot(userId, b.id)) return;
     await stopDesktop(userId, b.id);
     for (const r of listRoutines(b.id)) unscheduleRoutine(r.id);
-    db.transaction(() => {
-      db.prepare('DELETE FROM screens WHERE bot_id=?').run(b.id);
-      db.prepare('DELETE FROM bots WHERE id=?').run(b.id);
-    })();
+    // Deleted chats are kept (hidden) so they can be restored; purgeDeletedChats removes them for good later.
+    db.prepare('UPDATE bots SET hidden=1, deleted_at=?, is_primary=0, pinned=0 WHERE id=?').run(now(), b.id);
     hub.emit(userId, { type: 'roster' });
   });
   return c.json({ ok: true });
+});
+
+/** Deleted chats stay restorable for 30 days. */
+export const DELETED_KEEP_MS = 30 * 24 * 3600_000;
+
+export function purgeDeletedChats() {
+  const old = db.prepare('SELECT id FROM bots WHERE deleted_at IS NOT NULL AND deleted_at < ?').all(now() - DELETED_KEEP_MS) as { id: string }[];
+  for (const { id } of old) db.transaction(() => {
+    db.prepare('DELETE FROM screens WHERE bot_id=?').run(id);
+    db.prepare('DELETE FROM bots WHERE id=?').run(id);
+  })();
+}
+setTimeout(() => { try { purgeDeletedChats(); } catch (e) { console.warn('[bots] purge failed', (e as Error).message); } }, 5000).unref();
+
+api.get('/bots/deleted', (c) => {
+  purgeDeletedChats();
+  const rows = db.prepare('SELECT * FROM bots WHERE user_id=? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC').all(c.get('user').id) as any[];
+  return c.json({ bots: rows.map(r => ({ ...toBot(r), deletedAt: r.deleted_at as number, purgeAt: r.deleted_at + DELETED_KEEP_MS })) });
+});
+
+api.post('/bots/:id/restore', (c) => {
+  const userId = c.get('user').id;
+  const b = ownBot(userId, c.req.param('id'));
+  if (!b || b.deleted_at == null) return c.json({ error: 'That chat can no longer be restored.' }, 404);
+  db.prepare('UPDATE bots SET hidden=0, deleted_at=NULL, updated_at=? WHERE id=?').run(now(), b.id);
+  for (const r of listRoutines(b.id)) if (r.enabled) scheduleRoutine(r);
+  hub.emit(userId, { type: 'roster' });
+  return c.json({ bot: getBot(b.id) });
 });
 
 api.post('/bots/:id/primary', (c) => {

@@ -35,7 +35,7 @@ export const api = {
   bots: () => req<{ bots: Bot[]; live: LiveState[]; chatSort: ChatSort }>('GET', '/bots'),
   orderChats: (body: { sort: ChatSort } | { id: string; targetId: string; after: boolean }) =>
     req<{ chatSort: ChatSort; positions: Record<string, number> }>('PUT', '/bots/order', body),
-  createBot: (b: Pick<Bot, 'name' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'mode'>) => req<{ bot: Bot }>('POST', '/bots', b),
+  createBot: (b: Pick<Bot, 'name' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow' | 'mode'>) => req<{ bot: Bot }>('POST', '/bots', b),
   markRead: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/read`),
   rows: (id: string) => req<{ generation: number; rows: Row[] }>('GET', `/bots/${id}/rows`),
   /** A message spoken on a voice call (optionally to a different model than the chat's). */

@@ -4,6 +4,7 @@ import { BotAvatar, BotAvatarFor } from '../../avatar/BotAvatar';
 import { BotShapePicker } from '../../avatar/BotShapePicker';
 import { BotColorPicker } from '../../avatar/BotColorPicker';
 import { BotStemPicker } from '../../avatar/BotStemPicker';
+import { Reveal } from '../Reveal';
 import { botVars } from '../../lib/colors';
 import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
@@ -107,8 +108,8 @@ export function BotSettingsModal() {
 
 // ---------------------------------------------------------------------------
 
-type Draft = Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'effort' | 'mode'>;
-const draftOf = (b: Bot): Draft => ({ name: b.name, label: b.label, description: b.description, instructions: b.instructions, avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, effort: b.effort, mode: b.mode });
+type Draft = Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'effort' | 'mode'> & { avatarGlow: boolean };
+const draftOf = (b: Bot): Draft => ({ name: b.name, label: b.label, description: b.description, instructions: b.instructions, avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, avatarGlow: !!b.avatarGlow, effort: b.effort, mode: b.mode });
 
 function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot));
@@ -143,7 +144,7 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
     <div className="cfg-page">
       <section className="cfg-section">
         <div className="cfg-look">
-          <BotAvatar shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} size={72} />
+          <BotAvatar shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow} size={72} />
           <div className="cfg-look__text">
             <div className="cfg-look__name">{draft.name || 'New Bot'}</div>
             <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => setPicker(!picker)} aria-expanded={picker}>
@@ -151,8 +152,8 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
             </button>
           </div>
         </div>
-        {picker && <LookPicker shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor}
-          onShape={(s) => put('avatarShape', s)} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} />}
+        <Reveal open={picker}><LookPicker shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow}
+          onShape={(s) => put('avatarShape', s)} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} /></Reveal>
       </section>
 
       <section className="cfg-section cfg-grid">
@@ -371,19 +372,21 @@ function AppsSection({ bot }: { bot: Bot }) {
   );
 }
 
-function LookPicker({ shape, color, stemColor, onShape, onColor, onStem }: {
+function LookPicker({ shape, color, stemColor, glow, onShape, onColor, onStem, onGlow }: {
   shape: AvatarShape;
   color: AvatarColor;
   stemColor: string | null;
+  glow: boolean;
+  onGlow: (on: boolean) => void;
   onShape: (shape: AvatarShape) => void;
   onColor: (color: AvatarColor) => void;
   onStem: (color: string | null) => void;
 }) {
   return (
     <div className="cfg-picker">
-      <BotShapePicker shape={shape} color={color} stemColor={stemColor} onShape={onShape} />
+      <BotShapePicker shape={shape} color={color} stemColor={stemColor} glow={glow} onShape={onShape} />
       <BotColorPicker color={color} onChange={onColor} />
-      <BotStemPicker color={stemColor} onChange={onStem} />
+      <BotStemPicker color={stemColor} onChange={onStem} glow={glow} onGlow={onGlow} />
     </div>
   );
 }

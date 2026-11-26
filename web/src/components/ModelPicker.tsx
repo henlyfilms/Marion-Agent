@@ -6,15 +6,11 @@ import { useStore } from '../store';
 import { Icon } from './Icon';
 import { LocalMemory } from './LocalMemory';
 import { Menu, type MenuItem } from './Menu';
+import { ModelIcon } from './ProviderLogo';
 
 const providers: ChatProvider[] = ['local', 'codex', 'gemini', 'claude'];
 const names = { local: 'Local models', codex: 'Codex', gemini: 'Gemini · Antigravity', claude: 'Claude Code' };
-const icons = { local: 'qwen-color', codex: 'codex', gemini: 'gemini-color', claude: 'claude-color' };
-
-function ProviderIcon({ provider, model }: { provider: ChatProvider; model?: string }) {
-  if (provider === 'local' && model && !/qwen/i.test(model)) return <Icon name="monitor" size={16} />;
-  return <img className={`provider-icon provider-icon--${provider}`} src={`/providers/${icons[provider]}.svg`} alt="" width="16" height="16" />;
-}
+const ProviderIcon = ModelIcon;
 
 /** Model lists are checked once per app session (shared by every chat), so the menu opens already full. */
 let discoveredOnce = false;

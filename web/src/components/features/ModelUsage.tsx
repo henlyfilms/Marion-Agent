@@ -6,6 +6,7 @@ import { formatTokens } from '../../lib/featuresApi';
 import { sortedRows, useStore } from '../../store';
 import { useVoice } from '../../voice/call';
 import { callModelFor, isLocalCallActive, useLocalCall } from '../../voice/localCall';
+import { ModelIcon } from '../ProviderLogo';
 
 const resetFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 
@@ -65,7 +66,10 @@ export function ModelUsage({ bot, open }: { bot: Bot; open: boolean }) {
     <div className={`panel-card context-card model-usage${provider ? ` model-usage--${provider}` : ''}`}>
       <div className="context-card__top">
         <span className="context-card__label">Model usage</span>
-        <span className="context-card__value" title={realtime || model?.model}>{realtime || model?.label || lastChatUsage?.label || model?.model || 'Default model'}</span>
+        <span className="context-card__value model-usage__model" title={realtime || model?.model}>
+          {provider && <ModelIcon provider={provider} model={model?.model} size={15} />}
+          <span>{realtime || model?.label || lastChatUsage?.label || model?.model || 'Default model'}</span>
+        </span>
       </div>
       {usage
         ? <span className="context-card__meta" title={usageLabel(usage)}>Last response · {usage.estimated ? '≈' : ''}{formatTokens(usage.input + usage.output)} tokens</span>

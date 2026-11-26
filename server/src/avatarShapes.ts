@@ -24,6 +24,8 @@ export const BERRY_SHAPES = {
   juneberry: ['Juneberry', [[42,51,28],[59,54,27],[51,68,22]]],
   strawberry: ['Wild strawberry', [[33,40,20],[66,39,20],[48,45,25],[50,61,26],[50,77,17]]],
   honeyberry: ['Honeyberry', [[38,58,24],[54,53,25],[68,46,19],[30,68,15]]],
+  chokeberry: ['Chokeberry', [[35,42,19],[63,40,19],[49,58,24],[30,64,15],[68,63,15],[49,78,15]]],
+  snowberry: ['Snowberry', [[50,52,30],[31,71,15],[69,71,15]]],
   funkyberry: ['Funky Berry', 'M49 14C63 13 72 23 72 35C72 40 70 44 67 47C70 55 70 63 68 66C80 65 89 74 89 84C89 95 80 99 70 98C62 98 55 94 51 89C46 96 36 100 27 97C16 94 11 86 14 77C17 68 27 64 36 66C33 57 35 47 38 42C31 35 32 25 39 19C42 16 45 15 49 14Z'],
 } as const;
 export type BerryShape = keyof typeof BERRY_SHAPES;
@@ -42,6 +44,13 @@ export const DEFAULT_STEM_COLOR = '#69864a';
 
 export function isBerryShape(shape: unknown): shape is BerryShape {
   return typeof shape === 'string' && Object.hasOwn(BERRY_SHAPES, shape);
+}
+
+export const NAMED_AVATAR_COLORS = ['black', 'brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray'] as const;
+
+/** A named bot color or a custom six-digit hex color. */
+export function isAvatarColor(color: unknown): color is string {
+  return (typeof color === 'string' && (NAMED_AVATAR_COLORS as readonly string[]).includes(color)) || isStemColor(color);
 }
 
 export function isStemColor(color: unknown): color is string {

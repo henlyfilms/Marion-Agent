@@ -60,7 +60,7 @@ export function screenFor(userId: string, botId: string): Promise<string> {
 }
 
 export function ensureComputer(userId: string) {
-  const bot = db.prepare("SELECT id FROM bots WHERE user_id=? AND kind!='room' ORDER BY is_primary DESC, created_at LIMIT 1").get(userId) as { id: string } | undefined;
+  const bot = db.prepare("SELECT id FROM bots WHERE user_id=? AND kind!='room' AND deleted_at IS NULL ORDER BY is_primary DESC, created_at LIMIT 1").get(userId) as { id: string } | undefined;
   if (!bot) return Promise.reject(new Error('Create a bot first'));
   return screenFor(userId, bot.id);
 }

@@ -30,6 +30,9 @@ export interface BotProfileData {
   instructions: string;
   avatarShape?: string;
   avatarColor?: string;
+  avatarStemColor?: string | null;
+  avatarGlow?: boolean;
+  custom?: boolean;
   role: 'executive' | null;
   memories: string[];
   skills: ProfileSkill[];
@@ -69,6 +72,8 @@ export const featuresApi = {
   updateStatus: (current: string) => req<UpdateStatus>('GET', `/app/update?current=${encodeURIComponent(current)}`),
   installUpdate: () => req<{ ok: true }>('POST', '/app/update', {}),
   templates: () => req<{ templates: BotProfileData[] }>('GET', '/templates'),
+  saveTemplate: (botId: string) => req<{ id: string; name: string }>('POST', `/bots/${botId}/template`),
+  removeTemplate: (id: string) => req<{ ok: true }>('DELETE', `/templates/${encodeURIComponent(id)}`),
   importTemplate: (id: string) => req<{ bot: Bot }>('POST', `/templates/${encodeURIComponent(id)}/import`, {}),
   profile: (botId: string) => req<{ profile: BotProfileData }>('GET', `/bots/${botId}/profile`),
   importBot: (spec: unknown) => req<{ bot: Bot }>('POST', '/bots/import', spec),

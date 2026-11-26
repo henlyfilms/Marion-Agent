@@ -84,30 +84,39 @@ async function checkAppearance(page, linger = false) {
       attached: [...body.children].some(shape => shape.isPointInFill(point)),
     };
   }));
-  assert.equal(avatars.length, 25);
+  assert.equal(avatars.length, 27, 'three full rows of berry shapes');
   assert.ok(avatars.every(shape => shape.eyes === 2 && shape.pupils === 0 && shape.attached), JSON.stringify(avatars.filter(shape => !shape.attached)));
   const stem = dialog.getByRole('switch', { name: 'Show stem' });
-  const color = dialog.getByRole('button', { name: 'Stem color' });
+  const glow = dialog.getByRole('switch', { name: 'Glow' });
   await dialog.getByRole('radio', { name: 'blue' }).check();
-  await color.click();
-  const hex = dialog.getByRole('textbox', { name: 'Hex color' });
+  // A stem swatch applies straight away (no Done button).
+  await dialog.getByRole('radio', { name: 'Stem #8a6236' }).click();
+  assert.equal(await dialog.locator('.create-modal__preview [data-stem-color]').getAttribute('data-stem-color'), '#8a6236');
+  const custom = dialog.getByRole('radio', { name: 'Custom stem color' });
+  await custom.click();
+  const hex = dialog.getByRole('textbox', { name: 'Stem color hex code' });
   await hex.fill('#7b38aa');
   assert.equal(await dialog.locator('.create-modal__preview [data-stem-color]').getAttribute('data-stem-color'), '#7b38aa');
-  const wheel = dialog.locator('.stem-picker__wheel');
-  assert.equal(await wheel.evaluate(el => getComputedStyle(el).borderRadius), '50%');
+  const field = dialog.locator('.stem-picker .color-picker__field');
   if (linger && process.env.MARION_SCREENSHOT_DIR) await dialog.screenshot({ path: join(process.env.MARION_SCREENSHOT_DIR, 'stem-picker.png'), animations: 'disabled' });
-  await wheel.click({ position: { x: 91, y: 56 } });
+  await field.click({ position: { x: 150, y: 30 } });
   assert.notEqual(await hex.inputValue(), '#7b38aa');
-  const chosen = await hex.inputValue();
+  const chosen = (await hex.inputValue()).toLowerCase();
   await hex.press('Escape');
-  assert.equal(await color.getAttribute('aria-expanded'), 'false');
+  assert.equal(await custom.getAttribute('aria-expanded'), 'false');
   assert.equal(await dialog.isVisible(), true);
+  // Glow puts a bloom on the avatar itself.
+  await glow.click();
+  assert.equal(await dialog.locator('.create-modal__preview.is-glowing').count(), 1);
   await stem.click();
   assert.equal(await stem.getAttribute('aria-checked'), 'false');
-  assert.equal(await color.isDisabled(), true);
   assert.equal(await dialog.locator('.create-modal__preview [data-stem-color]').count(), 0);
   await stem.click();
   assert.equal(await dialog.locator('.create-modal__preview [data-stem-color]').getAttribute('data-stem-color'), chosen);
+  // The rainbow bot color opens the picker and any color applies at once.
+  await dialog.locator('.color-choice .swatch-cell').last().click();
+  await dialog.getByRole('textbox', { name: 'Bot color hex code' }).fill('#2a9d8f');
+  assert.equal(await dialog.getByRole('radio', { name: 'Custom color' }).isChecked(), true);
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 }
 
