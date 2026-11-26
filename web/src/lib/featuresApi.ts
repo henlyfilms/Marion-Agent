@@ -17,6 +17,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return res.json() as Promise<T>;
 }
 
+export interface BotFolder { path: string; label: string; write: boolean }
 export interface ProfileSkill { name: string; description: string; body: string }
 export interface ProfileRoutine { name: string; prompt: string; schedule: string; enabled: boolean }
 export interface BotProfileData {
@@ -87,6 +88,10 @@ export const featuresApi = {
   addDevice: (subscription: PushSubscriptionJSON, label: string) => req<{ ok: true }>('POST', '/notifications/devices', { ...subscription, label }),
   removeDevice: (endpoint: string) => req<{ ok: true }>('DELETE', '/notifications/devices', { endpoint }),
   testNotification: () => req<{ devices: number; delivered: number }>('POST', '/notifications/test'),
+  folders: (botId: string) => req<{ folders: BotFolder[]; suggestion: string | null }>('GET', `/bots/${botId}/folders`),
+  addFolder: (botId: string, body: { path?: string; pick?: boolean; label?: string; write?: boolean }) => req<{ folders: BotFolder[]; cancelled?: boolean }>('POST', `/bots/${botId}/folders`, body),
+  updateFolder: (botId: string, body: { path: string; label?: string; write?: boolean }) => req<{ folders: BotFolder[] }>('PATCH', `/bots/${botId}/folders`, body),
+  removeFolder: (botId: string, path: string) => req<{ folders: BotFolder[] }>('DELETE', `/bots/${botId}/folders`, { path }),
   lifeLink: () => req<LifeLink>('GET', '/life-link'),
   saveLifeLink: (body: { endpoint?: string; linkKey?: string; enabled?: boolean; autoSync?: boolean; blockedBots?: string[] }) => req<LifeLink>('PUT', '/life-link', body),
   removeLifeLink: () => req<{ ok: true }>('DELETE', '/life-link'),

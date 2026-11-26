@@ -77,4 +77,3 @@ db.transaction(() => {
   `);
 }).immediate();
 
-export const configSchemaReady = true;

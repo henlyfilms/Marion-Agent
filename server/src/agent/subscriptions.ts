@@ -103,8 +103,39 @@ const claudeArgs = [
   ...claudeIsolation, '--print', '--output-format', 'stream-json', '--verbose',
   '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
   '--tools', '', '--permission-mode', 'dontAsk', '--no-session-persistence', '--disable-slash-commands',
+  // Replaces Claude Code's own coding prompt (about 1,600 tokens per call); Marion's instructions are in the message.
+  '--system-prompt', 'You are the chat model inside Marion Agent. Follow the instructions in the user message.',
 ];
 const providerArgs = { codex: codexArgs, gemini: agyArgs, claude: claudeArgs };
+
+/**
+ * Arguments for a task inside a folder the bot shares. The CLI still starts in Marion's empty temp folder
+ * and gets the shared folder as its only extra directory. Writes are confined by each CLI's own sandbox.
+ */
+function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write: boolean }) {
+  if (provider === 'claude') {
+    const settings = folder.write
+      ? { disableAllHooks: true, sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } }
+      : { disableAllHooks: true };
+    return [
+      ...(folder.write ? [] : ['--restricted']), '--safe-mode', '--setting-sources', '', '--settings', JSON.stringify(settings),
+      '--print', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      '--tools', folder.write ? 'Read,Glob,Grep,Edit,Write,Bash' : 'Read,Glob,Grep',
+      ...(folder.write ? ['--allowedTools', 'Read', 'Glob', 'Grep', 'Edit', 'Write'] : ['--allowedTools', 'Read', 'Glob', 'Grep']),
+      '--permission-mode', 'dontAsk', '--no-session-persistence', '--disable-slash-commands', '--add-dir', folder.path,
+    ];
+  }
+  // File tools are allowed only under the shared folder (Antigravity's write_file otherwise reaches any path);
+  // shell commands run in its sandbox, which blocks writes outside the workspace.
+  const inFolder = (tool: string) => `${tool}(${folder.path}/**)`;
+  const allowed = folder.write ? [inFolder('read_file'), inFolder('write_file'), 'command(*)'] : [inFolder('read_file')];
+  const open = folder.write ? ['read_file(*)', 'write_file(*)', 'command(*)'] : ['read_file(*)'];
+  const settings = JSON.stringify({ modelProvider: '', allowNonWorkspaceAccess: false, permissions: { allow: allowed, deny: googleDeny.filter(rule => !open.includes(rule)) } });
+  return [
+    '--mode', folder.write ? 'accept-edits' : 'plan', '--sandbox', '--disable-slash-commands', '--settings', settings,
+    '--add-dir', folder.path, '--input-format', 'stream-json', '--output-format', 'stream-json',
+  ];
+}
 const runFile = promisify(execFile);
 const claudeLoginMessage = 'Run claude auth login --claudeai in Terminal and sign in with your Claude subscription.';
 const claudePlans = new Set(['free', 'pro', 'max', 'ultra', 'team', 'enterprise']);
@@ -253,6 +284,8 @@ async function discoverCodexModels(program: string): Promise<CodexModel[]> {
 
 interface ReplyOptions {
   fast?: boolean;
+  /** A folder on this Mac the bot shares: the CLI may work inside it (and only there). */
+  folder?: { path: string; label: string; write: boolean };
   onUsage?: (counts: TokenCounts) => void;
   onModel?: (model: SubscriptionSelection) => void;
 }
@@ -265,13 +298,15 @@ export async function subscriptionReply(
   const program = executable(provider);
   if (!program) throw new Error(`Install ${labels[provider]} and check Settings → Models.`);
   const cwd = await mkdtemp(join(tmpdir(), 'marion-provider-'));
-  const deadline = AbortSignal.timeout(180_000);
+  const folder = options.folder;
+  const deadline = AbortSignal.timeout(folder ? 900_000 : 180_000);
   const stop = AbortSignal.any([signal, deadline]);
   try {
     if (provider === 'claude') await requireClaudeSubscription(program, cwd, stop);
-    const args = provider === 'gemini' && images.length
-      ? agyArgs.map(arg => arg === googleSettings ? googleSettingsWithPhotos : arg)
-      : [...providerArgs[provider]];
+    const args = folder && provider !== 'codex' ? folderArgs(provider, folder)
+      : provider === 'gemini' && images.length
+        ? agyArgs.map(arg => arg === googleSettings ? googleSettingsWithPhotos : arg)
+        : [...providerArgs[provider]];
     if (provider !== 'codex') {
       args.push('--model', model);
       const catalog = provider === 'claude' ? claudeModels
@@ -297,7 +332,7 @@ export async function subscriptionReply(
       }));
       prompt += `\n\nThe user's images are saved in your working folder as: ${names.join(', ')}. Open and look at them before answering.`;
     }
-    const child = spawn(program, args, {
+    const child = spawn(program, provider === 'codex' && folder ? codexArgs.filter((arg, index) => arg !== 'features.shell_tool=false' && codexArgs[index + 1] !== 'features.shell_tool=false') : args, {
       cwd, env: cliEnvironment(), signal: stop, stdio: ['pipe', 'pipe', 'pipe'],
     });
     let diagnostic = '';
@@ -313,7 +348,7 @@ export async function subscriptionReply(
 
     try {
       if (provider === 'codex') {
-        return await codexReply(lines, write, cwd, prompt, selection, codexImages, options);
+        return await codexReply(lines, write, folder?.path ?? cwd, prompt, selection, codexImages, options);
       }
       if (provider === 'claude' && images.length) {
         child.stdin.end(JSON.stringify({
@@ -433,8 +468,10 @@ async function codexReply(
     if (actualEffort && !supports(actualEffort)) throw new Error(`Choose a supported reasoning effort for ${model.model}.`);
     options.onModel?.({ ...selection, model: model.model, label: model.displayName || selection.label, effort: actualEffort });
     write({ id: 3, method: 'thread/start', params: {
-      cwd, model: model.model, modelProvider: 'openai', sandbox: 'read-only', approvalPolicy: 'never', ephemeral: true, serviceTier: 'default',
-      baseInstructions: 'Answer as a chat assistant using the messages and attachments the user provides. Use the response format requested by Marion. Do not use native CLI tools.',
+      cwd, model: model.model, modelProvider: 'openai', sandbox: options.folder?.write ? 'workspace-write' : 'read-only', approvalPolicy: 'never', ephemeral: true, serviceTier: 'default',
+      baseInstructions: options.folder
+        ? `You are working inside the user's folder "${options.folder.label}" (${options.folder.path}), your working directory, with ${options.folder.write ? 'read and write' : 'read-only'} access. Do the task there, never touch anything outside it, and finish with a short summary of what you did.`
+        : 'Answer as a chat assistant using the messages and attachments the user provides. Use the response format requested by Marion. Do not use native CLI tools.',
     } });
   };
   write(initializeCodex);

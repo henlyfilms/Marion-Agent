@@ -4,13 +4,12 @@ import { BotAvatar, BotAvatarFor } from '../../avatar/BotAvatar';
 import { BotShapePicker } from '../../avatar/BotShapePicker';
 import { BotColorPicker } from '../../avatar/BotColorPicker';
 import { BotStemPicker } from '../../avatar/BotStemPicker';
-import { Reveal } from '../Reveal';
 import { botVars } from '../../lib/colors';
 import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
 import { useStore } from '../../store';
-import { featuresApi, type BotProfileData } from '../../lib/featuresApi';
-import { Share } from 'lucide-react';
+import { featuresApi, type BotFolder, type BotProfileData, type LifeLink } from '../../lib/featuresApi';
+import { Folder, Share } from 'lucide-react';
 import { ToolkitLogo } from '../ToolkitLogo';
 import { Icon } from '../Icon';
 import { Modal } from '../modals/Modal';
@@ -56,10 +55,11 @@ export function BotSettingsModal() {
 
   const tabs: { id: BotSettingsTab; label: string; count?: number }[] = [
     { id: 'general', label: 'General' },
+    { id: 'theme', label: 'Theme' },
     { id: 'skills', label: 'Skills', count: data?.skills.length },
     { id: 'memories', label: 'Memories', count: data?.memories.length },
     { id: 'routines', label: 'Routines', count: (routines ?? data?.routines)?.length },
-    ...(bot.kind === 'room' ? [] : [{ id: 'apps' as const, label: 'Apps' }]),
+    ...(bot.kind === 'room' ? [] : [{ id: 'access' as const, label: 'Access' }]),
   ];
   const exportBot = async () => {
     const response = await fetch(`/api/bots/${bot.id}/export`, { credentials: 'include' });
@@ -96,10 +96,11 @@ export function BotSettingsModal() {
         <div className="cfg-content" key={target.tab}>
           {loadError && <div className="cfg-error">Couldn’t load settings: {loadError}</div>}
           {target.tab === 'general' && <GeneralTab key={bot.id} bot={bot} onClose={onClose} />}
+          {target.tab === 'theme' && <ThemeTab key={bot.id} bot={bot} />}
           {target.tab === 'skills' && <SkillsTab bot={bot} skills={data?.skills} onChange={reload} />}
           {target.tab === 'memories' && <MemoriesTab bot={bot} data={data} onChange={reload} />}
           {target.tab === 'routines' && <RoutinesTab bot={bot} routines={routines ?? data?.routines} />}
-          {target.tab === 'apps' && <AppsTab bot={bot} />}
+          {target.tab === 'access' && <AccessTab bot={bot} />}
         </div>
       </div>
     </Modal>
@@ -113,7 +114,6 @@ const draftOf = (b: Bot): Draft => ({ name: b.name, label: b.label, description:
 
 function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot));
-  const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
 
@@ -147,13 +147,11 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
           <BotAvatar shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow} size={72} />
           <div className="cfg-look__text">
             <div className="cfg-look__name">{draft.name || 'New Bot'}</div>
-            <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => setPicker(!picker)} aria-expanded={picker}>
-              {picker ? 'Done' : 'Change look'}
+            <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => useConfigUI.setState({ botSettings: { botId: bot.id, tab: 'theme' } })}>
+              Change look
             </button>
           </div>
         </div>
-        <Reveal open={picker}><LookPicker shape={draft.avatarShape} color={draft.avatarColor} stemColor={draft.avatarStemColor} glow={draft.avatarGlow}
-          onShape={(s) => put('avatarShape', s)} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} /></Reveal>
       </section>
 
       <section className="cfg-section cfg-grid">
@@ -242,15 +240,118 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
 }
 
 
+/** Everything this Bot may reach: folders on this Mac, Marion Life, and connected apps. */
+function AccessTab({ bot }: { bot: Bot }) {
+  return (
+    <div className="cfg-page">
+      <div className="cfg-page__head">
+        <div>
+          <div className="cfg-page__title">Access</div>
+          <div className="cfg-page__sub">What {bot.name} can reach. Anything shared here {bot.name} can also hand to Claude Code, Codex or Gemini when it asks them for help.</div>
+        </div>
+      </div>
+      <FoldersSection bot={bot} />
+      <LifeAccessSection bot={bot} />
+      <AppsSection bot={bot} />
+    </div>
+  );
+}
+
+function FoldersSection({ bot }: { bot: Bot }) {
+  const [folders, setFolders] = useState<BotFolder[] | null>(null);
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [path, setPath] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    featuresApi.folders(bot.id).then(r => { setFolders(r.folders); setSuggestion(r.suggestion); }).catch(e => setError((e as Error).message));
+  }, [bot.id]);
+  const run = async (job: () => Promise<{ folders: BotFolder[] }>) => {
+    setBusy(true); setError('');
+    try { setFolders((await job()).folders); return true; } catch (e) { setError((e as Error).message); return false; } finally { setBusy(false); }
+  };
+  const shared = folders ?? [];
+  const showSuggestion = suggestion && !shared.some(f => f.path === suggestion);
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Folders on this Mac</div>
+      <div className="cfg-card">
+        {shared.map(folder => (
+          <div key={folder.path} className="cfg-row">
+            <Folder size={16} strokeWidth={1.8} className="access-folder__icon" />
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">{folder.label}</div>
+              <div className="cfg-row__sub" title={folder.path}>{folder.path}</div>
+            </div>
+            <Segmented label={`What ${bot.name} can do in ${folder.label}`} value={folder.write ? 'write' : 'read'} options={[{ value: 'read', label: 'Read' }, { value: 'write', label: 'Edit' }]}
+              onChange={v => void run(() => featuresApi.updateFolder(bot.id, { path: folder.path, write: v === 'write' }))} />
+            <ConfirmButton confirmLabel="Remove" title="Stop sharing this folder" onConfirm={() => run(() => featuresApi.removeFolder(bot.id, folder.path))}>
+              <Icon name="close" size={12} />
+            </ConfirmButton>
+          </div>
+        ))}
+        {folders && !shared.length && <div className="cfg-empty cfg-empty--flat">No folders yet. Share one and {bot.name} can sort, rename and tidy it when you ask, or have Claude Code, Codex or Gemini work in it.</div>}
+        <div className="cfg-row cfg-row--divided access-add">
+          <input className="text-input" value={path} placeholder="~/Desktop/Screenshots" aria-label="Folder path"
+            onChange={e => setPath(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && path.trim()) void run(() => featuresApi.addFolder(bot.id, { path })).then(ok => ok && setPath('')); }} />
+          <button type="button" className="cfg-btn" disabled={busy || !path.trim()} onClick={() => void run(() => featuresApi.addFolder(bot.id, { path })).then(ok => ok && setPath(''))}>Add</button>
+          <button type="button" className="cfg-btn cfg-btn--primary" disabled={busy} onClick={() => void run(() => featuresApi.addFolder(bot.id, { pick: true }))}>{busy ? 'Choosing…' : 'Choose folder…'}</button>
+        </div>
+        {showSuggestion && (
+          <div className="cfg-row cfg-row--divided">
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">Screenshots</div>
+              <div className="cfg-row__sub">{suggestion}</div>
+            </div>
+            <button type="button" className="cfg-btn" disabled={busy} onClick={() => void run(() => featuresApi.addFolder(bot.id, { path: suggestion!, label: 'Screenshots' }))}>Share</button>
+          </div>
+        )}
+      </div>
+      {error && <div className="cfg-error">{error}</div>}
+      <div className="cfg-field__hint access-hint">Read lets {bot.name} look; Edit also lets it create, rename and move files. It can never go outside a shared folder.</div>
+    </section>
+  );
+}
+
+function LifeAccessSection({ bot }: { bot: Bot }) {
+  const [link, setLink] = useState<LifeLink | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => { featuresApi.lifeLink().then(setLink).catch(() => {}); }, []);
+  if (!link?.settings.enabled) return null;
+  const blocked = link.settings.blockedBots ?? [];
+  const on = !blocked.includes(bot.id);
+  const toggle = (next: boolean) => {
+    const blockedBots = next ? blocked.filter(id => id !== bot.id) : [...blocked, bot.id];
+    setLink({ ...link, settings: { ...link.settings, blockedBots } });
+    featuresApi.saveLifeLink({ blockedBots }).then(setLink).catch(e => setError((e as Error).message));
+  };
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Marion Life</div>
+      <div className="cfg-card">
+        <div className="cfg-row">
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">Planner and calendar</div>
+            <div className="cfg-row__sub">{on ? `${bot.name} can read and add tasks and events.` : `${bot.name} can’t use Marion Life.`}</div>
+          </div>
+          <Switch on={on} onChange={toggle} label={`Let ${bot.name} use Marion Life`} />
+        </div>
+      </div>
+      {error && <div className="cfg-error">{error}</div>}
+    </section>
+  );
+}
+
 /** The apps this Bot can use (its integrations) and whether each is connected. */
-function AppsTab({ bot }: { bot: Bot }) {
+function AppsSection({ bot }: { bot: Bot }) {
   const [profile, setProfile] = useState<BotProfileData | null>(null);
   const [error, setError] = useState('');
   useEffect(() => { featuresApi.profile(bot.id).then(r => setProfile(r.profile)).catch(e => setError((e as Error).message)); }, [bot.id]);
-  if (error) return <div className="cfg-page"><div className="cfg-error">Couldn’t load apps: {error}</div></div>;
-  if (!profile) return <div className="cfg-page"><div className="cfg-empty">Loading…</div></div>;
+  if (error) return <div className="cfg-error">Couldn’t load apps: {error}</div>;
+  if (!profile) return null;
   return (
-    <div className="cfg-page">
+    <>
       <section className="cfg-section">
         <div className="cfg-section__label">Apps it can use</div>
         {profile.integrations.length ? (
@@ -265,7 +366,7 @@ function AppsTab({ bot }: { bot: Bot }) {
           </div>
         ) : <div className="cfg-empty">Uses its own computer, browser and files. Connect apps in Settings → Connected apps when it needs them.</div>}
       </section>
-    </div>
+    </>
   );
 }
 
@@ -284,6 +385,60 @@ function LookPicker({ shape, color, stemColor, glow, onShape, onColor, onStem, o
       <BotShapePicker shape={shape} color={color} stemColor={stemColor} glow={glow} onShape={onShape} />
       <BotColorPicker color={color} onChange={onColor} />
       <BotStemPicker color={stemColor} onChange={onStem} glow={glow} onGlow={onGlow} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+type Look = Pick<Draft, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow'>;
+const lookOf = (b: Bot): Look => ({ avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, avatarGlow: !!b.avatarGlow });
+
+/** The Bot's look: berry shape, colour, stem and glow, with a live preview and its own save bar. */
+function ThemeTab({ bot }: { bot: Bot }) {
+  const [look, setLook] = useState<Look>(() => lookOf(bot));
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
+  const base = lookOf(bot);
+  const changed = (Object.keys(look) as (keyof Look)[]).filter((k) => look[k] !== base[k]);
+  const dirty = changed.length > 0;
+  const put = <K extends keyof Look>(k: K, v: Look[K]) => setLook((d) => ({ ...d, [k]: v }));
+  const save = async () => {
+    if (!dirty) return;
+    setSaving(true);
+    try {
+      const patch = Object.fromEntries(changed.map((k) => [k, look[k]]));
+      const { bot: next } = await configApi.updateBot(bot.id, patch);
+      useStore.setState((s) => ({ bots: s.bots.map((b) => (b.id === next.id ? next : b)) }));
+      setNote({ text: 'Saved', tone: 'ok' });
+    } catch (e) {
+      setNote({ text: (e as Error).message, tone: 'error' });
+    } finally {
+      setSaving(false);
+      setTimeout(() => setNote(null), 2400);
+    }
+  };
+  return (
+    <div className="cfg-page">
+      <div className="cfg-page__head">
+        <div>
+          <div className="cfg-page__title">Theme</div>
+          <div className="cfg-page__sub">How {bot.name} looks in the sidebar, chats and menus.</div>
+        </div>
+      </div>
+      <section className="cfg-section">
+        <div className="cfg-look">
+          <BotAvatar shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow} size={72} />
+          <div className="cfg-look__text"><div className="cfg-look__name">{bot.name}</div></div>
+        </div>
+        <LookPicker shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow}
+          onShape={(s) => put('avatarShape', s)} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} />
+      </section>
+      <div className={`cfg-savebar${dirty ? ' is-dirty' : ''}`}>
+        <span className={`cfg-savebar__note${note?.tone === 'error' ? ' is-error' : ''}`} role="status">{note?.text ?? (dirty ? 'Unsaved changes' : '')}</span>
+        <button type="button" className="cfg-btn cfg-btn--secondary" disabled={!dirty || saving} onClick={() => setLook(lookOf(bot))}>Discard</button>
+        <button type="button" className="cfg-btn cfg-btn--primary" disabled={!dirty || saving} onClick={save}>{saving ? 'Saving…' : 'Save changes'}</button>
+      </div>
     </div>
   );
 }

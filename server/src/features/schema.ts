@@ -81,4 +81,3 @@ export function setSecret(key: string, value: string | null) {
   else db.prepare('INSERT INTO app_secrets(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value);
 }
 
-export const featureSchemaReady = true;

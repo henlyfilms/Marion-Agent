@@ -60,7 +60,7 @@ await sweep('chat', '.app > .chat', nothing);
 await sweep('side panel', '.details', nothing);
 await sweep('side panel Tasks tab', '.details__scroll', () => page.locator('.details__tabs button', { hasText: 'Tasks' }).click());
 await sweep('side panel Library tab', '.details__scroll', () => page.locator('.details__tabs button', { hasText: 'Library' }).click());
-for (const tab of ['', 'Skills', 'Memories', 'Routines', 'Apps']) await sweep(`bot settings ${tab || 'General'}`, '.bot-settings', botSettings(tab));
+for (const tab of ['', 'Skills', 'Memories', 'Routines', 'Theme', 'Access']) await sweep(`bot settings ${tab || 'General'}`, '.bot-settings', botSettings(tab));
 await sweep('Tasks view', '.app > .chat', () => page.getByRole('button', { name: /^Tasks/ }).first().click());
 await sweep('Sessions view', '.app > .chat', () => page.getByRole('button', { name: /^Sessions/ }).first().click());
 await sweep('settings', '.sheet, .settings', () => page.keyboard.press('Meta+Comma'));

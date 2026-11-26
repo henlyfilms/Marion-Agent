@@ -6,7 +6,7 @@ import { useStore } from './store';
 
 /** UI state for bot settings, app settings, the Tasks view and the theme. Kept apart from store.ts on purpose. */
 
-export type BotSettingsTab = 'general' | 'skills' | 'memories' | 'routines' | 'apps';
+export type BotSettingsTab = 'general' | 'skills' | 'memories' | 'routines' | 'theme' | 'access';
 export type AppSection = 'general' | 'models' | 'audio' | 'notifications' | 'shortcuts' | 'computer' | 'permissions' | 'apps' | 'life' | 'account' | 'updates';
 /** 'home' is the grouped list on a phone; on a wider window it shows General next to that list. */
 export type AppSettingsPage = AppSection | 'home';

@@ -77,7 +77,7 @@ try {
     if (label !== 'phone') {
       await page.locator('.details__identity').click();
       await page.waitForSelector('.bot-settings');
-      for (const section of ['Skills', 'Memories', 'Routines', 'Apps', 'General']) await page.locator('.bot-settings .cfg-nav__item', { hasText: section }).click();
+      for (const section of ['Skills', 'Memories', 'Routines', 'Theme', 'Access', 'General']) await page.locator('.bot-settings .cfg-nav__item', { hasText: section }).click();
       await check('bot settings');
       await page.keyboard.press('Escape');
     }

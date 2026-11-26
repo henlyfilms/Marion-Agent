@@ -229,6 +229,13 @@
 .local-settings__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .local-settings__controls .text-input { flex: 1 1 240px; min-width: 0; }
 
+/* Bot settings → Access */
+.access-add { gap: 8px; }
+.access-add .text-input { flex: 1; min-width: 0; }
+.access-folder__icon { flex: none; color: var(--color-text-secondary); }
+.access-hint { margin-top: -6px; padding: 0 4px; }
+.cfg-row .cfg-row__sub[title] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Custom theme: three color rows, each opens the color picker under it. */
 .custom-theme { display: grid; gap: 2px; margin-top: 12px; padding: 6px; border-radius: 14px; background: var(--color-bg-elevated); box-shadow: var(--shadow-card); }
 .custom-theme__row {
