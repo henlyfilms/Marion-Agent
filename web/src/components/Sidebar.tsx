@@ -19,6 +19,7 @@ import { useContextMenu } from './ContextMenu';
 import { botMenuItems, openBotChat, toggleChatStar } from './botMenuItems';
 import { Modal } from './modals/Modal';
 import { useChatReorder, type ChatMove } from './useChatReorder';
+import { useSelectionGlide } from '../lib/selectionGlide';
 import { formatTokens } from '../lib/featuresApi';
 import { contextFraction, contextTone } from './features/ContextCard';
 
@@ -287,6 +288,8 @@ export function Sidebar() {
     }
     previousPositions.current = positions;
   }, [list, sorted, compact, dragging, dropPositions]);
+  // Switching chats: the highlight glides from the old row to the new one.
+  useSelectionGlide(list, dragging ? null : selectedBotId);
 
   const pendingDelete = bots.find(bot => bot.id === deleting);
   const closeDelete = useCallback(() => { if (!busy) setDeleting(null); }, [busy]);

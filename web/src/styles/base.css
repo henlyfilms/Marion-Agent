@@ -195,7 +195,7 @@ a { color: inherit; }
 
 /* Optical centering: these glyphs' drawn shapes sit off their box centre; nudged so the ink is centred
    in the circle (measured by tests/shot-icons.mjs, which checks every toolbar button to within 0.25px). */
-.details__gear > svg { translate: -0.5px 0; }
+
 .sidebar-toggle > svg { translate: -0.5px -0.5px; }
 .conversation-actions__share > button > svg { translate: 0 1px; }
 .composer__mic-anchor > button > svg { translate: 0 -0.75px; }
