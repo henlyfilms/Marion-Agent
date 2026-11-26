@@ -75,5 +75,44 @@ process.env.MARION_BUILD_ID = `${git('rev-parse', '--short=7', 'HEAD')}.17000000
 assert.equal(await tick({ at: now() + 14 * 3600_000 }), 'current');
 console.log('PASS: auto-update skips a dirty source folder and an up-to-date build.');
 
+// ---- "Install update" never interrupts running bots or relayed sessions ----
+// 1. The app swap leaves the detached server (and the bots/relays it runs) alone: the installer only closes the Mac app,
+//    never signals node/server processes; the new app re-adopts the server and only replaces it once it is idle.
+import { readFileSync } from 'node:fs';
+const root = new URL('../', import.meta.url);
+const installer = readFileSync(new URL('Marion Agent Installer/Install Marion Agent.command', root), 'utf8');
+const killers = installer.split('\n').filter(line => /\b(pkill|killall|kill)\b/.test(line));
+assert.ok(killers.length > 0 && killers.every(line => line.includes('/Contents/MacOS/Electron')), 'the installer only ever signals the Mac app itself');
+assert.ok(!/server-runtime|server\.cjs|runtime\/node/.test(killers.join('\n')), 'the installer never signals the background server');
+const host = readFileSync(new URL('Marion Agent Installer/payload/Resources/app/server-host.cjs', root), 'utf8');
+assert.match(host, /detached: true/, 'the server runs detached so quitting/replacing the app does not touch it');
+assert.match(host, /body\.busy === 0 && \(await retire\(saved\)\) !== 'busy'/, 'launch-time swap needs idle AND the server agreeing');
+assert.match(host, /replace\([^)]*\{ onlyIfIdle: true \}\)/, 'the watcher only swaps after the server agrees it is idle');
+const main = readFileSync(new URL('Marion Agent Installer/payload/Resources/app/main.cjs', root), 'utf8');
+const stopCalls = main.match(/serverHost\.stop\(\)/g) ?? [];
+assert.equal(stopCalls.length, 1, 'only "Quit and Stop Background Work" (behind a confirmation) stops the server');
+assert.match(main, /before-quit', \(\) => \{ quitting = true; \}\)/, 'plain quit/update leaves the server running');
+console.log('PASS: Install update only restarts the app; the background server and its work are not signalled.');
+
+// 2. The server only agrees to be replaced when it is idle, in one atomic step, and then takes no new work.
+const { retire, isRetiring, busyCount } = await import('../server/src/lib/lifecycle.ts');
+assert.equal(busyCount(), 0);
+// A running bot turn (a held queue entry) makes it refuse and stay available.
+db.prepare('INSERT OR IGNORE INTO bots(id,user_id,name,created_at,updated_at) VALUES (?,?,?,?,?)').run('bot_busy', userId, 'Busy', now(), now());
+let release;
+const hold = new Promise(resolve => { release = resolve; });
+const { runInBotQueue } = await import('../server/src/agent/loop.ts');
+const running = runInBotQueue('bot_busy', () => hold);
+assert.equal(busyCount(), 1, 'a running turn or relayed session counts as busy');
+assert.deepEqual(retire(), { busy: 1 }, 'a busy server refuses to retire');
+assert.equal(isRetiring(), false, 'refusing leaves the server taking work as usual');
+release();
+await running;
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(busyCount(), 0);
+assert.deepEqual(retire(), { ok: true }, 'an idle server agrees to retire');
+assert.equal(isRetiring(), true, 'and from then on turns away new requests until the app stops it');
+console.log('PASS: the server refuses to be replaced while a bot or relayed session runs, and agrees atomically only when idle.');
+
 rmSync(work, { recursive: true, force: true });
 process.exit(0);

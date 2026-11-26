@@ -16,6 +16,23 @@ let ownerPid = Number(appEnv('OWNER_PID')) || 0;
 /** Work in progress: bot turns (including their Claude relays) plus any provider CLI still running. */
 export const busyCount = () => busyBotCount() + activeProviderRuns();
 
+/** The app stops the server right after a successful retire; if it never does (the app crashed), this lapses. */
+const RETIRE_GRACE_MS = 15_000;
+let retiringUntil = 0;
+export const isRetiring = () => Date.now() < retiringUntil;
+
+/**
+ * The Mac app asks this before it replaces the server with a newer build. The check and the switch happen in one
+ * step (no await), so a bot turn or relayed session can't slip in between "nothing is running" and the stop.
+ * While retiring, new requests get a short "restarting" answer instead of starting work that the stop would kill.
+ */
+export function retire(): { ok: true } | { busy: number } {
+  const busy = busyCount();
+  if (busy > 0) return { busy };
+  retiringUntil = Date.now() + RETIRE_GRACE_MS;
+  return { ok: true };
+}
+
 export const setOwnerPid = (pid: number) => { if (Number.isInteger(pid) && pid > 1) ownerPid = pid; };
 
 const alive = (pid: number) => {

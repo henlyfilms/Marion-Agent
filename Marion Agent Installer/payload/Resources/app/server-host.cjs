@@ -140,6 +140,21 @@ function createServerHost(options) {
     } catch { /* the server keeps its previous owner; the app still works */ }
   }
 
+  /**
+   * Ask the server to agree to being replaced. It answers in one step ("nothing is running, and from now on I take no
+   * new work"), so a turn can't start between our check and the stop. 'busy' means leave it alone; 'unsupported' is an
+   * older server without this call (the idle check from /api/health is all there is for those).
+   */
+  async function retire(session) {
+    try {
+      const response = await fetch(`${origin}/api/desktop/retire`, {
+        method: 'POST', headers: { [accessHeader]: session.token, 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(1500),
+      });
+      if (response.ok) return 'ok';
+      return response.status === 409 ? 'busy' : 'unsupported';
+    } catch { return 'unsupported'; }
+  }
+
   /** Stop a server we know about (only when it is idle, or when the owner asked to stop everything). */
   async function terminate(session) {
     if (!session?.pid) return;
@@ -162,7 +177,7 @@ function createServerHost(options) {
       if (body && body.desktopInstance === saved.instanceId) {
         Object.assign(state, { token: saved.token, instanceId: saved.instanceId, pid: body.pid || saved.pid, build: body.build || saved.build || '', runtime: saved.runtime || '', adopted: true });
         // An older build that is not running anything is replaced right now, before any window opens.
-        if (state.build !== buildId && body.busy === 0) {
+        if (state.build !== buildId && body.busy === 0 && (await retire(saved)) !== 'busy') {
           await terminate(saved);
           if (!(await launch())) throw new Error(`Check whether another app is using port ${port}. You can also check the data folder in Library → Application Support → Marion Agent.`);
           return { ...state };
@@ -176,10 +191,11 @@ function createServerHost(options) {
     return { ...state };
   }
 
-  async function replace(reason) {
+  async function replace(reason, { onlyIfIdle = false } = {}) {
     if (replacing) return false;
     replacing = true;
     try {
+      if (onlyIfIdle && (await retire({ token: state.token })) === 'busy') return false; // work started: keep the server
       console.log(`[server-host] replacing the server (${reason})`);
       await terminate({ token: state.token, instanceId: state.instanceId, pid: state.pid });
       return await launch();
@@ -201,7 +217,7 @@ function createServerHost(options) {
         return;
       }
       misses = 0;
-      if (body.build !== buildId && body.busy === 0 && (await replace('a new version is ready and nothing is running'))) onReplaced();
+      if (body.build !== buildId && body.busy === 0 && (await replace('a new version is ready and nothing is running', { onlyIfIdle: true }))) onReplaced();
     }, 4000);
     watcher.unref?.();
   }

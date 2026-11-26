@@ -15,7 +15,7 @@ import { featuresApi } from './routes-features.js';
 import { startLifeSync } from './features/life-link.js';
 import { startLifeOutbox } from './features/life-outbox.js';
 import { recoverAgentSessions } from './features/agent-sessions.js';
-import { busyCount, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
+import { busyCount, isRetiring, retire, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
 import { startAutoUpdate } from './features/app-update.js';
 import { appEnv, env } from './env.js';
 import { api } from './routes.js';
@@ -39,6 +39,8 @@ migrateUniversalSkills();
 
 const app = new Hono();
 app.use('*', async (c, next) => {
+  // The app is swapping in a newer server (only ever granted while nothing was running): don't start new work now.
+  if (isRetiring() && c.req.path.startsWith('/api/') && c.req.path !== '/api/health') return c.json({ error: 'Marion Agent is restarting for an update. Try again in a moment.' }, 503);
   if (!hasDesktopAccess(c.req.header(desktopAccessHeader))) {
     const access = remoteAccessFor(c);
     if (!access) return c.text('Forbidden', 403);
@@ -69,6 +71,12 @@ app.post('/api/desktop/attach', async (c) => {
   const body = await c.req.json().catch(() => ({})) as { pid?: unknown };
   setOwnerPid(Number(body.pid));
   return c.json({ ok: true, busy: busyCount() });
+});
+// Atomic "is it idle? then I'm about to be replaced". 409 = something is running, so the server stays.
+app.post('/api/desktop/retire', (c) => {
+  if (!appEnv('DESKTOP_TOKEN') || !hasDesktopAccess(c.req.header(desktopAccessHeader))) return c.json({ error: 'Forbidden' }, 403);
+  const result = retire();
+  return 'busy' in result ? c.json({ ok: false, busy: result.busy }, 409) : c.json({ ok: true });
 });
 app.route('/api/checkins', checkinsApi);
 app.route('/api/rooms', roomsApi);

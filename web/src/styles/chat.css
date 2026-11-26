@@ -298,7 +298,7 @@
 .bubble.is-agent { background: var(--color-bubble-agent); }
 
 @media (max-width: 700px) {
-  .chat__header { min-height: 56px; padding: calc(env(safe-area-inset-top) + 6px) calc(104px + var(--toolbar-gap)) 7px 8px; gap: 5px; }
+  .chat__header { min-height: 56px; padding: calc(env(safe-area-inset-top) + 6px) calc(152px + var(--toolbar-gap)) 7px 8px; gap: 5px; }
   .chat__header .sidebar-back { display: inline-flex; align-self: center; }
   .conversation-actions { right: calc(env(safe-area-inset-right) + 8px); top: calc(var(--native-titlebar-height, 0px) + env(safe-area-inset-top) + 6px); }
   .conversation-actions .icon-btn { width: 44px; height: 44px; flex: 0 0 44px; }
@@ -435,3 +435,49 @@
 @media (hover: none) {
   .bubble { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 }
+
+/* ---------- in-chat search (Cmd/Ctrl+F) ---------- */
+.chat-search {
+  position: absolute; z-index: 8; top: calc(var(--native-titlebar-height, 0px) + 54px); right: 14px;
+  display: flex; align-items: center; gap: 2px; width: min(380px, calc(100% - 28px)); height: 40px; padding: 0 6px 0 12px;
+  border-radius: 20px; font-size: var(--text-base); color: var(--color-ink);
+  background: color-mix(in srgb, var(--color-bg-elevated) 84%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
+  border: 0.5px solid color-mix(in srgb, var(--palette-foreground) 14%, transparent);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.16), 0 1px 2px rgb(0 0 0 / 0.1);
+  /* Closed: slid up, faded and a touch smaller. `visibility` flips after the fade so the hidden bar can't take focus or clicks. */
+  opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-8px) scale(0.97); transform-origin: top right;
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out), visibility 0s linear 160ms;
+}
+.chat-search.is-open {
+  opacity: 1; visibility: visible; pointer-events: auto; transform: none;
+  transition: opacity 200ms var(--ease-out), transform 240ms cubic-bezier(0.2, 0.9, 0.25, 1), visibility 0s;
+}
+.chat-search:focus-within { border-color: color-mix(in srgb, var(--palette-foreground) 28%, transparent); }
+.chat-search__icon { margin-right: 6px; }
+.chat-search__input {
+  flex: 1 1 0; min-width: 0; height: 100%; padding: 0; border: 0; outline: none; background: transparent;
+  font: inherit; letter-spacing: 0.14px; color: var(--color-ink);
+}
+.chat-search__input::placeholder { color: var(--color-text-quaternary); opacity: 1; }
+.chat-search__count {
+  flex-shrink: 0; min-width: 52px; margin: 0 4px; text-align: right; white-space: nowrap;
+  font-size: 12px; line-height: 16px; letter-spacing: 0.12px; font-variant-numeric: tabular-nums; color: var(--color-text-secondary);
+}
+.chat-search__count.is-idle { color: var(--color-text-quaternary); }
+.chat-search__count.is-empty { color: var(--color-warn-text); }
+.chat-search__btn {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+  background: transparent; border: 0; color: var(--color-text-secondary);
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.chat-search__btn:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-ink); }
+.chat-search__btn:active:not(:disabled) { background: var(--color-bg-secondary-hover); }
+.chat-search__btn:disabled { opacity: 0.35; cursor: default; }
+.chat-search__btn:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: -2px; }
+@media (max-width: 700px) {
+  .chat-search { top: calc(var(--native-titlebar-height, 0px) + env(safe-area-inset-top) + 56px); right: 10px; left: 10px; width: auto; }
+}
+/* Match colours. Dark text on a solid fill reads on light and dark themes and on coloured (your own) bubbles alike. */
+::highlight(chat-search) { background-color: #f7d96a; color: #1c1c1c; }
+::highlight(chat-search-active) { background-color: #ff9a3c; color: #1c1c1c; text-decoration: underline 2px #1c1c1c; text-underline-offset: 3px; }

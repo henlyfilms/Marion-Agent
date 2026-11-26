@@ -30,11 +30,15 @@ const pidOf = () => Number(readFileSync(join(dataDir, 'fake.pid'), 'utf8'));
 const origin = 'http://127.0.0.1:1';
 let busy = 0;
 let attached = [];
+/** How many /api/desktop/retire calls the stub refuses with 409: a turn started after the idle check. */
+let retireRefusals = 0;
+let retireCalls = 0;
 /** Stands in for the server's /api/health and /api/desktop/attach. */
 globalThis.fetch = async (url, init) => {
   if (!existsSync(join(dataDir, 'fake.pid')) || !alive(pidOf())) throw new Error('connection refused');
   const [build, , token, instance] = readFileSync(join(dataDir, 'fake.env'), 'utf8').trim().split(' ');
   if (init.headers['x-marion-desktop-session'] !== token) return new Response('Forbidden', { status: 403 });
+  if (String(url).endsWith('/api/desktop/retire')) { retireCalls++; return retireRefusals-- > 0 ? Response.json({ ok: false, busy: 1 }, { status: 409 }) : Response.json({ ok: true }); }
   if (String(url).endsWith('/api/desktop/attach')) { attached.push(JSON.parse(init.body).pid); return Response.json({ ok: true, busy }); }
   return Response.json({ ok: true, app: 'marion-agent', desktopInstance: instance, build, busy, pid: pidOf() });
 };
@@ -80,8 +84,16 @@ try {
   console.log('PASS: an update does not interrupt a server that is busy.');
 
   // ...and swaps it for the new build as soon as it is idle, then asks the window to reload.
+  // A turn slips in right after the idle check: the server refuses to retire, so it is NOT replaced.
   busy = 0;
-  await new Promise(resolve => setTimeout(resolve, 9000));
+  retireRefusals = 1;
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  assert.equal(retireCalls, 1, 'the app asked the server to retire first');
+  assert.equal(reloaded, 0, 'a refused retire keeps the server');
+  assert.equal(pidOf(), serverPid);
+  assert.ok(alive(serverPid), 'work that started after the idle check was not killed');
+  console.log('PASS: if work starts right after the idle check, the server refuses to retire and is left running.');
+  await new Promise(resolve => setTimeout(resolve, 5000));
   assert.equal(reloaded, 1, 'window reloads once');
   assert.notEqual(pidOf(), serverPid, 'a new server took over');
   assert.ok(!alive(serverPid), 'the old server is gone');

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { api } from '../lib/api';
 import { botVars } from '../lib/colors';
@@ -13,6 +13,9 @@ import { Transcript } from './Transcript';
 import { CallStage } from './CallStage';
 import { VoiceCallBar } from './VoiceCallBar';
 import { showChatList } from '../lib/layout';
+import { ChatSearchBar } from './ChatSearchBar';
+import { useChatSearchShortcuts } from '../lib/chatSearchKeys';
+import { useChatSearch } from '../lib/chatSearchStore';
 
 export function ChatView() {
   const bot = useSelectedBot();
@@ -25,6 +28,9 @@ export function ChatView() {
   useEffect(() => () => clearTimeout(toastTimer.current), []);
   const [toast, setToast] = useState<string | null>(null);
   const rows = useMemo(() => sortedRows(transcript), [transcript]);
+  useChatSearchShortcuts();
+  // Another chat (or leaving the chat view) starts with a closed, empty search, so old highlights never carry over.
+  useLayoutEffect(() => () => useChatSearch.getState().reset(), [bot?.id]);
 
   if (!bot) {
     return (
@@ -72,6 +78,7 @@ export function ChatView() {
       </header>
       {sessionsOpen && <BotSessionsPanel key={bot.id} bot={bot} onClose={() => setSessionsOpen(false)} />}
       <CallStage bot={bot} />
+      <ChatSearchBar />
       <Transcript bot={bot} rows={rows} live={live} loaded={!!transcript?.loaded} />
       <VoiceCallBar />
       <Composer key={bot.id} bot={bot} running={!!live?.isRunning} />

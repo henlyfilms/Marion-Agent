@@ -3,6 +3,8 @@ import { setDetailsOpen } from '../lib/layout';
 import { displayName, useSelectedBot } from '../store';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
+import { closeChatSearch, openChatSearch, useChatSearch } from '../lib/chatSearchStore';
+import { searchShortcutLabel } from '../lib/chatSearchKeys';
 
 export function ConversationActions({ detailsOpen }: { detailsOpen: boolean }) {
   const bot = useSelectedBot();
@@ -10,6 +12,7 @@ export function ConversationActions({ detailsOpen }: { detailsOpen: boolean }) {
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number>();
   const group = useRef<HTMLDivElement>(null);
+  const searchOpen = useChatSearch(s => s.open);
   useEffect(() => () => clearTimeout(toastTimer.current), []);
   useOverContent(group);
   if (!bot) return null;
@@ -46,6 +49,10 @@ export function ConversationActions({ detailsOpen }: { detailsOpen: boolean }) {
   return (
     <>
       <div ref={group} className="conversation-actions" role="group" aria-label="Conversation actions">
+        <button type="button" className="icon-btn icon-btn--bordered" aria-label="Search in chat" aria-pressed={searchOpen}
+          title={`Search in chat (${searchShortcutLabel})`} onClick={() => { setShare(false); if (searchOpen) closeChatSearch(); else openChatSearch(); }}>
+          <Icon name="search" size={18} fill={36} />
+        </button>
         <span className="conversation-actions__share">
           <button type="button" className="icon-btn icon-btn--bordered" aria-haspopup="menu" aria-expanded={share}
             aria-label="Share" title="Share" onClick={() => setShare(!share)}><Icon name="share" size={16} fill={36} /></button>

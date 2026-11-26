@@ -1,4 +1,4 @@
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { copyText } from '../lib/clipboard';
 import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
 import { Film, Paperclip } from 'lucide-react';
@@ -15,6 +15,9 @@ import { Markdown } from './Markdown';
 import { usageLabel } from '../lib/modelUsage';
 import { useContextMenu } from './ContextMenu';
 import { quoteText, useMessageActions } from '../lib/messageActions';
+import { isBlankQuery } from '../lib/chatSearch';
+import { useChatSearch } from '../lib/chatSearchStore';
+import { useChatSearchHighlights } from '../lib/chatSearchDom';
 
 /** A screen recording in a message. If the browser can't decode it (e.g. HEVC .mov), it becomes a download chip instead of a blank player. */
 function ChatVideo({ url, name }: { url: string; name: string }) {
@@ -195,7 +198,11 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
   // Only draw the newest part of a long chat (switching bots used to lay out the whole history at once).
   // Older messages are added as you scroll up, keeping your place.
   const [win, setWin] = useState({ bot: bot.id, limit: PAGE });
-  const limit = win.bot === bot.id ? win.limit : PAGE;
+  const baseLimit = win.bot === bot.id ? win.limit : PAGE;
+  // While searching, every message is drawn so each match can be found and scrolled to; the wider window is kept after.
+  const searching = useChatSearch(s => s.open && !isBlankQuery(s.query));
+  const limit = searching ? Math.max(baseLimit, allItems.length) : baseLimit;
+  useEffect(() => { if (searching && baseLimit < allItems.length) setWin({ bot: bot.id, limit: allItems.length }); }, [searching, baseLimit, allItems.length, bot.id]);
   const items = allItems.length > limit ? allItems.slice(allItems.length - limit) : allItems;
   const hidden = allItems.length - items.length;
   const keepPlace = useRef<number | null>(null);
@@ -219,6 +226,9 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [bot.id]);
+
+  // Search highlights, and the glide to the current match (which must not be undone by "stay at the bottom").
+  useChatSearchHighlights(scrollRef, bot.id, () => { stick.current = false; });
 
   const onScroll = () => {
     const el = scrollRef.current!;
