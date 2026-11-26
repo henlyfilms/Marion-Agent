@@ -106,6 +106,13 @@ function botByName(userId: string, name: string) {
   return db.prepare('SELECT * FROM bots WHERE user_id=? AND lower(name)=lower(?) AND deleted_at IS NULL ORDER BY COALESCE(hidden,0), created_at').get(userId, String(name ?? '').trim().replace(/^@/, '')) as any;
 }
 
+/** Starts a command detached (own session, survives the shell and the turn) and prints its pid; log and exit code land in /workspace/.jobs. */
+export const backgroundScript = (job: string, command: string) => {
+  if (!/^job-[a-z0-9-]+$/.test(job)) throw new Error('Invalid job id');
+  const quoted = `'${`trap '' HUP\n${command}`.replace(/'/g, `'\\''`)}'`;
+  return `mkdir -p /workspace/.jobs && cd /workspace || exit 1\n( $(command -v setsid || true) bash -c ${quoted} > /workspace/.jobs/${job}.log 2>&1 < /dev/null; echo $? > /workspace/.jobs/${job}.exit ) > /dev/null 2>&1 & echo $!`;
+};
+
 export const TOOLS: ToolDef[] = [
   {
     name: 'computer_screenshot',
@@ -211,11 +218,17 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'shell',
-    description: 'Run a bash command on your own Linux computer. Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters.',
-    parameters: obj({ command: { type: 'string' }, timeout_seconds: { type: 'integer' } }, ['command']),
+    description: 'Run a bash command on your own Linux computer. Use for files, scripts, CLIs and quick data work. Output is truncated to 20k characters. Anything slow (installs, builds, long scripts, servers) should use background: true: it starts at once, keeps running on your computer after this turn, never gets cut off by a timeout, and you check it later with another shell call (the reply names the log and exit-code files).',
+    parameters: obj({ command: { type: 'string' }, timeout_seconds: { type: 'integer' }, background: { type: 'boolean', description: 'Run detached and return immediately; output goes to a log file you can read later.' } }, ['command']),
     activity: 'running_commands',
     label: 'Running commands',
     impl: async (a, ctx) => {
+      if (a.background) {
+        const job = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const r = await onScreen(ctx, (id) => desktop.bash(id, backgroundScript(job, String(a.command)), 20));
+        const log = `/workspace/.jobs/${job}.log`;
+        return { output: JSON.stringify({ background: true, job, pid: r.output.trim() || undefined, log, exit_file: `/workspace/.jobs/${job}.exit`, note: `Running in the background on your computer. Check with: tail -n 50 ${log}; the exit code appears in ${`/workspace/.jobs/${job}.exit`} when it finishes.` }), summary: `Started ${job} in the background` };
+      }
       const r = await onScreen(ctx, (id) => desktop.bash(id, String(a.command), Math.min(Math.max(a.timeout_seconds ?? 120, 1), 290)));
       const out = (r.output ?? '').slice(-20000);
       return { output: JSON.stringify({ exit_code: r.exit_code, output: out }), summary: `exit ${r.exit_code}` };
@@ -649,14 +662,15 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'spawn_subagent',
-    description: 'Start a subagent: a helper copy of you with its own context and its own computer screen, to work on one goal in parallel (e.g. research one company each). It reports back to you as a message when done. Max 4 at a time.',
+    description: 'Start a subagent: a helper copy of you with its own context and its own computer screen, to work on one goal in parallel (e.g. research one company each). It reports back to you as a message when done. Up to 6 can work at the same time; finished ones do not count, so spawn as many as the work needs and remove each once you have its result.',
     parameters: obj({ goal: { type: 'string', description: 'Self-contained task with everything the subagent needs to know' }, label: { type: 'string', description: 'Short name, e.g. "Acme research"' } }, ['goal']),
     activity: 'messaging_named',
     label: 'Starting a helper',
     impl: async (a, ctx) => {
       if (ctx.depth >= 2) return { output: 'Subagents cannot start more subagents. Do the work yourself.' };
       try {
-        const sub = createSubagent(ctx.botId, String(a.goal), a.label);
+        const { isBotBusy } = await import('./loop.js');
+        const sub = createSubagent(ctx.botId, String(a.goal), a.label, isBotBusy);
         ctx.enqueueBotMessage(ctx.botId, sub.id, String(a.goal), ctx.depth + 1);
         return { output: JSON.stringify({ ok: true, subagent_id: sub.id, name: sub.name, note: 'It will report back to you as a message. Continue with other work or end your turn.' }), summary: `Started ${sub.name}` };
       } catch (e: any) {

@@ -43,6 +43,8 @@ export const setAppBuild = (build: unknown) => {
   const commit = typeof build === 'string' ? build.split('.')[0] : '';
   if (/^[0-9a-f]{7,40}$/.test(commit)) appBuild = commit;
 };
+/** Lets the app see whether its attach call landed, and repeat it if not. */
+export const reportedAppBuild = () => appBuild;
 export const installedBuild = (reported: string | null) => appBuild ?? reported;
 
 export const setOwnerPid = (pid: number) => { if (Number.isInteger(pid) && pid > 1) ownerPid = pid; };

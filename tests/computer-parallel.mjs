@@ -23,6 +23,7 @@ case "$1" in
   run)
     n=""; prev=""; for a in "$@"; do [ "$prev" = "--name" ] && n="$a"; prev="$a"; done
     [ -f "$S/slow.$n" ] && sleep 1.5
+    [ -f "$S/flaky.$n" ] && { rm -f "$S/flaky.$n"; echo "transient: container wedged" >&2; exit 1; }
     [ -f "$S/broken.$n" ] && { echo "boom: cannot create container" >&2; exit 1; }
     touch "$S/$n.up" "$S/$n.made";;
   start) touch "$S/$2.up";;
@@ -79,6 +80,14 @@ try {
   await assert.rejects(screenFor(userId, bad), /boom|could not|failed|Docker/i);
   assert.equal(computerState(userId).status, 'running', 'a failed bot must not mark running computers as broken');
   assert.equal(computerState(userId).screens.find(s => s.botId === fast)?.running, true);
+
+  // 3b. A start that fails once for a transient reason is retried on a clean container instead of leaving the bot without a computer.
+  const flaky = await make('Flaky');
+  await writeFile(join(state, `flaky.${box(flaky)}`), '');
+  await screenFor(userId, flaky);
+  assert.equal(computerState(userId).screens.find(s => s.botId === flaky)?.running, true, 'a one-off start failure is retried once');
+  assert.ok((await log()).some(l => l.startsWith('rm -f') && l.includes(box(flaky))), 'the wedged container was removed before the retry');
+  assert.ok(!(await log()).some(l => /volume rm|rm .*workspace/.test(l)), 'the /workspace volume is never deleted');
 
   // 4. A container that died is noticed and revived on the next use.
   await rm(join(state, `${box(fast)}.up`));

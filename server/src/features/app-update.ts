@@ -63,6 +63,12 @@ function installState(): UpdateStatus['install'] {
   } catch { return { state: 'idle', message: '', at: 0 }; }
 }
 
+/**
+ * Only commits that change the installed app count as an update. Tests, docs and notes are not part of the app, so
+ * committing them (or packaging and then committing a README) must not make a fresh install say "Update available".
+ */
+export const APP_PATHSPEC = ['--', '.', ':(exclude)tests', ':(exclude)docs', ':(exclude)*.md', ':(exclude)data', ':(exclude).claude'];
+
 const git = async (dir: string, ...args: string[]) => (await run('git', ['-C', dir, ...args], { timeout: 8000 })).stdout.trim();
 
 export async function updateStatus(current: string | null): Promise<UpdateStatus> {
@@ -76,8 +82,8 @@ export async function updateStatus(current: string | null): Promise<UpdateStatus
     if (!current || current === 'dev') return { ...base, supported: true, latest, dirty };
     const known = await git(dir, 'cat-file', '-e', `${current}^{commit}`).then(() => true, () => false);
     if (!known) return { ...base, supported: true, latest, dirty, behind: 1, changes: ['A newer build is available.'] };
-    const behind = Number(await git(dir, 'rev-list', '--count', `${current}..HEAD`)) || 0;
-    const changes = behind ? (await git(dir, 'log', '--format=%s', '-6', `${current}..HEAD`)).split('\n').filter(Boolean) : [];
+    const behind = Number(await git(dir, 'rev-list', '--count', `${current}..HEAD`, ...APP_PATHSPEC)) || 0;
+    const changes = behind ? (await git(dir, 'log', '--format=%s', '-6', `${current}..HEAD`, ...APP_PATHSPEC)).split('\n').filter(Boolean) : [];
     return { ...base, supported: true, latest, dirty, behind, changes };
   } catch {
     return { ...base, supported: false, latest: null, reason: 'Couldn’t read the source folder.' };

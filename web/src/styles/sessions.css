@@ -172,11 +172,15 @@
   .msession-details { padding-left: 14px; }
 }
 
-.sidebar__tools { display: flex; flex-direction: column; gap: 2px; }
-@media (max-width: 700px) {
-  .sidebar__tools { flex-direction: row; gap: 4px; }
-  .sidebar__tools .sidebar-island { width: auto; padding-right: 12px; }
-}
+/* Tasks and Sessions share one row (saves vertical space) with no box around them: just two flat buttons. */
+.sidebar__tools { display: flex; flex-direction: row; align-items: center; gap: 2px; background: none; border: 0; box-shadow: none; }
+.sidebar__tools .sidebar-island { flex: 1 1 0; width: auto; min-width: 0; margin-bottom: 0; padding: 0 6px; gap: 2px; justify-content: center; }
+.sidebar__tools .sidebar-island__icon { width: 28px; flex: none; }
+.sidebar__tools .sidebar-island__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sidebar__tools .sidebar-island__count { margin-left: 4px; flex: none; min-width: 18px; height: 18px; padding: 0 5px; line-height: 18px; }
+/* The collapsed rail is too narrow for two buttons side by side: they stack, as icons only. */
+@media (min-width: 701px) { .sidebar.is-collapsed .sidebar__tools { flex-direction: column; gap: 2px; } .sidebar.is-collapsed .sidebar__tools .sidebar-island { flex: none; width: 100%; justify-content: flex-start; padding: 0 10px; gap: 10px; } .sidebar.is-collapsed .sidebar__tools .sidebar-island__icon { width: 36px; } }
+@media (max-width: 700px) { .sidebar__tools { gap: 4px; } }
 
 @media (max-width: 920px) {
   .sessions-view__header { flex-wrap: wrap; }

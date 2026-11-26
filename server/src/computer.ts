@@ -51,7 +51,14 @@ export function screenFor(userId: string, botId: string): Promise<string> {
       });
       if (!awake) {
         setStatus(userId, 'starting');
-        await desktop.start(botId);
+        try { await desktop.start(botId); }
+        catch (error) {
+          // Docker missing/stopped needs the owner; anything else (a wedged or half-made container, a slow machine) gets one
+          // clean retry on a fresh container. The /workspace volume is kept, so files survive.
+          if (/Install Docker|Start Docker|Colima|image .* unavailable|Could not build/i.test(String(error))) throw error;
+          await desktop.reset(botId);
+          await desktop.start(botId);
+        }
       }
       db.prepare('INSERT OR REPLACE INTO screens(bot_id,user_id,screen_id,last_used_at,running) VALUES (?,?,?,?,1)').run(botId, userId, botId, now());
       setStatus(userId, 'running');

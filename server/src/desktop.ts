@@ -121,6 +121,10 @@ export const desktop = {
     }
     throw new Error('Desktop display failed to start');
   },
+  /** Remove a broken container (never its /workspace volume) so the next start builds a clean one. */
+  async reset(id: string) {
+    await docker(['rm', '-f', name(id)]).catch(() => undefined);
+  },
   async stop(id: string) {
     if (await running(id)) await docker(['stop', '--time', '5', name(id)]);
   },

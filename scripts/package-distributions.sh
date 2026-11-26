@@ -24,7 +24,12 @@ cp -Rp "$installer/payload/Resources/app" "$resources/"
 if [[ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
   printf 'Warning: uncommitted changes are being packaged under commit %s. Commit first, or the app will offer this same build as an update.\n' "$(git rev-parse --short=7 HEAD 2>/dev/null || echo dev)" >&2
 fi
-printf '%s.%s\n' "$(git rev-parse --short=7 HEAD 2>/dev/null || echo dev)" "$(date +%s)" > "$resources/BUILD_ID"
+# Read HEAD ONCE: BUILD_ID, the web bundle (via MARION_BUILD_COMMIT) and the warning above must all name the same commit,
+# even when another chat commits while this long build runs. Otherwise the app and its own web bundle disagree and
+# the update check says "Update available" right after installing.
+commit="$(git rev-parse --short=7 HEAD 2>/dev/null || echo dev)"
+export MARION_BUILD_COMMIT="$commit"
+printf '%s.%s\n' "$commit" "$(date +%s)" > "$resources/BUILD_ID"
 
 cp -p .env.example .gitignore package.json package-lock.json README.md SECURITY.md THIRD_PARTY_NOTICES.md \
   'Launch Marion Agent.command' 'Launch Marion Agent.cmd' "$source/"

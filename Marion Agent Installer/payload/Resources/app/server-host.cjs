@@ -26,6 +26,7 @@ function createServerHost(options) {
   const { dataDir, resources, appDir, host, port, origin, accessHeader, buildId, ownerPid, baseEnvironment = () => ({}), environment = () => ({}) } = options;
   const sessionPath = path.join(dataDir, SESSION_FILE);
   const runtimeRoot = path.join(dataDir, RUNTIME_DIR);
+  let attached = false;
   const state = { token: '', instanceId: '', pid: 0, build: '', runtime: '', adopted: false };
   let watcher;
   let replacing = false;
@@ -121,6 +122,7 @@ function createServerHost(options) {
       const body = await health(token, 300);
       if (body && body.desktopInstance === instanceId) {
         Object.assign(state, { token, instanceId, pid: body.pid || child.pid, build: buildId, runtime: runtime.dir, adopted: false });
+        attached = true; // a server started by this build already is this build
         writeSession();
         pruneRuntimes(runtime.dir);
         return true;
@@ -133,11 +135,12 @@ function createServerHost(options) {
 
   async function attach() {
     try {
-      await fetch(`${origin}/api/desktop/attach`, {
+      const response = await fetch(`${origin}/api/desktop/attach`, {
         method: 'POST', headers: { [accessHeader]: state.token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid: ownerPid, build: buildId }), signal: AbortSignal.timeout(1500),
+        body: JSON.stringify({ pid: ownerPid, build: buildId }), signal: AbortSignal.timeout(4000),
       });
-    } catch { /* the server keeps its previous owner; the app still works */ }
+      attached = response.ok;
+    } catch { attached = false; /* retried by watch(): the update check must learn which build is installed */ }
   }
 
   /**
@@ -217,6 +220,8 @@ function createServerHost(options) {
         return;
       }
       misses = 0;
+      // The first attach can be lost while the server is still waking up; until it lands, an old server would report its own old build.
+      if (!attached && body.build !== buildId) await attach();
       if (body.build !== buildId && body.busy === 0 && (await replace('a new version is ready and nothing is running', { onlyIfIdle: true }))) onReplaced();
     }, 4000);
     watcher.unref?.();

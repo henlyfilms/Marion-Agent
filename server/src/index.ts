@@ -16,7 +16,7 @@ import { featuresApi } from './routes-features.js';
 import { startLifeSync } from './features/life-link.js';
 import { startLifeOutbox } from './features/life-outbox.js';
 import { recoverAgentSessions } from './features/agent-sessions.js';
-import { busyCount, isRetiring, retire, setAppBuild, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
+import { busyCount, isRetiring, reportedAppBuild, retire, setAppBuild, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
 import { startAutoUpdate } from './features/app-update.js';
 import { appEnv, env } from './env.js';
 import { api } from './routes.js';
@@ -65,7 +65,7 @@ app.use('/api/*', csrf({ origin: env.trustedOrigins }));
 app.get('/api/health', (c) => c.json({
   ok: true, app: 'marion-agent', model: env.localModelName, provider: 'local', desktopInstance: appEnv('DESKTOP_INSTANCE'),
   // The Mac app reads these to adopt a server that kept running, and to swap in a new build only when nothing is running.
-  build: appEnv('BUILD_ID') ?? null, busy: busyCount(), pid: process.pid,
+  build: appEnv('BUILD_ID') ?? null, appBuild: reportedAppBuild(), busy: busyCount(), pid: process.pid,
 }));
 // The Mac app tells the server it is the owner now (after a relaunch or an update). Only the app's own token gets here.
 app.post('/api/desktop/attach', async (c) => {

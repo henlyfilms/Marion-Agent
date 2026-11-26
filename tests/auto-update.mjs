@@ -114,6 +114,43 @@ assert.equal(stopCalls.length, 1, 'only "Quit and Stop Background Work" (behind 
 assert.match(main, /before-quit', \(\) => \{ quitting = true; \}\)/, 'plain quit/update leaves the server running');
 console.log('PASS: Install update only restarts the app; the background server and its work are not signalled.');
 
+// ---- Commits that don't change the installed app never show "Update available" ----
+{
+  const built2 = git('rev-parse', '--short=7', 'HEAD');
+  mkdirSync(join(source, 'tests'), { recursive: true });
+  mkdirSync(join(source, 'docs'), { recursive: true });
+  writeFileSync(join(source, 'tests', 'x.mjs'), 'x');
+  writeFileSync(join(source, 'docs', 'y.txt'), 'y');
+  writeFileSync(join(source, 'README.md'), 'readme');
+  git('add', '.');
+  git('commit', '-qm', 'tests and docs only');
+  assert.equal((await updateStatus(built2)).behind, 0, 'a tests/docs/README-only commit is not an update for the installed app');
+  writeFileSync(join(source, 'app.txt'), 'z');
+  git('add', '.');
+  git('commit', '-qm', 'app change');
+  const after = await updateStatus(built2);
+  assert.equal(after.behind, 1, 'a real app change after it still counts');
+  assert.deepEqual(after.changes, ['app change']);
+  console.log('PASS: only commits that change the installed app count as an update.');
+}
+
+// ---- Packaging stamps ONE commit everywhere, and the app retries its attach ----
+{
+  const root2 = new URL('../', import.meta.url);
+  const pack = readFileSync(new URL('scripts/package-distributions.sh', root2), 'utf8');
+  assert.equal((pack.match(/git rev-parse --short=7 HEAD 2>\/dev\/null \|\| echo dev\)"\s*$/gm) ?? []).length, 1, 'HEAD is read once for the stamp');
+  assert.match(pack, /export MARION_BUILD_COMMIT="\$commit"/, 'the web build gets the same pinned commit');
+  assert.match(pack, /printf '%s\.%s\\n' "\$commit" "\$\(date \+%s\)" > "\$resources\/BUILD_ID"/, 'BUILD_ID uses the pinned commit');
+  assert.ok(pack.indexOf('MARION_BUILD_COMMIT') < pack.indexOf('npm run build -w web'), 'pinned before the web build starts');
+  const vite = readFileSync(new URL('web/vite.config.ts', root2), 'utf8');
+  assert.match(vite, /process\.env\.MARION_BUILD_COMMIT/, 'vite stamps the pinned commit');
+  assert.match(host, /if \(!attached && body\.build !== buildId\) await attach\(\)/, 'a lost first attach is retried while the server is old');
+  assert.match(host, /attached = response\.ok/, 'attach success is tracked');
+  const { reportedAppBuild } = await import('../server/src/lib/lifecycle.ts');
+  assert.equal(reportedAppBuild(), head, 'the server exposes which app build it was told (health.appBuild)');
+  console.log('PASS: one pinned commit across BUILD_ID and web bundle; attach is retried until it lands.');
+}
+
 // 2. The server only agrees to be replaced when it is idle, in one atomic step, and then takes no new work.
 const { retire, isRetiring, busyCount } = await import('../server/src/lib/lifecycle.ts');
 assert.equal(busyCount(), 0);
