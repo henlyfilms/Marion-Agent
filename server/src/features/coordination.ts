@@ -23,12 +23,19 @@ export function allowBotMessage(fromBotId: string, toBotId: string, depth: numbe
   return null;
 }
 
-/** The team as one bot sees it: who exists, what they do, and whether they're busy. */
-export function teamRoster(userId: string, selfId: string, live: (id: string) => { isRunning: boolean; awaiting: unknown }) {
-  const rows = db.prepare(`SELECT id, name, label, description, role, is_primary, chat_provider, chat_model_label, updated_at
+/** The visible team and its current status, shared by the prompt and list_team. */
+export function liveTeam(userId: string, live: (id: string) => { isRunning: boolean; awaiting: unknown }) {
+  const bots = db.prepare(`SELECT id, name, label, description, role, is_primary, chat_provider, chat_model_label
     FROM bots WHERE user_id=? AND COALESCE(kind,'agent')<>'room' AND COALESCE(hidden,0)=0 ORDER BY is_primary DESC, created_at`).all(userId) as any[];
-  return rows.map(bot => {
+  return bots.map(bot => {
     const state = live(bot.id);
+    return { bot, status: state.awaiting ? 'waiting for the user' : state.isRunning ? 'working' : 'idle' };
+  });
+}
+
+/** The team as one bot sees it, including recent activity for list_team. */
+export function teamRoster(userId: string, selfId: string, live: (id: string) => { isRunning: boolean; awaiting: unknown }) {
+  return liveTeam(userId, live).map(({ bot, status }) => {
     const last = db.prepare("SELECT body, created_at FROM rows WHERE bot_id=? AND kind='message' ORDER BY seq DESC LIMIT 1").get(bot.id) as any;
     let lastMessage = '';
     try { lastMessage = last ? String(JSON.parse(last.body).text ?? '').slice(0, 200) : ''; } catch { /* unreadable row */ }
@@ -38,7 +45,7 @@ export function teamRoster(userId: string, selfId: string, live: (id: string) =>
       job: bot.label || bot.description || '',
       role: bot.role === 'executive' ? 'executive' : bot.is_primary ? 'primary' : 'teammate',
       model: bot.chat_model_label || bot.chat_provider || 'default',
-      status: state.awaiting ? 'waiting for the user' : state.isRunning ? 'working' : 'idle',
+      status,
       lastMessage,
       lastActiveAt: last ? new Date(last.created_at).toISOString() : null,
     };

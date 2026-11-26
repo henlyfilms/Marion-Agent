@@ -22,12 +22,14 @@ import { startUpdate, updateStatus } from './features/app-update.js';
 import { remoteAccessFor } from './lib/auth.js';
 import { clearRecordings, deleteRecording, listRecordings, recordingFrame, saveRecording } from './features/recordings.js';
 import { agentSettings, RECORDING_DAY_OPTIONS, saveAgentSettings } from './features/agent-settings.js';
+import { listScreenshots, screenshotImage } from './features/screenshots.js';
+import { isDesktop } from './lib/desktop-access.js';
 import { addBotFolder, hasFullAccess, storedFolders, pickFolder, removeBotFolder, screenshotFolder, updateBotFolder } from './features/folders.js';
 
 /** Templates, bot profiles, context and compaction, computer sleep, teaching, notifications and the Marion Life link. */
 export const featuresApi = new Hono<AuthVars>();
 // Scope the auth check to these paths only: a '*' here would also run for sign-in routes mounted after it.
-for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/app/update', '/recordings', '/recordings/*', '/agent-settings']) featuresApi.use(path, requireUser);
+for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/app/update', '/recordings', '/recordings/*', '/agent-settings', '/screenshots', '/screenshots/*']) featuresApi.use(path, requireUser);
 
 const ownBot = (userId: string, botId: string) =>
   db.prepare('SELECT * FROM bots WHERE id=? AND user_id=?').get(botId, userId) as any;
@@ -340,6 +342,24 @@ featuresApi.post('/notifications/test', async (c) => {
   const result = await pushToDevices(userId, notification);
   notify(userId, { kind: 'finished', title: 'Marion Agent', body: `Test notification${result.devices ? ` · sent to ${result.delivered} of ${result.devices} device${result.devices === 1 ? '' : 's'}` : ''}` });
   return c.json(result);
+});
+
+// ---------- recent screenshots for the chat box picker (⇧⌘S) ----------
+
+const localOnly = (c: Parameters<typeof remoteAccessFor>[0]) => isDesktop && !remoteAccessFor(c);
+const MAC_ONLY = 'Screenshots are only available in the Marion Agent Mac app, on this Mac.';
+
+featuresApi.get('/screenshots', async (c) => {
+  if (!localOnly(c)) return c.json({ error: MAC_ONLY }, 403);
+  try { return c.json(await listScreenshots(Number(c.req.query('limit') ?? 3), Number(c.req.query('offset') ?? 0))); }
+  catch (error) { return c.json({ error: (error as Error).message || 'Could not read the screenshot folder.' }, 500); }
+});
+
+featuresApi.get('/screenshots/image', async (c) => {
+  if (!localOnly(c)) return c.json({ error: MAC_ONLY }, 403);
+  const image = await screenshotImage(c.req.query('name') ?? '', c.req.query('thumb') === '1').catch(() => null);
+  if (!image) return c.json({ error: 'That screenshot is no longer there.' }, 404);
+  return c.body(image.body, 200, { 'Content-Type': image.type, 'Cache-Control': 'private, max-age=600', 'X-Content-Type-Options': 'nosniff' });
 });
 
 // ---------- folders a bot may use (Bot settings → Access) ----------

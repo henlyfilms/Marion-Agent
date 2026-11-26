@@ -4,7 +4,7 @@ import type { AvatarColor, AvatarShape, Bot } from '@shared/types';
 import { palette } from '../lib/colors';
 import { Icon } from '../components/Icon';
 import { SHAPES, type ShapeDef } from './shapes';
-import { WorkFx } from './WorkFx';
+import { useWorkFx, WorkFxLayer } from './WorkFx';
 
 interface Props {
   shape: AvatarShape | string;
@@ -76,11 +76,14 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, image, wo
   const classic = SHAPES[classicShape];
   const stem = lobes ? berryStem(lobes) : berry ? [50, 14] as const : CLASSIC_STEMS[classicShape];
   const fill = palette(color).fill;
+  // `fx` outlives `working` by a moment so the aura can fade out; it is null for idle avatars.
+  const fx = useWorkFx(!!working, fxSeed ?? String(shape) + color, fill, size);
   return (
-    <span className={`bot-avatar${glow ? ' is-glowing' : ''}${working ? ' is-working' : ''}${className ? ` ${className}` : ''}`}
+    <span className={`bot-avatar${glow ? ' is-glowing' : ''}${fx ? ' is-working' : ''}${className ? ` ${className}` : ''}`}
       style={glow ? { width: size, height: size, '--avatar-glow': fill, '--avatar-glow-r': `${Math.max(2, size * 0.09)}px` } as React.CSSProperties : { width: size, height: size }}
       title={title} role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true}
       data-avatar-shape={image ? 'photo' : berry || Object.hasOwn(SHAPES, shape) ? shape : 'blob'}>
+      {fx && <WorkFxLayer fx={fx} layer="back" />}
       {image ? <img className="bot-avatar__photo" src={image} alt="" draggable={false} width={size} height={size} /> : <svg width={size} height={size} viewBox={berry ? BERRY_VIEW : LEGACY_VIEW} aria-hidden>
         <defs>
           <radialGradient id={gradientId} gradientUnits="userSpaceOnUse" cx="38" cy="30" r="71" fx="33" fy="24">
@@ -96,7 +99,7 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, image, wo
         </g>
         <Eyes eyes={shape === 'funkyberry' ? FUNKY_EYES : berry ? BERRY_EYES : classic.eyes} />
       </svg>}
-      {working && <WorkFx seed={fxSeed ?? String(shape) + color} fill={fill} />}
+      {fx && <WorkFxLayer fx={fx} layer="front" />}
       {star && (
         <span className="bot-avatar__star" style={{ width: size * 0.2667, height: size * 0.2667 }}>
           <Icon name="star" size={size * 0.1333} color="#FFFFFF" />

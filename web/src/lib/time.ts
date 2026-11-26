@@ -6,7 +6,8 @@ export const clock = (ts: number) => new Date(ts).toLocaleTimeString('en-US', { 
 export function dividerLabel(ts: number, now = Date.now()): string {
   const d = new Date(ts);
   const today = new Date(now);
-  const y = new Date(now - 86_400_000);
+  const y = new Date(now);
+  y.setDate(y.getDate() - 1);
   if (sameDay(d, today)) return `Today ${clock(ts)}`;
   if (sameDay(d, y)) return `Yesterday ${clock(ts)}`;
   const opts: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' };

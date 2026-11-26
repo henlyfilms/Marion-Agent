@@ -1,10 +1,16 @@
-import { useId } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from '../store';
 
 /**
- * "Working" animation drawn over a bot avatar: a painted aura (one of six styles) in a colour family built
- * from the bot's own colour. Each bot gets its own style, colours and eye motion from a hash of its id, so
- * bots working side by side never look the same. The eyes/bob live in workfx.css on `.bot-avatar.is-working`.
+ * "Working" animation around a bot avatar: a coloured aura (one of six styles) in a colour family built from the
+ * bot's own colour. Each bot gets its own style, colours and eye motion from its place in the bot list, so bots
+ * working side by side never look the same. The eyes/bob live in workfx.css on `.bot-avatar.is-working`.
+ *
+ * The aura is drawn in two layers with real depth: the BACK layer renders before the avatar (so the avatar hides
+ * it) and the FRONT layer renders after it. Every ring is a tilted, flattened plane; its far half (upper in the
+ * plane's own frame) lives in the back layer and its near half in the front layer, so the orbit visibly slips
+ * behind the bot and wraps back round in front of it. Everything animates `transform`/`opacity` on plain
+ * elements, so the browser runs it on the GPU compositor with no per-frame painting.
  */
 
 export const FX_STYLES = ['halo', 'orbit', 'comet', 'ripple', 'sparkle', 'swirl'] as const;
@@ -12,6 +18,7 @@ export type FxStyle = typeof FX_STYLES[number];
 const FAMILIES = ['rainbow', 'aurora', 'neon', 'candy'] as const;
 type Family = typeof FAMILIES[number];
 const EYES = ['scan', 'peek', 'blink'] as const;
+export type FxLayer = 'back' | 'front';
 
 function hash(s: string) {
   let h = 2166136261;
@@ -62,67 +69,109 @@ export function fxColors(fill: string, family: Family, hueSeed: number): string[
   }
 }
 
+/** One tilted ring. Sizes are percentages of the avatar, so the same rings fit every avatar size. */
+interface Ring {
+  /** Tilt of the ring's plane, degrees. */
+  tilt: number;
+  /** Flattening of the plane: 1 is a flat disc facing us, small values are seen nearly edge-on. */
+  squash: number;
+  /** Centre height and radius, % of the avatar. */
+  cy: number;
+  r: number;
+  /** Seconds per lap and the length of the comet's tail as a fraction of the ring. */
+  period: number;
+  arc: number;
+  /** Negative = starts part-way round, so two comets on one ring chase each other. */
+  delay?: number;
+}
+
+const RINGS: Record<'halo' | 'orbit' | 'comet' | 'swirl', Ring[]> = {
+  halo: [{ tilt: -9, squash: 0.3, cy: 17, r: 44, period: 2.6, arc: 0.66 }, { tilt: -9, squash: 0.3, cy: 17, r: 44, period: 2.6, arc: 0.2, delay: -1.3 }],
+  orbit: [{ tilt: -22, squash: 0.34, cy: 52, r: 62, period: 2.3, arc: 0.5 }, { tilt: -22, squash: 0.34, cy: 52, r: 62, period: 2.3, arc: 0.16, delay: -1.15 }],
+  comet: [{ tilt: 26, squash: 0.52, cy: 52, r: 59, period: 1.7, arc: 0.55 }, { tilt: 26, squash: 0.52, cy: 52, r: 59, period: 1.7, arc: 0.3, delay: -0.85 }],
+  swirl: [{ tilt: 40, squash: 0.36, cy: 52, r: 60, period: 3.1, arc: 0.58 }, { tilt: -40, squash: 0.36, cy: 52, r: 60, period: 3.7, arc: 0.52, delay: -1.5 }],
+};
 const SPARKS: [x: number, y: number, s: number][] = [[-6, 14, 1], [104, 22, 0.8], [96, 88, 0.7], [2, 80, 0.62], [50, -10, 0.9]];
 const STAR = 'M0-9C1 -2 2 -1 9 0C2 1 1 2 0 9C-1 2 -2 1 -9 0C-2 -1 -1 -2 0 -9Z';
 
-export function WorkFx({ seed, fill }: { seed: string; fill: string }) {
-  const id = useId().replace(/:/g, '');
-  const rank = useStore(s => rankOf(s.bots, seed));
-  const fx = fxFor(seed, rank);
-  const colors = fxColors(fill, fx.family, fx.hueSeed);
-  const grad = `wfx-g${id}`, soft = `wfx-b${id}`;
-  const stops = colors.map((col, i) => <stop key={i} offset={i / (colors.length - 1)} stopColor={col} />);
-  const paint = `url(#${grad})`;
+export interface WorkFxState { style: FxStyle; eyes: string; spin: number; colors: string[]; size: number; leaving: boolean }
+
+/**
+ * Drives the aura for one avatar. It stays mounted briefly after work ends (`leaving`) so it can fade out
+ * instead of vanishing. Returns null while idle, and does no store work for avatars that aren't working.
+ */
+export function useWorkFx(working: boolean, seed: string, fill: string, size: number): WorkFxState | null {
+  const rank = useStore(s => working ? rankOf(s.bots, seed) : -1);
+  const [lingering, setLingering] = useState(false);
+  useEffect(() => {
+    if (working) { setLingering(true); return; }
+    const timer = setTimeout(() => setLingering(false), 320);
+    return () => clearTimeout(timer);
+  }, [working]);
+  const last = useRef<{ fx: ReturnType<typeof fxFor>; colors: string[] }>();
+  if (working) { const fx = fxFor(seed, rank); last.current = { fx, colors: fxColors(fill, fx.family, fx.hueSeed) }; }
+  const shown = working || lingering ? last.current : undefined;
+  if (!shown) return null;
+  return { style: shown.fx.style, eyes: shown.fx.eyes, spin: shown.fx.spin, colors: shown.colors, size, leaving: !working };
+}
+
+/** A comet's colour sweep: transparent tail, through the family's colours, to a bright head at the top. */
+function sweep(colors: string[], arc: number) {
+  const start = (1 - arc) * 360;
+  const stops = colors.map((color, i) => `${color} ${(start + (arc * 360 * (i + 1)) / colors.length).toFixed(1)}deg`);
+  return `conic-gradient(from 0deg, transparent ${start.toFixed(1)}deg, ${stops.join(', ')})`;
+}
+
+type Vars = CSSProperties & Record<`--${string}`, string | number>;
+
+function RingPlane({ ring, fx }: { ring: Ring; fx: WorkFxState }) {
+  const style: Vars = {
+    left: '50%', top: `${ring.cy}%`, width: `${ring.r * 2}%`, height: `${ring.r * 2}%`,
+    transform: `translate(-50%, -50%) rotate(${ring.tilt}deg) scale(${fx.spin}, ${ring.squash})`,
+  };
+  const turn: Vars = {
+    backgroundImage: sweep(fx.colors, ring.arc), '--head': fx.colors[fx.colors.length - 1],
+    animationDuration: `${ring.period}s`, animationDelay: `${ring.delay ?? 0}s`,
+  };
   return (
-    <span className={`work-fx work-fx--${fx.style}`} data-spin={fx.spin} data-eyes={fx.eyes} aria-hidden>
-      <svg viewBox="-25 -25 150 150" overflow="visible">
-        <defs>
-          <linearGradient id={grad} x1="0" y1="0" x2="1" y2="0.35">{stops}</linearGradient>
-          <filter id={soft} x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="2.2" /></filter>
-        </defs>
-        {fx.style === 'halo' && (
-          // The Grok-style painted halo: a brushstroke that sweeps round the top of the head, then fades.
-          <g className="wfx-tilt" transform="rotate(-9 50 16)">
-            <ellipse className="wfx-stroke wfx-glow" cx="50" cy="16" rx="44" ry="13" pathLength={100} stroke={paint} strokeWidth="12" filter={`url(#${soft})`} />
-            <ellipse className="wfx-stroke" cx="50" cy="16" rx="44" ry="13" pathLength={100} stroke={paint} strokeWidth="8" />
-            <ellipse className="wfx-stroke wfx-core" cx="50" cy="15" rx="44" ry="12" pathLength={100} stroke="#fff" strokeWidth="1.8" />
-          </g>
-        )}
-        {fx.style === 'orbit' && (
-          <g transform="rotate(-22 50 52)">
-            <ellipse cx="50" cy="52" rx="60" ry="19" fill="none" stroke={paint} strokeWidth="1.2" opacity="0.28" />
-            <ellipse className="wfx-run wfx-glow" cx="50" cy="52" rx="60" ry="19" pathLength={100} stroke={paint} strokeWidth="8" filter={`url(#${soft})`} />
-            <ellipse className="wfx-run" cx="50" cy="52" rx="60" ry="19" pathLength={100} stroke={paint} strokeWidth="4.5" />
-            <ellipse className="wfx-run wfx-run--b" cx="50" cy="52" rx="60" ry="19" pathLength={100} stroke={colors[colors.length - 1]} strokeWidth="3" />
-          </g>
-        )}
-        {fx.style === 'comet' && (
-          <g className="wfx-spin">
-            <circle cx="50" cy="50" r="60" fill="none" stroke={paint} strokeWidth="1" opacity="0.2" />
-            <circle className="wfx-arc wfx-glow" cx="50" cy="50" r="60" pathLength={100} stroke={paint} strokeWidth="8" filter={`url(#${soft})`} />
-            <circle className="wfx-arc" cx="50" cy="50" r="60" pathLength={100} stroke={paint} strokeWidth="4.5" />
-            <circle className="wfx-arc wfx-arc--b" cx="50" cy="50" r="60" pathLength={100} stroke={paint} strokeWidth="3" />
-          </g>
-        )}
-        {fx.style === 'ripple' && colors.slice(0, 3).map((col, i) => (
-          <circle key={i} className="wfx-ripple" style={{ animationDelay: `${i * 0.6}s` }} cx="50" cy="52" r="46" fill="none" stroke={col} strokeWidth="4" />
-        ))}
-        {fx.style === 'sparkle' && SPARKS.map(([x, y, s], i) => (
-          <g key={i} transform={`translate(${x} ${y}) scale(${s * 1.75})`}>
-            <path className="wfx-star wfx-glow" style={{ animationDelay: `${i * 0.34}s` }} d={STAR} fill={colors[i % colors.length]} filter={`url(#${soft})`} />
-            <path className="wfx-star" style={{ animationDelay: `${i * 0.34}s` }} d={STAR} fill={colors[i % colors.length]} />
-          </g>
-        ))}
-        {fx.style === 'swirl' && (
-          // A loose lasso scribbled around the head, drawn on and wiped off like a brush.
-          <g>
-            <path className="wfx-lasso wfx-glow" pathLength={100} stroke={paint} strokeWidth="8" filter={`url(#${soft})`}
-              d="M-4 40C-6 8 30-8 58-4C92 0 108 26 100 46C92 66 60 66 34 58C8 50 4 26 26 14C48 2 84 8 94 30" />
-            <path className="wfx-lasso" pathLength={100} stroke={paint} strokeWidth="5"
-              d="M-4 40C-6 8 30-8 58-4C92 0 108 26 100 46C92 66 60 66 34 58C8 50 4 26 26 14C48 2 84 8 94 30" />
-          </g>
-        )}
-      </svg>
+    <span className="wfx-plane" style={style}>
+      <span className="wfx-turn wfx-turn--glow" style={turn} />
+      <span className="wfx-turn" style={turn} />
+    </span>
+  );
+}
+
+function Ripples({ fx }: { fx: WorkFxState }) {
+  return (
+    <span className="wfx-plane" style={{ left: '50%', top: '88%', width: '96%', height: '96%', transform: 'translate(-50%, -50%) scale(1, 0.3)' }}>
+      {fx.colors.slice(0, 3).map((color, i) => (
+        <span key={i} className="wfx-ripple" style={{ '--head': color, animationDelay: `${i * 0.7}s` } as Vars} />
+      ))}
+    </span>
+  );
+}
+
+function Sparks({ fx, layer }: { fx: WorkFxState; layer: FxLayer }) {
+  return (
+    <>
+      {SPARKS.map(([x, y, scale], i) => (i % 2 === 0) === (layer === 'back') && (
+        <span key={i} className="wfx-star" style={{ left: `${x}%`, top: `${y}%`, '--k': scale, animationDelay: `${i * 0.34}s`, color: fx.colors[i % fx.colors.length] } as Vars}>
+          <svg viewBox="-10 -10 20 20" aria-hidden><path d={STAR} fill="currentColor" /></svg>
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** One depth layer of the aura. `back` is rendered before the avatar's body, `front` after it. */
+export function WorkFxLayer({ fx, layer }: { fx: WorkFxState; layer: FxLayer }) {
+  const rings = fx.style === 'halo' || fx.style === 'orbit' || fx.style === 'comet' || fx.style === 'swirl' ? RINGS[fx.style] : null;
+  const style: Vars = { '--s': `${fx.size}px`, '--head': fx.colors[fx.colors.length - 1] };
+  return (
+    <span className={`work-fx work-fx--${layer} work-fx--${fx.style}${fx.leaving ? ' is-leaving' : ''}`} data-eyes={fx.eyes} data-spin={fx.spin} style={style} aria-hidden>
+      {rings?.map((ring, i) => <RingPlane key={i} ring={ring} fx={fx} />)}
+      {fx.style === 'ripple' && <Ripples fx={fx} />}
+      {fx.style === 'sparkle' && <Sparks fx={fx} layer={layer} />}
     </span>
   );
 }

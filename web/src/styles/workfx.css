@@ -1,20 +1,89 @@
-/* Bot "working" animation (avatar/WorkFx.tsx): the bot comes alive while it works - eyes look around and
-   blink, the body bobs - and a painted aura in its own colours plays over it. Style, colours and eye motion
-   are picked per bot, so no two working bots look alike. Only transform/opacity/stroke-dash animate. */
+/* Bot "working" animation (avatar/WorkFx.tsx): the bot comes alive while it works - eyes look around and blink,
+   the body bobs - and a coloured aura in its own colours moves round it. Style, colours and eye motion are picked
+   per bot, so no two working bots look alike.
+
+   Depth: the aura is two layers. `.work-fx--back` is rendered BEFORE the avatar body (so the body hides it) and
+   `.work-fx--front` AFTER it. Each ring is one tilted, flattened plane (.wfx-plane) drawn in both layers, clipped
+   to its far half in the back layer and its near half in the front one, so a comet visibly slips behind the bot and
+   wraps back round in front of it.
+
+   Smoothness: only `transform` and `opacity` animate, always on a plain element with its own compositor layer
+   (will-change), so every frame is composited on the GPU with no repaint. Rings are conic-gradient + mask
+   discs that simply rotate; there are no animated stroke dashes, filters or masks. */
 
 .bot-avatar.is-working { isolation: isolate; }
-.work-fx { position: absolute; inset: -25%; pointer-events: none; z-index: 1; animation: wfx-in 420ms var(--ease-spring, ease-out) both; }
-.work-fx > svg { width: 100%; height: 100%; overflow: visible; display: block; }
-.work-fx .wfx-stroke, .work-fx .wfx-run, .work-fx .wfx-arc, .work-fx .wfx-lasso { fill: none; stroke-linecap: round; }
-.work-fx .wfx-glow { opacity: 0.55; }
-@keyframes wfx-in { from { opacity: 0; transform: scale(0.82); } to { opacity: 1; transform: none; } }
+.bot-avatar.is-working > :is(svg, .bot-avatar__photo) { z-index: 1; }
+.bot-avatar.is-working > .bot-avatar__star { z-index: 3; }
 
-/* The body: a soft bob with the faintest squash, like a breath. */
-.bot-avatar.is-working > :is(svg, .bot-avatar__photo) { transform-origin: 50% 90%; animation: wfx-bob 1.9s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
+.work-fx {
+  position: absolute; inset: 0; pointer-events: none; contain: layout style;
+  /* Ring thickness follows the avatar size, never thinner than 2px. */
+  --w: max(2px, calc(var(--s, 28px) * 0.075));
+  animation: wfx-in 380ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+.work-fx--back { z-index: 0; }
+.work-fx--front { z-index: 2; }
+.work-fx.is-leaving { animation: wfx-out 300ms cubic-bezier(0.4, 0, 1, 1) both; }
+@keyframes wfx-in { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+@keyframes wfx-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(1.06); } }
+
+/* A ring's plane: positioned, tilted and flattened inline. Far half behind the bot, near half in front. */
+.wfx-plane { position: absolute; display: block; }
+.work-fx--back .wfx-plane { clip-path: inset(-60% -60% 50% -60%); opacity: 0.82; }
+.work-fx--front .wfx-plane { clip-path: inset(50% -60% -60% -60%); }
+
+/* A comet: a rotating disc painted as a conic sweep (inline), cut to a ring by the mask, with a bright head. */
+.wfx-turn {
+  position: absolute; inset: 0; border-radius: 50%; will-change: transform;
+  -webkit-mask-image: radial-gradient(farthest-side, transparent calc(100% - var(--w)), #000 calc(100% - var(--w) + 0.75px), #000 calc(100% - 0.75px), transparent 100%);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - var(--w)), #000 calc(100% - var(--w) + 0.75px), #000 calc(100% - 0.75px), transparent 100%);
+  animation: wfx-turn 2.4s linear infinite;
+}
+.wfx-turn::after {
+  content: ''; position: absolute; left: 50%; top: calc(var(--w) * 0.08); width: var(--w); height: var(--w); margin-left: calc(var(--w) / -2);
+  border-radius: 50%; background: #fff; box-shadow: 0 0 calc(var(--w) * 1.2) calc(var(--w) * 0.25) var(--head);
+}
+/* The soft bloom is a wider ring with feathered edges - no blur filter to re-run each frame. */
+.wfx-turn--glow {
+  opacity: 0.55;
+  -webkit-mask-image: radial-gradient(farthest-side, transparent calc(100% - var(--w) * 3), #000 calc(100% - var(--w) * 1.3), transparent 100%);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - var(--w) * 3), #000 calc(100% - var(--w) * 1.3), transparent 100%);
+}
+.wfx-turn--glow::after { display: none; }
+@keyframes wfx-turn { to { transform: rotate(360deg); } }
+
+/* Ripple: rings swell out of the ground plane under the bot and fade, like sonar. */
+.wfx-ripple {
+  position: absolute; inset: 0; border-radius: 50%; background: var(--head); opacity: 0; will-change: transform, opacity;
+  -webkit-mask-image: radial-gradient(farthest-side, transparent calc(100% - var(--w) * 1.1), #000 calc(100% - var(--w) * 1.1 + 0.75px), #000 calc(100% - 0.75px), transparent 100%);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - var(--w) * 1.1), #000 calc(100% - var(--w) * 1.1 + 0.75px), #000 calc(100% - 0.75px), transparent 100%);
+  animation: wfx-ripple 2.1s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+@keyframes wfx-ripple {
+  0% { transform: scale(0.5); opacity: 0; }
+  18% { opacity: 0.95; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+/* Sparkle: four-point stars twinkle in turn; every other one sits behind the bot. */
+.wfx-star {
+  position: absolute; width: max(6px, calc(var(--s, 28px) * 0.24 * var(--k, 1))); aspect-ratio: 1; opacity: 0; will-change: transform, opacity;
+  transform: translate(-50%, -50%) scale(0); animation: wfx-star 1.8s cubic-bezier(0.3, 0.7, 0.3, 1) infinite;
+}
+.wfx-star > svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 calc(var(--w) * 0.9) currentColor); }
+@keyframes wfx-star {
+  0% { transform: translate(-50%, -50%) scale(0) rotate(-60deg); opacity: 0; }
+  30% { transform: translate(-50%, -50%) scale(1.12) rotate(0deg); opacity: 1; }
+  55% { transform: translate(-50%, -50%) scale(0.92) rotate(18deg); opacity: 1; }
+  82%, 100% { transform: translate(-50%, -50%) scale(0) rotate(45deg); opacity: 0; }
+}
+
+/* The body: a soft bob with the faintest squash, like a breath. Each leg has its own easing, so it never stalls. */
+.bot-avatar.is-working > :is(svg, .bot-avatar__photo) { transform-origin: 50% 90%; will-change: transform; animation: wfx-bob 2.2s infinite; }
 @keyframes wfx-bob {
-  0%, 100% { transform: translateY(0) scale(1, 1); }
-  45% { transform: translateY(-5%) scale(0.985, 1.02); }
-  70% { transform: translateY(-1%) scale(1.02, 0.98); }
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1, 1); animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1); }
+  40% { transform: translate3d(0, -4.5%, 0) scale(0.986, 1.02); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+  72% { transform: translate3d(0, -0.5%, 0) scale(1.012, 0.988); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
 }
 
 /* Eyes: three personalities. */
@@ -46,60 +115,12 @@
   84%, 100% { transform: translate(0, 0); }
 }
 
-/* 1. Halo - the painted swoosh round the top of the head (matched from the Grok recording). */
-.work-fx--halo .wfx-stroke { animation: wfx-halo 2.6s cubic-bezier(0.3, 0.6, 0.2, 1) infinite; }
-.work-fx--halo .wfx-core { opacity: 0.85; animation-delay: 60ms; }
-@keyframes wfx-halo {
-  0% { stroke-dasharray: 0 100; stroke-dashoffset: 30; opacity: 0; }
-  6% { opacity: 1; }
-  34% { stroke-dasharray: 78 100; stroke-dashoffset: 8; }
-  58% { stroke-dasharray: 60 100; stroke-dashoffset: -30; opacity: 1; }
-  80% { stroke-dasharray: 0 100; stroke-dashoffset: -70; opacity: 0; }
-  100% { stroke-dasharray: 0 100; stroke-dashoffset: -70; opacity: 0; }
-}
-.work-fx--halo .wfx-tilt { transform-box: fill-box; transform-origin: center; }
-
-/* 2. Orbit - a comet running round a tilted ring, like a moon. */
-.work-fx--orbit .wfx-run { stroke-dasharray: 26 74; animation: wfx-run 1.5s linear infinite; }
-.work-fx--orbit .wfx-run--b { stroke-dasharray: 4 96; animation-delay: -0.75s; }
-.work-fx[data-spin='-1'] .wfx-run { animation-direction: reverse; }
-@keyframes wfx-run { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
-
-/* 3. Comet ring - two arcs chasing each other round the bot. */
-.work-fx--comet .wfx-spin { transform-box: view-box; transform-origin: 50% 50%; animation: wfx-spin 1.25s linear infinite; }
-.work-fx[data-spin='-1'] .wfx-spin { animation-direction: reverse; }
-.work-fx--comet .wfx-arc { stroke-dasharray: 30 70; animation: wfx-arc 2.5s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
-.work-fx--comet .wfx-arc--b { stroke-dashoffset: -50; stroke-dasharray: 12 88; animation: none; opacity: 0.8; }
-@keyframes wfx-spin { to { transform: rotate(360deg); } }
-@keyframes wfx-arc { 0%, 100% { stroke-dasharray: 14 86; } 50% { stroke-dasharray: 42 58; } }
-
-/* 4. Ripple - rings in three colours swell out and fade, like sonar. */
-.work-fx--ripple .wfx-ripple { transform-box: fill-box; transform-origin: center; opacity: 0; animation: wfx-ripple 1.8s cubic-bezier(0.2, 0.6, 0.3, 1) infinite; }
-@keyframes wfx-ripple { 0% { transform: scale(0.9); opacity: 0; stroke-width: 6; } 15% { opacity: 0.95; } 100% { transform: scale(1.42); opacity: 0; stroke-width: 1; } }
-
-/* 5. Sparkle - little four-point stars twinkle in turn around the head. */
-.work-fx--sparkle .wfx-star { transform-box: fill-box; transform-origin: center; opacity: 0; animation: wfx-star 1.7s cubic-bezier(0.3, 0.7, 0.3, 1) infinite; }
-@keyframes wfx-star {
-  0% { transform: scale(0) rotate(-60deg); opacity: 0; }
-  30% { transform: scale(1.15) rotate(0deg); opacity: 1; }
-  55% { transform: scale(0.9) rotate(20deg); opacity: 1; }
-  80%, 100% { transform: scale(0) rotate(45deg); opacity: 0; }
-}
-
-/* 6. Swirl - a loose brush lasso drawn on, held, then wiped off from the start. */
-.work-fx--swirl .wfx-lasso { animation: wfx-lasso 2.8s cubic-bezier(0.55, 0.1, 0.25, 1) infinite; }
-@keyframes wfx-lasso {
-  0% { stroke-dasharray: 0 100; stroke-dashoffset: 0; opacity: 1; }
-  42% { stroke-dasharray: 100 100; stroke-dashoffset: 0; }
-  58% { stroke-dasharray: 100 100; stroke-dashoffset: 0; opacity: 1; }
-  92% { stroke-dasharray: 100 100; stroke-dashoffset: -100; opacity: 0.9; }
-  100% { stroke-dasharray: 100 100; stroke-dashoffset: -100; opacity: 0; }
-}
-
 /* Rows that show the aura replace the old turning arc and leave room for it to spill over. */
 .bot-row__avatar:has(.work-fx)::after { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .bot-avatar.is-working > svg, .bot-avatar.is-working [data-avatar-eyes] { animation: none !important; }
-  .work-fx * { animation-duration: 6s !important; }
+  .bot-avatar.is-working > svg, .bot-avatar.is-working > .bot-avatar__photo, .bot-avatar.is-working [data-avatar-eyes] { animation: none !important; }
+  .wfx-turn, .wfx-ripple, .wfx-star { animation: none !important; }
+  .wfx-ripple { opacity: 0.5; }
+  .wfx-star { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }

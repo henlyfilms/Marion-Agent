@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { createDictationRouter } from '../web/src/voice/dictationRouting.ts';
+
+let selected = 'first';
+const router = createDictationRouter(() => selected);
+const first = [];
+const second = [];
+const removeFirst = router.register({ botId: 'first', words: first });
+const send = word => router.route(to => to.words.push(word));
+send('before');
+selected = 'second';
+send('while the old Composer is still mounted');
+removeFirst();
+send('between mounts');
+router.register({ botId: 'second', words: second });
+removeFirst();
+send('after the incoming Composer mounts');
+assert.deepEqual(first, ['before']);
+assert.deepEqual(second, ['while the old Composer is still mounted', 'between mounts', 'after the incoming Composer mounts']);
+console.log('PASS: dictation callbacks go to the incoming chat before, during, and after Composer hand-off.');
+
+selected = 'first';
+send('queued before navigating away');
+selected = undefined;
+router.clear();
+send('late result with no chat');
+selected = 'first';
+router.register({ botId: 'first', words: first });
+assert.deepEqual(first, ['before']);
+console.log('PASS: leaving chat clears pending dictation and ignores late callbacks.');

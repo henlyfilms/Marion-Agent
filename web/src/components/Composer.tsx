@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
-import { Activity, BarChart3, Brain, Eraser, FileText, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Brain, Eraser, FileText, Images, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
 import { featuresApi, formatTokens, useFeatureUI } from '../lib/featuresApi';
 import { MicSolid, PhoneSolid, ScreenRecordGlyph } from './SolidGlyphs';
 import type { Bot, ChatModel } from '@shared/types';
@@ -12,14 +12,14 @@ import { Menu } from './Menu';
 import { ModelPicker } from './ModelPicker';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { voiceApi, type VoiceStatus } from '../voice/api';
-import { playDictationSound } from '../voice/sounds';
-import { useDictation } from '../voice/dictation';
-import { appendDictation, supportsLiveDictation, useLiveDictation } from '../voice/liveDictation';
+import { appendDictation } from '../voice/liveDictation';
+import { composerDictation, registerDictationSink, useComposerDictation, type TextRange } from '../voice/composerDictation';
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../voice/audio';
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
 import { useConfigUI } from '../configStore';
 import { setDetailsOpen, useCompactLayout, useDetailsOpen } from '../lib/layout';
-import { appendToDraft, clearDraft, getDraft, setDraft } from '../lib/drafts';
+import { getDraft, setDraft } from '../lib/drafts';
+import { ATTACH_EVENT, SCREENSHOT_SHORTCUT_LABEL } from '../lib/screenshots';
 
 const MAX_H = 200;
 const fileDrafts = new Map<string, File[]>();
@@ -53,7 +53,13 @@ function DraftAttachment({ file, remove, disabled }: { file: File; remove: () =>
 export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const inputId = useId();
   const savingModel = useStore(s => !!s.savingChatModels[bot.id]);
-  const [text, setText] = useState(() => getDraft(bot.id));
+  const [text, renderText] = useState(() => getDraft(bot.id));
+  // Persist immediately: a speech callback and a chat switch may batch into the same React commit.
+  const setText = (next: string | ((current: string) => string)) => {
+    const value = typeof next === 'function' ? next(getDraft(bot.id)) : next;
+    setDraft(bot.id, value);
+    renderText(value);
+  };
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,9 +78,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState(microphoneId);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const mounted = useRef(true);
   const micPress = useRef<{ id: number; at: number; started: boolean }>();
-  const selection = useRef<{ start: number; end: number }>();
   const setModal = useStore((s) => s.setModal);
   const localCall = useLocalCall(s => s.botId === bot.id && isLocalCallActive(s));
   const ringing = useLocalCall(s => s.botId === bot.id && s.status === 'ringing');
@@ -89,13 +93,13 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const compact = useCompactLayout();
   useEffect(() => { voiceApi.status().then(setVoiceStatus).catch(() => {}); }, []);
   const openCall = () => {
+    composerDictation.discard();
     if (voiceStatus?.localSpeech) startLocalCall(bot);
     else if (voiceStatus?.realtime) startCall(bot.id);
     else setError('Set up a speech provider in Settings → Audio.');
   };
 
   // Per-bot drafts.
-  useEffect(() => { setDraft(bot.id, text); }, [bot.id, text]);
   useEffect(() => {
     if (files.length) fileDrafts.set(bot.id, files);
     else fileDrafts.delete(bot.id);
@@ -121,7 +125,6 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       setFiles([]);
       fileDrafts.delete(bot.id);
       setText('');
-      clearDraft(bot.id);
     } catch (e) {
       setError((e as Error).message || 'Message failed to send');
     } finally {
@@ -134,29 +137,42 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const chooseFiles = () => fileInput.current?.click();
   const addFiles = (added: File[]) => {
     const combined = [...files, ...added];
-    if (combined.length > 4) { setError('Add up to four attachments per message.'); return; }
+    if (combined.length > 4) { setError('Add up to four attachments per message.'); return false; }
     const unsupported = added.find(file => !isPhoto(file) && !isTextFile(file));
     if (unsupported) {
       setError(/\.pdf$/i.test(unsupported.name)
         ? 'PDFs can’t be read yet. Copy the text into a .txt file, or take a screenshot of the page.'
         : `${unsupported.name} isn’t supported. Add photos (PNG, JPEG, WebP, GIF) or text files.`);
-      return;
+      return false;
     }
     const invalid = added.find(file => !file.size || file.size > (isPhoto(file) ? MAX_PHOTO : MAX_TEXT));
     if (invalid) {
       setError(!invalid.size ? 'Choose a file with content.' : isPhoto(invalid) ? 'Photos must be 4 MB or smaller.' : 'Text files must be 256 KB or smaller.');
-      return;
+      return false;
     }
     setFiles(combined);
     setError(null);
+    return true;
   };
 
+  // The screenshot picker (⇧⌘S) hands its choice to the chat box that is open.
+  const attach = useRef(addFiles);
+  attach.current = addFiles;
+  useLayoutEffect(() => {
+    const onAttach = (event: Event) => {
+      const detail = (event as CustomEvent<{ botId: string; files: File[] }>).detail;
+      if (detail.botId !== bot.id) return;
+      if (!attach.current(detail.files)) return;
+      event.preventDefault();
+      if (!compact) ref.current?.focus();
+    };
+    window.addEventListener(ATTACH_EVENT, onAttach);
+    return () => window.removeEventListener(ATTACH_EVENT, onAttach);
+  }, [bot.id, compact]);
+
   // Server transcription preserves the selection the user had when recording started.
-  const insertText = (t: string) => {
-    if (!mounted.current) { appendToDraft(bot.id, t, appendDictation); return; }
+  const insertText = (t: string, range?: TextRange) => {
     const el = ref.current;
-    const range = selection.current;
-    selection.current = undefined;
     setText((cur) => {
       const start = range?.start ?? cur.length;
       const end = range?.end ?? cur.length;
@@ -170,55 +186,31 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       return before + pre + t + post + after;
     });
   };
-  const recorded = useDictation(insertText, setMicError, bot.voiceLanguage, 10 * 60_000, voiceStatus?.nativeSpeech);
-  const spoken = useLiveDictation(words => {
-    if (mounted.current) setText(current => appendDictation(current, words));
-    else appendToDraft(bot.id, words, appendDictation);
-  }, setMicError, bot.voiceLanguage);
+  // Dictation runs in a host that outlives this chat box (see voice/composerDictation). This box registers as
+  // the place its words go; switching chats hands that role to the next chat box without stopping the recording.
+  useLayoutEffect(() => registerDictationSink({
+    botId: bot.id,
+    insert: insertText,
+    words: words => setText(current => appendDictation(current, words)),
+    error: setMicError,
+  }), [bot.id]);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
-  const state = spoken.state !== 'idle' ? spoken.state : recorded.state;
-  const liveWords = spoken.interim || recorded.interim;
+  const state = useComposerDictation(s => s.state);
+  const liveWords = useComposerDictation(s => s.interim);
   const shown = liveWords ? appendDictation(text, liveWords) : text;
-  // Leaving this chat mid-dictation: keep the words heard so far in its saved draft. Live words not yet
-  // final are saved now; a recorded dictation finishes transcribing and lands in the draft (insertText).
-  const latest = useRef({ text, live: spoken.interim });
-  latest.current = { text, live: spoken.interim };
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; setDraft(bot.id, appendDictation(latest.current.text, latest.current.live)); }; }, [bot.id]);
-  const discardDictation = () => { spoken.stop(true); recorded.finish(true); };
-  const stopDictation = () => {
-    if (spoken.state === 'recording') playDictationSound(false);
-    spoken.stop(); recorded.finish();
-  };
+  const discardDictation = composerDictation.discard;
+  const stopDictation = composerDictation.stop;
   const startDictation = () => {
     if (inCall || localCall) { setMicError('End the voice call before starting dictation.'); return; }
     setMicError(null);
     setAudioMenu(false);
-    const audioInput = microphoneId();
-    const server = voiceStatus?.localSpeech || voiceStatus?.realtime;
-    const preferServer = voiceStatus?.localSpeech || (server && (audioInput || /Electron\//.test(navigator.userAgent)));
-    if (!preferServer && !/Electron\//.test(navigator.userAgent) && supportsLiveDictation(audioInput)) {
-      playDictationSound(true);
-      void spoken.start(audioInput);
-      return;
-    }
-    if (server) {
-      const input = ref.current;
-      selection.current = input && document.activeElement === input ? { start: input.selectionStart, end: input.selectionEnd } : undefined;
-      void recorded.begin();
-      return;
-    }
-    setMicError(audioInput
-      ? 'This browser needs a speech server for the selected input. Choose System default or set up speech in Settings → Audio.'
-      : 'Set up a speech provider in Settings → Audio.');
+    const input = ref.current;
+    composerDictation.start(bot.id, input && document.activeElement === input ? { start: input.selectionStart, end: input.selectionEnd } : undefined);
   };
   const toggleDictation = () => {
     if (state === 'recording') stopDictation();
     else if (state === 'idle') startDictation();
   };
-  useEffect(() => {
-    if (compact && !mobileChatOpen) { spoken.stop(true); recorded.finish(true); }
-  }, [compact, mobileChatOpen, spoken.stop, recorded.finish]);
-
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && state !== 'idle') { discardDictation(); return; }
@@ -317,6 +309,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     { label: '/call', detail: `Start a voice call with ${displayName(bot)}`, icon: <Phone size={15} />, onSelect: openCall },
     { label: '/dictate', detail: 'Toggle dictation', icon: <Mic size={15} />, onSelect: toggleDictation },
     { label: '/attach', detail: 'Add files or photos', icon: <Paperclip size={15} />, onSelect: chooseFiles },
+    { label: '/screenshots', detail: `Attach a recent screenshot (${SCREENSHOT_SHORTCUT_LABEL})`, icon: <Images size={15} />, aliases: ['/shots'], onSelect: () => setModal('screenshots') },
     ...(room ? [] : [{ label: '/teach', detail: 'Teach by screen recording', icon: <ScreenRecordGlyph size={15} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
     { label: '/details', detail: detailsOpen ? 'Hide the side panel' : 'Show the side panel', icon: <PanelRight size={15} />, onSelect: () => setDetailsOpen(!detailsOpen) },
     { label: '/bot', detail: `${displayName(bot)}’s settings, skills and memories`, icon: <Sliders size={15} />, onSelect: () => useConfigUI.getState().openBotSettings(bot.id) },
@@ -327,7 +320,6 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const runCommand = (command: Command) => {
     discardDictation();
     setText('');
-    clearDraft(bot.id);
     setSlashIndex(0);
     if (['/stats', '/apps', '/team', '/bot', '/settings'].includes(command.label)) plusButton.current?.focus();
     else ref.current?.focus();
@@ -394,6 +386,11 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       <div className="composer__progress" role="status" data-visible={sending}>
         <span className="loading-dot" aria-hidden="true" />Sending…
       </div>
+      {/* Attachments sit above the model/effort/Team/dictation row. */}
+      {files.length > 0 && <ul className="composer-files" aria-label="Draft attachments">
+        {files.map((file, index) => <DraftAttachment key={`${file.name}:${file.lastModified}:${index}`} file={file} disabled={sending}
+          remove={() => setFiles(current => current.filter((_, position) => position !== index))} />)}
+      </ul>}
       <div className="composer__models">
         <ModelPicker bot={bot} inputId={inputId} />
         {bot.kind !== 'room' && (
@@ -410,10 +407,6 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           {lastMicTone.current === 'error' && <button type="button" className="mic-note__close" tabIndex={micText ? 0 : -1} onClick={() => setMicError(null)} aria-label="Dismiss"><Icon name="close" size={9} /></button>}
         </div>
       </div>
-      {files.length > 0 && <ul className="composer-files" aria-label="Draft attachments">
-        {files.map((file, index) => <DraftAttachment key={`${file.name}:${file.lastModified}:${index}`} file={file} disabled={sending}
-          remove={() => setFiles(current => current.filter((_, position) => position !== index))} />)}
-      </ul>}
       {slashOpen && (
         <div className="slash-menu" id={`${inputId}-commands`} role="listbox" aria-label="Commands">
           <div className="slash-menu__header">Commands</div>
@@ -449,6 +442,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
                 onClose={() => setMenu(null)}
                 items={menu === 'commands' ? commands.map(command => ({ ...command, onSelect: () => runCommand(command) })) : [
                   { label: 'Add files or photos', icon: <Paperclip size={16} />, onSelect: chooseFiles },
+                  { label: 'Recent screenshots', hint: SCREENSHOT_SHORTCUT_LABEL, icon: <Images size={16} />, onSelect: () => setModal('screenshots') },
                   ...(bot.kind === 'room' ? [] : [{ label: 'Teach by screen recording', icon: <ScreenRecordGlyph size={16} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
                   { label: 'Slash commands', icon: <SquareSlash size={16} />, onSelect: () => setMenu('commands') },
                 ]}

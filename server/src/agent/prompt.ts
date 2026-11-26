@@ -1,18 +1,30 @@
 import { agentSkills } from './skills.js';
 import { teamPromptSection } from './orchestration.js';
 import { db } from '../db.js';
-import { getBotRow, listRoutines } from '../store.js';
+import { getBotRow, getLive, listRoutines } from '../store.js';
 import { connectedToolkits, withinChatBudget } from '../composio.js';
 import { memoriesForPrompt } from './memory.js';
 import { lifePromptLine } from '../features/life-link.js';
+import { liveTeam } from '../features/coordination.js';
 import { foldersPromptLine } from '../features/folders.js';
+
+/** Both the local-model and subscription prompts take a fresh snapshot before each model call. */
+export function liveTeamPrompt(userId: string, botId: string): string {
+  const team = liveTeam(userId, getLive).filter(({ bot: member }) => member.id !== botId)
+    .map(({ bot: member, status }) => {
+      const job = member.label || member.description;
+      const role = member.role === 'executive' ? ' [executive]' : member.is_primary ? ' [primary Bot]' : '';
+      return `- ${member.name}${job ? ` (${job})` : ''}${role} — ${status}`;
+    }).join('\n');
+  return team
+    ? `- Other Bots on the team (current status; use list_team to refresh):
+${team}`
+    : '- You are the only Bot on the team so far.';
+}
 
 export async function systemPrompt(userId: string, botId: string, voice = false): Promise<string> {
   const bot = getBotRow(botId);
   const user = db.prepare('SELECT * FROM users WHERE id=?').get(userId) as any;
-  const team = (db.prepare("SELECT name, label, is_primary, role FROM bots WHERE user_id=? AND id<>? AND COALESCE(hidden,0)=0 AND COALESCE(kind,'agent')<>'room'").all(userId, botId) as any[])
-    .map((b) => `- ${b.name}${b.label ? ` (${b.label})` : ''}${b.role === 'executive' ? ' [executive]' : b.is_primary ? ' [primary Bot]' : ''}`)
-    .join('\n');
   // Bounded: most relevant to the last few user messages, then most recent, within a character budget.
   const mem = memoriesForPrompt(botId);
   const memories = mem.lines.length ? mem.lines.join('\n') + (mem.omitted ? `\n(${mem.omitted} older memories not shown; use recall to search them.)` : '') : '';
@@ -48,7 +60,7 @@ You coordinate the team. Break requests into pieces, hand each piece to the Bot 
 - Current time: ${new Date().toISOString()}
 - User: ${user?.name ?? ''} <${user?.email ?? ''}>
 ${voice ? '- Use app discovery tools when the user asks to work with a connected app.' : `- Connected apps: ${apps || 'none yet'}`}
-${team ? `- Other Bots on the team:\n${team}` : '- You are the only Bot on the team so far.'}
+${liveTeamPrompt(userId, botId)}
 ${routines ? `\n## Your routines\n${routines}` : ''}
 ${memories ? `\n## What you remember\n${memories}` : ''}
 

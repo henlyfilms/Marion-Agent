@@ -39,7 +39,8 @@ Use the picker above the composer to set a chat's provider, model, and reasoning
 - Open **+ → Start from a template** to create a bot with ready-made instructions, skills, and routines. Template routines start paused. Bot profiles export as `.marionbot.json` for importing elsewhere.
 - Use **Executive** in a bot's settings for bot-to-bot coordination. Use **Team** next to the model picker when one chat should delegate to several models. See [Team mode](docs/ORCHESTRATION.md).
 - Choose **Teach by screen recording** or type `/teach` to turn a demonstration into a skill. Use **Learn from chat** to save lessons, and **Compact now** to summarize older context.
-- Open **Settings → Audio** to choose a microphone or enable interface sounds. Tap the composer mic or use **Command+Shift+D** (Windows key+Shift+D on Windows) to dictate. Configure the shortcut under **Settings → Shortcuts**.
+- Open **Settings → Audio** to choose a microphone or enable interface sounds. Tap the composer mic or use **Command+Shift+D** (Windows key+Shift+D on Windows) to dictate. Configure the shortcut under **Settings → Shortcuts**. Dictation keeps running when you switch to another chat; the words go into the chat you switched to. Leaving chat (for example, opening Tasks or Sessions) stops dictation and keeps the text already in your draft.
+- In the Mac app, press **Command+Shift+S** (Ctrl+Shift+S elsewhere) to open your three most recent screenshots from the Mac's Screenshot folder and attach one to the current chat with a click (or press 1, 2, 3). **Browse all screenshots** shows the full history. The `/screenshots` command and the **+** menu open the same picker.
 - Use **Share** to copy or download a transcript. Sort or reorder chats from the sidebar. Manage reply, approval, and routine alerts under **Settings → Notifications**.
 
 ## iPhone and browser access

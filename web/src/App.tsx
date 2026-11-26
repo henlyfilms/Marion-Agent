@@ -10,6 +10,7 @@ import { useStore } from './store';
 import { ChatView } from './components/ChatView';
 import { ComputerViewer } from './components/ComputerViewer';
 import { FieldDictation } from './components/FieldDictation';
+import { ComposerDictationHost } from './voice/composerDictation';
 import { DetailsPanel } from './components/DetailsPanel';
 import { ConversationActions } from './components/ConversationActions';
 import { Sidebar } from './components/Sidebar';
@@ -20,6 +21,8 @@ import { ConnectAppsModal } from './components/modals/ConnectAppsModal';
 import { CreateBotModal } from './components/modals/CreateBotModal';
 import { CreateGroupModal } from './components/modals/CreateGroupModal';
 import { SearchModal } from './components/modals/SearchModal';
+import { ScreenshotPicker } from './components/modals/ScreenshotPicker';
+import { isScreenshotShortcut } from './lib/screenshots';
 import { ConfigLayer } from './components/config/ConfigLayer';
 import { TasksView } from './components/config/TasksView';
 import { SessionsView } from './components/sessions/SessionsView';
@@ -106,7 +109,7 @@ function Shell() {
     };
   }, []);
 
-  // Global shortcuts: ⌘K search, ⌘B sidebar, ⇧⌘, details, ⌘N new bot.
+  // Global shortcuts: ⌘K search, ⌘B sidebar, ⇧⌘, details, ⇧⌘S recent screenshots (⇧⌘D dictation is in the chat box).
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -118,6 +121,14 @@ function Shell() {
         e.preventDefault();
         if (compact) { useConfigUI.getState().setView('chat'); st.set({ mobileChatOpen: !st.mobileChatOpen, mobileDetailsOpen: false }); }
         else st.set({ sidebarCollapsed: !st.sidebarCollapsed });
+      }
+      else if (isScreenshotShortcut(e)) {
+        if (e.repeat || e.isComposing) return;
+        e.preventDefault();
+        const ui = useConfigUI.getState();
+        const chatVisible = Boolean(st.selectedBotId) && ui.view === 'chat' && !ui.appSettings && !ui.botSettings && (!compact || st.mobileChatOpen);
+        if (st.modal === 'screenshots') st.setModal(null);
+        else if (!st.modal && chatVisible) st.setModal('screenshots');
       }
       else if (e.shiftKey && (key === ',' || key === '<')) { e.preventDefault(); setDetailsOpen(!(compact ? st.mobileDetailsOpen : st.detailsOpen)); }
       else if (key === ',') { e.preventDefault(); useConfigUI.getState().openAppSettings(); }
@@ -145,12 +156,14 @@ function Shell() {
       {modal === 'create' && <CreateBotModal />}
       {modal === 'group' && <CreateGroupModal />}
       {modal === 'search' && <SearchModal />}
+      {modal === 'screenshots' && <ScreenshotPicker />}
       {modal === 'apps' && <ConnectAppsModal />}
       {modal === 'usage' && <UsageDashboard />}
       {modal === 'team' && <TeamModal />}
       {viewerOpen && <ComputerViewer />}
       <ConfigLayer />
       <FieldDictation />
+      <ComposerDictationHost />
       <FeatureLayer />
     </div>
   );

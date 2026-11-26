@@ -135,7 +135,8 @@ export function useLiveDictation(onWords: (words: string) => void, onError: (err
         session.pending = '';
         setInterim('');
         const instantEnd = Date.now() - started < 800;
-        session.restart = setTimeout(begin, instantEnd ? 1200 : 280);
+        // Restart almost at once after a normal end so no speech falls in the gap; back off only when it dies instantly.
+        session.restart = setTimeout(begin, instantEnd ? 900 : 40);
       };
       try {
         if (session.track) recognition.start(session.track);

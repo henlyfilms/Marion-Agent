@@ -10,8 +10,24 @@ function load(): Record<string, string> {
 
 const all = load();
 
-function save() {
+function write() {
   try { localStorage.setItem(KEY, JSON.stringify(all)); } catch { /* Storage full or blocked: memory copy still holds it. */ }
+}
+
+// The in-memory copy is updated at once (chat switches read it), but the synchronous localStorage write is
+// coalesced so a burst of dictated words or keystrokes costs one write, and it is flushed when the page hides.
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+function save() {
+  if (saveTimer !== undefined) return;
+  saveTimer = setTimeout(flushDrafts, 120);
+}
+export function flushDrafts() {
+  if (saveTimer !== undefined) { clearTimeout(saveTimer); saveTimer = undefined; }
+  write();
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushDrafts);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushDrafts(); });
 }
 
 export const getDraft = (botId: string) => all[botId] ?? '';
@@ -24,8 +40,3 @@ export function setDraft(botId: string, text: string) {
 }
 
 export const clearDraft = (botId: string) => setDraft(botId, '');
-
-/** Adds words to a draft (used when a dictation finishes after its chat was closed). */
-export function appendToDraft(botId: string, words: string, join: (current: string, words: string) => string) {
-  if (words.trim()) setDraft(botId, join(getDraft(botId), words));
-}

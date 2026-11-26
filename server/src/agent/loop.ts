@@ -9,7 +9,7 @@ import { hub } from '../lib/hub.js';
 import { appendHistory, appendRow, emitBot, getBotRow, getLive, getRow, loadHistory, setLive, updateRow } from '../store.js';
 import type { ChatModelSelection, MessageBody, ResponseUsage, ToolCallBody } from '../types.js';
 import { composioTools, toolkitInfo } from '../composio.js';
-import { systemPrompt } from './prompt.js';
+import { liveTeamPrompt, systemPrompt } from './prompt.js';
 import { lifePromptLine } from '../features/life-link.js';
 import { foldersPromptLine } from '../features/folders.js';
 import { agentSkills } from './skills.js';
@@ -482,6 +482,7 @@ async function callSubscriptionModel(
     ...memoriesForPrompt(ctx.botId, voice ? 1200 : 2400).lines,
     agentSkills(ctx.botId),
     teamPromptSection(ctx.botId).trim(),
+    liveTeamPrompt(ctx.userId, ctx.botId),
     voice ? VOICE_STYLE : '',
     lifePromptLine(ctx.userId, ctx.botId),
     foldersPromptLine(ctx.botId),

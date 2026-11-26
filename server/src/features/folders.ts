@@ -86,12 +86,19 @@ export async function pickFolder(): Promise<string | null> {
   } catch { return null; }
 }
 
-/** The Mac's screenshot folder (Screenshot app setting, else the Desktop), for a one-tap suggestion. */
-export async function screenshotFolder(): Promise<string> {
+/**
+ * The Mac's screenshot folder (Screenshot app setting, else the Desktop). `dedicated` is true when the owner
+ * pointed the Screenshot app at its own folder, so every picture in it is a screenshot.
+ */
+export async function screenshotLocation(): Promise<{ dir: string; dedicated: boolean }> {
   const saved = await runFile('defaults', ['read', 'com.apple.screencapture', 'location'], { timeout: 3000 })
     .then(r => r.stdout.trim()).catch(() => '');
-  return (saved || join(home, 'Desktop')).replace(/^~(?=$|\/)/, home);
+  const dir = (saved || join(home, 'Desktop')).replace(/^~(?=$|\/)/, home);
+  return { dir, dedicated: Boolean(saved) && resolve(dir) !== join(home, 'Desktop') };
 }
+
+/** The folder path alone, for a one-tap suggestion. */
+export const screenshotFolder = async () => (await screenshotLocation()).dir;
 
 /** Finds a shared folder by its label or path (case-insensitive label match). */
 export function resolveBotFolder(botId: string, name: unknown): BotFolder {

@@ -1,5 +1,5 @@
-// Drafts are never lost: typed text survives switching chats and reloading, and leaving a chat while
-// dictating keeps the dictated words in that chat's box. Fake speech server + Chrome's fake microphone.
+// Drafts are never lost: typed text survives switching chats and reloading, and switching chats while
+// dictating keeps dictation running, with the words landing in the chat you switched to. Fake speech server + Chrome's fake microphone.
 // Usage: npm run build && BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node tests/drafts-keep.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -60,16 +60,36 @@ try {
   assert.equal(await input.inputValue(), 'keep me please', 'typed text survives a reload');
   console.log('PASS: typed text survives switching chats and reloading.');
 
+  // Dictation survives a chat switch: it keeps recording and the words land in the chat you switched to.
   await input.fill('Note:');
-  await page.locator('.composer__mic-anchor button').click();
+  const mic = page.locator('.composer__mic-anchor button');
+  await mic.click();
   await page.waitForFunction(() => /hello/i.test(document.querySelector('.composer__input').value), null, { timeout: 8000 });
   await open('Second');
+  assert.equal(await mic.getAttribute('aria-pressed'), 'true', 'dictation keeps recording after switching chats');
+  await page.waitForFunction(() => /hello/i.test(document.querySelector('.composer__input').value), null, { timeout: 8000 });
   await page.waitForTimeout(2500);
+  await mic.click();
+  await page.waitForFunction(() => document.querySelector('.composer__mic-anchor button').getAttribute('aria-pressed') === 'false' && !document.querySelector('.composer__btn.is-transcribing'), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  const carried = await input.inputValue();
+  assert.equal(carried, 'Hello there marion', `dictated words should land in the chat switched to: "${carried}"`);
   await open(first);
-  const kept = await input.inputValue();
-  assert.match(kept, /^Note: hello/i, `dictated words were lost: "${kept}"`);
-  assert.equal(await page.locator('.composer__mic-anchor button').getAttribute('aria-pressed'), 'false', 'the mic is off after leaving');
-  console.log(`PASS: leaving a chat mid-dictation keeps "${kept}".`);
+  assert.equal(await input.inputValue(), 'Note:', 'the chat dictation started in keeps only what was typed');
+  console.log(`PASS: dictation carried over to the second chat ("${carried}") and the first chat kept "Note:".`);
+
+  for (const view of ['Tasks', 'Sessions']) {
+    await mic.click();
+    await page.waitForFunction(() => /hello/i.test(document.querySelector('.composer__input').value));
+    await page.getByTitle(view, { exact: true }).click();
+    await input.waitFor({ state: 'detached' });
+    await page.getByTitle(view, { exact: true }).click();
+    await input.waitFor();
+    assert.equal(await mic.getAttribute('aria-pressed'), 'false');
+    assert.equal(await input.inputValue(), 'Note:', 'leaving chat cancels unfinished speech without modifying the draft');
+    console.log(`PASS: ${view} stops dictation without changing the chat draft.`);
+  }
+
 } finally {
   await browser?.close();
   child.kill();
