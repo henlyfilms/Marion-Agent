@@ -67,8 +67,8 @@ xcrun lipo -create "$stage/marion-transcribe-arm64" "$stage/marion-transcribe-x8
 
 (
   cd "$stage"
-  /usr/bin/zip -qry 'Marion Agent.zip' 'Marion Agent' -x '*/.DS_Store' 'Marion Agent/tests/out/*'
-  /usr/bin/zip -qry Marion-Agent-Mac-Installer.zip "$installer" -x '*/.DS_Store'
+  /usr/bin/zip -qry 'Marion Agent.zip' 'Marion Agent' -x '*/.DS_Store' '*/.claude' '*/.claude/*' 'Marion Agent/tests/out/*'
+  /usr/bin/zip -qry Marion-Agent-Mac-Installer.zip "$installer" -x '*/.DS_Store' '*/.claude' '*/.claude/*'
   /usr/bin/unzip -tq 'Marion Agent.zip'
   /usr/bin/unzip -tq Marion-Agent-Mac-Installer.zip
 )
