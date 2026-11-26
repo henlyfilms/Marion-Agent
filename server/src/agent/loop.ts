@@ -1,3 +1,4 @@
+import { isUsageLimitError } from './usage-limit.js';
 import { localInput, localModel, localModelLoaded, selectedLocalModel } from './models.js';
 import { chatModelForBot } from './chat-model.js';
 import { attachmentText, photos, type UploadedAttachment } from '../attachments.js';
@@ -6,7 +7,7 @@ import { isDesktop } from '../lib/desktop-access.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { appendHistory, appendRow, emitBot, getBotRow, getLive, getRow, loadHistory, setLive, updateRow } from '../store.js';
+import { appendHistory, appendRow, emitBot, getBotRow, getLive, getRow, loadHistory, markSubscriptionStart, setLive, updateRow } from '../store.js';
 import type { ChatModelSelection, MessageBody, ResponseUsage, ToolCallBody } from '../types.js';
 import { composioTools, toolkitInfo } from '../composio.js';
 import { liveTeamPrompt, systemPrompt } from './prompt.js';
@@ -18,7 +19,7 @@ import { freshStart } from './relay.js';
 import { estimateChars, maybeCompact, memoriesForPrompt, noteUsage } from './memory.js';
 import { notify } from '../features/notify.js';
 import { allowBotMessage } from '../features/coordination.js';
-import { isUsageLimitError, orchestratorFallback, teamPromptSection } from './orchestration.js';
+import { orchestratorFallback, teamPromptSection } from './orchestration.js';
 import { addResponseUsage, tokenCounts, type TokenCounts } from './response-usage.js';
 import { orchestrationForBot } from './orchestration-settings.js';
 import { macBlock, describeMacBlock } from '../lib/macPermissions.js';
@@ -31,7 +32,7 @@ type VoiceTurn = { call: string; seq: number; fast: boolean };
 const VOICE_STYLE = 'On this call, lead with the answer in one or two short, spoken sentences. Use plain language and no formatting. Ask one question only if needed. Use tools for work that requires them and report the outcome briefly.';
 
 export type Trigger =
-  | { type: 'user'; text: string; attachments?: UploadedAttachment[]; generation?: number; local?: LocalSelection; subscription?: SubscriptionSelection; voice?: VoiceTurn; allowSubscriptionTeam?: boolean;
+  | { type: 'user'; text: string; attachments?: UploadedAttachment[]; generation?: number; local?: LocalSelection; subscription?: SubscriptionSelection; voice?: VoiceTurn; allowSubscriptionTeam?: boolean; handoffGoal?: string;
       /** Sent while the bot was busy: it waited in the queue and is answered right after the earlier work. */
       queued?: boolean }
   | { type: 'routine'; routineId: string; name: string; prompt: string }
@@ -216,6 +217,25 @@ export function preemptWith(botId: string, trigger: Extract<Trigger, { type: 'us
 
 export function interrupt(botId: string) {
   abortAll(botId);
+}
+
+/** A CLI session started by the owner, rather than by a model tool call. */
+export async function runExternalSession<T>(botId: string, job: (signal: AbortSignal) => Promise<T>) {
+  const ctrl = new AbortController();
+  const active = sideAborts.get(botId) ?? new Set<AbortController>();
+  active.add(ctrl);
+  sideAborts.set(botId, active);
+  beginRun(botId);
+  setLive(botId, { isRunning: true });
+  try { return await job(ctrl.signal); }
+  finally {
+    active.delete(ctrl);
+    if (!active.size) sideAborts.delete(botId);
+    if (!endRun(botId)) {
+      stopAnnounced.delete(botId);
+      setLive(botId, { isRunning: false, activity: null, startedAt: null, activeModel: undefined });
+    }
+  }
 }
 
 /** Run a job in the bot's serial queue, after any running turn (e.g. a manual compaction). */
@@ -412,7 +432,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
     try { db.prepare('INSERT INTO inflight_turns(id,bot_id,generation,label,started_at) VALUES (?,?,?,?,?)').run(inflightId, botId, bot.generation, runLabels.get(ctrl) ?? '', now()); } catch { /* best effort */ }
   }
   if (side && trigger.type === 'user') userSideRuns.add(ctx);
-  ctx.turn = { id: `${botId}:${bot.generation}:${startSeq}${side ? `:side${++sideCounter}` : ''}`, startedAt: now(), request: '' };
+  ctx.turn = { id: `${botId}:${bot.generation}:${startSeq}${side ? `:side${++sideCounter}` : ''}`, startedAt: now(), request: trigger.type === 'user' ? (trigger.handoffGoal ?? trigger.text) : '', handoff: trigger.type === 'user' && trigger.handoffGoal !== undefined };
   if (!side) {
     // The main turn picks up what the bot answered other bots while it was busy.
     flushSideNotes(botId);
@@ -459,6 +479,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
       if (ctrl.signal.aborted) throw new Error('interrupted');
       const teamOn = bot.kind !== 'room' && orchestrationForBot(botId).enabled;
       const ownTools = builtInTools.filter(tool => (tool.name !== 'ask_subscription' || isDesktop)
+        && (tool.name !== 'github_create_repo' || ctx.allowSubscriptionTeam)
         && (!['team_delegate', 'team_discuss'].includes(tool.name) || teamOn));
       const tools = [...ownTools, ...appTools];
       const selection = subscription ?? { ...local, provider: 'local' as const };
@@ -472,7 +493,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
           : await callModel(ctx, local, tools, ownTools, ctrl.signal, voice, record);
       } catch (error) {
         // Team mode: when the orchestrator runs out of usage (or its CLI fails), a team member takes over.
-        if (ctrl.signal.aborted || !teamOn || takeovers >= 2) throw error;
+        if (ctrl.signal.aborted || (subscription && isUsageLimitError(error)) || !teamOn || takeovers >= 2) throw error;
         const failed: ChatModelSelection = subscription ?? { provider: 'local', model: local.model, effort: local.effort };
         const next = orchestratorFallback(botId, failed, error);
         if (!next) throw error;
@@ -711,7 +732,9 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
       const card = appendRow(botId, 'card', {
         type: 'card', card: 'approval', approvalId, title: `Allow ${getBotRow(botId).name} to ${pol.title.split(': ')[1] ?? pol.title}?`,
         detail: ['ask_grok', 'ask_subscription'].includes(c.name) && typeof args.prompt === 'string'
-          ? `${c.name === 'ask_subscription' ? String(args.provider) + (args.folder ? ` in ${String(args.folder)}` : '') + ': ' : ''}${args.prompt.trim().slice(0, 6000)}` : describeArgs(args), tool: pol.key, toolkit: pol.toolkit, toolkitName: tk?.name, logo: tk?.logo, args, status: 'pending',
+          ? `${c.name === 'ask_subscription' ? String(args.provider) + (args.folder ? ` in ${String(args.folder)}` : '') + ': ' : ''}${args.prompt.trim().slice(0, 6000)}` : c.name === 'github_create_repo'
+            ? `Repository: ${String(args.name ?? '').slice(0, 140)}\nVisibility: ${String(args.visibility ?? '').slice(0, 16)}\nDescription: ${String(args.description ?? '').slice(0, 350)}`
+            : describeArgs(args), tool: pol.key, toolkit: pol.toolkit, toolkitName: tk?.name, logo: tk?.logo, args, status: 'pending',
       });
       db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, c.call_id, pol.key, 'pending', now());
       updateRow(botId, c.rowSeq, { ...body, status: 'awaiting-approval' });
@@ -803,13 +826,24 @@ async function modelHistory(ctx: ToolCtx, voice?: VoiceTurn) {
 async function callSubscriptionModel(
   ctx: ToolCtx, selection: SubscriptionSelection, tools: any[], signal: AbortSignal, voice: VoiceTurn | undefined, record: RecordUsage,
 ) {
-  const windowed = pruneImages(repairHistory(recentHistory(await modelHistory(ctx, voice), SUBSCRIPTION_WINDOW)));
-  // Big or unrelated context: this CLI call starts a fresh session (summary + current request) instead of replaying it all.
-  const fresh = voice ? { history: windowed, reason: null } : freshStart(windowed);
-  const history = fresh.history;
-  if (fresh.reason && history.at(-1)?.role === 'user') {
-    appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Started a fresh ${selection.label || selection.provider} session: ${fresh.reason}. Your chat above is unchanged.` });
+  const generation = getBotRow(ctx.botId).generation;
+  const stored = await modelHistory(ctx, voice);
+  const windowed = recentHistory(stored, SUBSCRIPTION_WINDOW);
+  // Trim only the provider's replay, silently. Tool steps and future turns reuse the same boundary.
+  const fresh = voice ? { history: windowed, checkpoint: undefined } : freshStart(windowed, selection.provider);
+  if (fresh.checkpoint && !signal.aborted) {
+    const { item, carryReply } = fresh.checkpoint;
+    if (ctx.sideHistory) {
+      // Side runs may share a seed, but never write their checkpoint into the main conversation.
+      const index = ctx.sideHistory.indexOf(item);
+      ctx.sideHistory[index] = { ...item, marionSubscriptionStarts: {
+        ...item.marionSubscriptionStarts, [selection.provider]: carryReply,
+      } };
+    } else if (getBotRow(ctx.botId).generation === generation) {
+      markSubscriptionStart(ctx.botId, generation, stored.indexOf(item), selection.provider, carryReply);
+    }
   }
+  const history = pruneImages(repairHistory(fresh.history));
   const images: UploadedAttachment[] = [];
   // The current message (with any attached text files) gets a larger budget than older turns.
   const textContent = (content: any, budget = 20_000) => {
@@ -850,10 +884,12 @@ async function callSubscriptionModel(
   const estimatedInput = Math.ceil(prompt.length / 4 + images.length * 1500);
   let actual = selection;
   let counts: TokenCounts | undefined;
-  const asked = current ? textContent(current.content, 1500) : '';
+  const asked = ctx.turn?.request || (current ? textContent(current.content, 300_000) : '');
   const reply = (await subscriptionReply(selection, prompt, signal, images, {
     fast: voice?.fast,
-    session: ctx.turn ? { id: `turn:${ctx.turn.id}`, kind: 'subscription_bot', userId: ctx.userId, botId: ctx.botId, request: asked || ctx.turn.request, rotated: fresh.reason } : undefined,
+    handoffContinuation: ctx.turn?.handoff,
+    handoffProgress: transcript.map(item => JSON.stringify(item).slice(0, 1200)).slice(-12),
+    session: ctx.turn ? { id: `turn:${ctx.turn.id}`, kind: 'subscription_bot', userId: ctx.userId, botId: ctx.botId, request: asked || ctx.turn.request } : undefined,
     onUsage: value => { counts = value; },
     onModel: value => { actual = value; setLive(ctx.botId, { activeModel: value }); },
   })).trim();
@@ -936,7 +972,7 @@ async function callModel(
   const history = await modelHistory(ctx, voice);
   // The model is only called when no approval is pending, so every orphaned call can be repaired.
   const prompt = await systemPrompt(userId, botId, Boolean(voice));
-  const input = localInput([{ role: 'system', content: voice ? `${prompt}\n\n${VOICE_STYLE}` : prompt }, ...pruneImages(repairHistory(history))]);
+  const input = localInput([{ role: 'system', content: voice ? `${prompt}\n\n${VOICE_STYLE}` : prompt }, ...pruneImages(repairHistory(history)).map(({ marionSubscriptionStarts, ...item }) => item)]);
 
   const body: any = {
     model,
@@ -1037,7 +1073,7 @@ export function resolveApproval(userId: string, approvalId: string, decision: 'a
   const ap = db.prepare('SELECT a.*, b.user_id FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=?').get(approvalId) as any;
   if (!ap || ap.user_id !== userId) throw new Error('not found');
   if (ap.status !== 'pending') return;
-  const status = decision === 'deny' ? 'denied' : decision === 'always' && ap.tool !== 'ask_grok' ? 'always' : 'allowed';
+  const status = decision === 'deny' ? 'denied' : decision === 'always' && !['ask_grok', 'github_create_repo'].includes(ap.tool) ? 'always' : 'allowed';
   db.prepare('UPDATE approvals SET status=?, resolved_at=? WHERE id=?').run(status, now(), approvalId);
   if (status === 'always') db.prepare("INSERT OR REPLACE INTO policies(user_id,tool,mode) VALUES (?,?,'always_allow')").run(userId, ap.tool);
   const card = getRow(ap.bot_id, ap.row_seq);

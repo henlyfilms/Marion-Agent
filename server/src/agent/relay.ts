@@ -139,27 +139,30 @@ const HISTORY_TURNS = 10;
 const textOf = (content: unknown): string => typeof content === 'string' ? content
   : Array.isArray(content) ? content.map((part: any) => part?.text ?? '').filter(Boolean).join(' ') : '';
 
-/**
- * A subscription CLI is sent the chat again on every call. When that replayed context is large, or the
- * newest user message is about something else than the recent messages, send only the summary, the last
- * reply and the current request: the CLI starts a fresh session while the chat itself stays untouched.
- */
-export function freshStart(history: any[]): { history: any[]; reason: string | null } {
-  let start = -1;
-  for (let i = history.length - 1; i >= 0; i--) if (history[i]?.role === 'user' && history[i]?.type !== 'function_call_output') { start = i; break; }
-  if (start <= 0) return { history, reason: null };
-  const prior = history.slice(0, start);
-  const userTurns = prior.filter(item => item?.role === 'user' && !String(textOf(item.content)).startsWith('[Automatic summary'));
+/** A subscription CLI replays a history window on each call, including tool steps. */
+export function freshStart(history: any[], provider: string): { history: any[]; reason: string | null; checkpoint?: { item: any; carryReply: boolean } } {
+  const isSummary = (item: any) => item?.role === 'user' && textOf(item.content).startsWith('[Automatic summary');
+  const isRequest = (item: any) => item?.role === 'user' && item.type !== 'function_call_output' && !isSummary(item);
+  const start = history.findLastIndex(isRequest);
+  if (start < 0) return { history, reason: null };
+
+  // A rotation marks the first request of the new session in model history, not in the visible chat.
+  // Anything before that request is reference material and must not count toward the next rotation.
+  const boundary = history.findLastIndex(item => isRequest(item) && typeof item.marionSubscriptionStarts?.[provider] === 'boolean');
+  const summary = isSummary(history[0]) ? [history[0]] : [];
+  const prior = history.slice(Math.max(boundary, summary.length), start);
+  const userTurns = prior.filter(isRequest);
   const chars = prior.reduce((sum, item) => sum + (item?.type === 'function_call' ? String(item.arguments ?? '').length : textOf(item?.content ?? item?.output).length), 0);
-  const current = textOf(history[start].content);
   const topic = userTurns.slice(-3).flatMap(item => topicWords(textOf(item.content)));
   let reason: string | null = null;
   if (chars > HISTORY_CHARS) reason = 'the conversation had grown large';
   else if (userTurns.length >= HISTORY_TURNS) reason = `the conversation had ${userTurns.length} earlier requests`;
-  else if (userTurns.length && isNewTopic(topic, current)) reason = 'this is a different topic';
-  if (!reason) return { history, reason: null };
-  const summary = prior[0]?.role === 'user' && String(textOf(prior[0].content)).startsWith('[Automatic summary') ? [prior[0]] : [];
-  const lastReply = [...prior].reverse().find(item => item?.role === 'assistant');
+  else if (userTurns.length && isNewTopic(topic, textOf(history[start].content))) reason = 'this is a different topic';
+  if (!reason && boundary < 0) return { history, reason: null };
+
+  const from = reason ? start : boundary;
+  const carryReply = reason ? reason !== 'this is a different topic' : history[from].marionSubscriptionStarts[provider];
+  const lastReply = carryReply ? history.slice(0, from).findLast(item => item?.role === 'assistant') : undefined;
   const reply = lastReply ? [{ role: 'user', content: `[Your previous reply, for reference]\n${cut(textOf(lastReply.content), 800)}` }] : [];
-  return { history: [...summary, ...(reason === 'this is a different topic' ? [] : reply), ...history.slice(start)], reason };
+  return { history: [...summary, ...reply, ...history.slice(from)], reason, ...(reason ? { checkpoint: { item: history[from], carryReply } } : {}) };
 }

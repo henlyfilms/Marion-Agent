@@ -1,3 +1,4 @@
+import { isUsageLimitError } from './usage-limit.js';
 import { addResponseUsage, tokenCounts, type TokenCounts } from './response-usage.js';
 import { tokenOptimizerFor } from './skills.js';
 import { relayMedia } from './relay.js';
@@ -37,10 +38,6 @@ const cooling = new Map<string, number>();
 
 const memberKey = (m: Pick<TeamMember, 'provider' | 'model'>) => `${m.provider}:${m.model}`;
 const isCooling = (m: TeamMember) => (cooling.get(memberKey(m)) ?? 0) > Date.now();
-
-export function isUsageLimitError(error: unknown) {
-  return /usage limit|rate.?limit|quota|exhausted|too many requests|\b429\b|limit reached|out of (credits|usage)|plan usage/i.test(String((error as Error)?.message ?? error));
-}
 
 // ---------- one model call, any provider ----------
 
@@ -175,6 +172,10 @@ async function runMember(members: TeamMember[], first: TeamMember, prompt: (m: T
       const limit = isUsageLimitError(error);
       cooling.set(memberKey(current), Date.now() + (limit ? LIMIT_COOLDOWN : ERROR_COOLDOWN));
       lastError = String((error as Error)?.message ?? error).slice(0, 300);
+      if (limit && current.provider !== 'local' && track) {
+        handoffs.push(`${current.label} hit its usage limit. See the handoff in chat.`);
+        break;
+      }
       member = fallbackFor(members, current, tried);
       handoffs.push(`${current.label} ${limit ? 'hit its usage limit' : `failed (${lastError})`}${member ? `, so ${member.label} took over` : ''}.`);
     }

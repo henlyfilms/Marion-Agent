@@ -1,3 +1,4 @@
+import { HandoffSettings } from '../HandoffControls';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowDownToLine, ArrowUpRight, Bell, ChevronLeft, ChevronRight, Cpu, History, Keyboard, LayoutGrid, Link2, Mic, Monitor, RefreshCw, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { BUILD, updateAvailable, updateBusy, useAppUpdate } from '../../lib/appUpdate';
@@ -147,7 +148,7 @@ export function AppSettings() {
             <div className="settings-page" key={section}>
               <div className="app-settings__page">
                 {section === 'general' && <GeneralSection />}
-                {section === 'models' && <><PageHead title="Models" />{localWorkspace && <SubscriptionSettings />}<LocalModelSettings /></>}
+                {section === 'models' && <><PageHead title="Models" />{localWorkspace && !mobilePaired && <HandoffSettings />}{localWorkspace && <SubscriptionSettings />}<LocalModelSettings /></>}
                 {section === 'audio' && <><PageHead title="Audio" /><AudioSettings /></>}
                 {section === 'shortcuts' && <><PageHead title="Shortcuts" /><ShortcutsSection /></>}
                 {section === 'computer' && <ComputerSection />}

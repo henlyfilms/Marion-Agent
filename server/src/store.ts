@@ -161,6 +161,14 @@ export function loadHistory(botId: string): any[] {
   return (db.prepare('SELECT item FROM llm_items WHERE bot_id=? AND generation=? ORDER BY idx ASC').all(botId, b.generation) as any[]).map((r) => JSON.parse(r.item));
 }
 
+/** Record a provider's replay boundary on the history item so it survives compaction and restart. */
+export function markSubscriptionStart(botId: string, generation: number, index: number, provider: string, carryReply: boolean) {
+  db.prepare(`UPDATE llm_items SET item=json_set(item, ?, json(?))
+    WHERE bot_id=? AND generation=? AND idx=(SELECT idx FROM llm_items
+      WHERE bot_id=? AND generation=? ORDER BY idx LIMIT 1 OFFSET ?)`)
+    .run(`$.marionSubscriptionStarts.${provider}`, JSON.stringify(carryReply), botId, generation, botId, generation, index);
+}
+
 export function appendHistory(botId: string, items: any[]) {
   if (!items.length) return;
   const b = getBotRow(botId);

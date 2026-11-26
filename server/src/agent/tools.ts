@@ -1,3 +1,5 @@
+import { createGitHubRepo } from '../features/github-repos.js';
+import { isDesktop } from '../lib/desktop-access.js';
 import { grok } from './models.js';
 import { subscriptionReply, subscriptionSelection } from './subscriptions.js';
 import { env } from '../env.js';
@@ -48,7 +50,7 @@ export interface ToolCtx {
   side?: boolean;
   sideHistory?: any[];
   /** The chat turn this call belongs to (a subscription-backed bot makes several Claude calls per turn). */
-  turn?: { id: string; startedAt: number; request: string };
+  turn?: { id: string; startedAt: number; request: string; handoff?: boolean };
 }
 
 export interface ToolResult {
@@ -265,6 +267,19 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'github_create_repo',
+    description: 'Create an empty GitHub repository on the Mac after the owner approves. Use the repository-creation form to publish an existing folder.',
+    parameters: obj({ name: { type: 'string', description: 'Repository name or owner/name' },
+      visibility: { type: 'string', enum: ['private', 'public'] }, description: { type: 'string' } }, ['name', 'visibility']),
+    activity: 'thinking',
+    label: 'Creating a GitHub repository',
+    impl: async (args, ctx) => {
+      if (!isDesktop || !ctx.allowSubscriptionTeam) throw new Error('Request repository creation from the Mac app.');
+      const { url } = await createGitHubRepo({ name: args.name, description: args.description, visibility: args.visibility });
+      return { output: `Created GitHub repository: ${url}`, summary: 'Created GitHub repository' };
+    },
+  },
+  {
     name: 'ask_subscription',
     description: 'Send a specific request to Claude Code, Codex, or Gemini when the user asks to use that assistant. Returns its response to this chat.',
     parameters: obj({
@@ -307,7 +322,7 @@ export const TOOLS: ToolDef[] = [
         let used: number | undefined;
         // One relayed session at a time per project folder, so two runs never edit it (or its git state) together.
         const text = await withFolder(folder, ctx.signal, () => card.step(who, 'note', `Waiting for another session in ${folder?.label} to finish first`), () => subscriptionReply(selection, task, ctx.signal ?? new AbortController().signal, media.images, {
-          folder, onStep: card.feed(who), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
+          folder, handoffProgress: plan.carried ? [plan.carried] : [], handoffContinuation: ctx.turn?.handoff, onStep: card.feed(who), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
           session: {
             id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
             request: prompt, title: miniTitle(prompt, args.title), folder: folder && { path: folder.path, label: folder.label },
@@ -818,7 +833,7 @@ export function functionSchemas(userId?: string, botId?: string) {
   const life = userId ? lifeToolsEnabled(userId, botId) : false;
   const folders = botId ? botFolders(botId).length > 0 : false;
   const appControl = userId ? agentSettings(userId).appControl : true;
-  return TOOLS.filter(t => (life || !lifeTools.has(t.name)) && (folders || !t.name.startsWith('folder_')) && (appControl || t.name !== 'marion_app'))
+  return TOOLS.filter(t => (life || !lifeTools.has(t.name)) && (folders || !t.name.startsWith('folder_')) && (appControl || t.name !== 'marion_app') && (isDesktop || t.name !== 'github_create_repo'))
     .map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters }));
 }
 
@@ -844,6 +859,7 @@ export function policyFor(userId: string, toolName: string, args: any, botId?: s
     return { decision: p?.mode === 'always_allow' ? 'allow' : p?.mode === 'blocked' ? 'block' : 'ask', key: 'ask_subscription_folder', title: `Assistant: have ${who} work in “${String(args.folder).slice(0, 80)}”` };
   }
   if (toolName === 'ask_subscription') return { decision: 'ask', key: toolName, title: 'Assistant: send this request to another provider' };
+  if (toolName === 'github_create_repo') return { decision: 'ask', key: toolName, title: 'create a GitHub repository' };
   if (toolName === 'ask_grok') return grok
     ? { decision: 'ask', key: toolName, title: 'send this prompt to Grok' }
     : { decision: 'block', key: toolName, title: 'Grok connector is disabled' };

@@ -1,3 +1,5 @@
+import { useStore } from '../../store';
+import { CloudSessionModal } from '../modals/ProjectActions';
 import type { Bot } from '@shared/types';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../Icon';
@@ -24,16 +26,19 @@ export function BotSessionsButton({ bot, open, onToggle }: { bot: Pick<Bot, 'id'
  * running ones first. Reloads by itself when a run starts, ends or rotates.
  */
 export function BotSessionsPanel({ bot, onClose, closing = false }: { bot: Pick<Bot, 'id' | 'name'>; onClose: () => void; closing?: boolean }) {
+  const local = useStore(s => s.localWorkspace && !s.mobilePaired);
+  const room = useStore(s => s.bots.find(b => b.id === bot.id)?.kind === 'room');
+  const [cloud, setCloud] = useState(false);
   const sessions = useMarionSessions({ botId: bot.id });
   const [tab, setTab] = useState<Tab>('all');
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   useEffect(() => {
-    if (closing) return;
+    if (closing || cloud) return;
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); onCloseRef.current(); } };
     window.addEventListener('keydown', close, true);
     return () => window.removeEventListener('keydown', close, true);
-  }, [closing]);
+  }, [closing, cloud]);
   const counts = useMemo(() => {
     const c = { all: 0, chat: 0, relay: 0 };
     for (const s of sessions ?? []) { c.all++; c[s.type]++; }
@@ -57,6 +62,8 @@ export function BotSessionsPanel({ bot, onClose, closing = false }: { bot: Pick<
           </button>
         ))}
       </div>
+      {local && !room && <div className="utility-cloud-action"><button type="button" className="btn btn--secondary btn--sm" onClick={() => setCloud(true)}>Start Claude Cloud…</button></div>}
+      {cloud && <CloudSessionModal botId={bot.id} onClose={() => setCloud(false)} />}
       <div className="bot-sessions__body">
         {sessions === null ? <div className="session-skeleton" aria-hidden>{[0, 1, 2, 3].map(i => <span key={i} />)}</div>
           : shown.length === 0 ? (

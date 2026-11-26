@@ -40,7 +40,7 @@ export function botFolders(botId: string): BotFolder[] {
   return hasFullAccess(botId) && isDesktop ? [{ path: home, label: FULL_ACCESS_LABEL, write: true }, ...shared] : shared;
 }
 
-async function checkFolder(input: string) {
+export async function checkFolder(input: string) {
   if (!isDesktop) throw new Error('Folder access works in the Mac app.');
   const raw = input.trim().replace(/^~(?=$|\/)/, home);
   if (!raw || !isAbsolute(raw)) throw new Error('Choose a full folder path, like ~/Desktop/Screenshots.');

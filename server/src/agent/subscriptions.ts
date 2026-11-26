@@ -1,3 +1,5 @@
+import { checkUsageLimit, isUsageLimitError } from './usage-limit.js';
+import { getBotRow } from '../store.js';
 import { tokenCounts, type TokenCounts } from './response-usage.js';
 import { execFile, spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
@@ -291,6 +293,8 @@ async function discoverCodexModels(program: string): Promise<CodexModel[]> {
 
 interface ReplyOptions {
   fast?: boolean;
+  handoffProgress?: string[];
+  handoffContinuation?: boolean;
   /** A folder on this Mac the bot shares: the CLI may work inside it (and only there). */
   folder?: { path: string; label: string; write: boolean };
   onUsage?: (counts: TokenCounts) => void;
@@ -349,11 +353,18 @@ export async function subscriptionReply(
     finishAgentSession(track, provider, finish);
     if (provider === 'claude') recordSessionEnd(track, finish);
   };
+  const generation = getBotRow(track.botId)?.generation;
+  const progress = [...(options.handoffProgress ?? [])];
   beginAgentSession(track, provider, startedAt);
   let actual: SubscriptionSelection = selection;
   let tokens: { input?: number; output?: number } | undefined;
   const watched: ReplyOptions = {
     ...options,
+    onStep: (kind, line) => {
+      progress.push(`${kind}: ${line}`);
+      if (progress.length > 40) progress.shift();
+      options.onStep?.(kind, line);
+    },
     onModel: value => { actual = value; options.onModel?.(value); },
     onUsage: counts => { tokens = { input: counts.input, output: counts.output }; options.onUsage?.(counts); },
   };
@@ -364,6 +375,11 @@ export async function subscriptionReply(
     return reply;
   } catch (error) {
     finished({ status: signal.aborted ? 'stopped' : 'failed', error: String((error as Error)?.message ?? error), startedAt, endedAt: Date.now(), model: model(), tokens });
+    if (!signal.aborted && generation !== undefined && isUsageLimitError(error)) {
+      const { offerHandoff, reportHandoffError } = await import('../features/handoffs.js');
+      await offerHandoff({ track, generation, selection: actual, progress, folder: options.folder, error,
+        images, signal, continuation: options.handoffContinuation }).catch(failure => reportHandoffError(track.botId, generation, failure));
+    }
     throw error;
   }
 }
@@ -440,7 +456,8 @@ async function spawnSubscriptionReply(
 
     try {
       if (provider === 'codex') {
-        return await codexReply(lines, write, folder?.path ?? cwd, prompt, selection, codexImages, options);
+        try { return await codexReply(lines, write, folder?.path ?? cwd, prompt, selection, codexImages, options); }
+        catch (error) { checkUsageLimit(error, diagnostic); throw error; }
       }
       if (provider === 'claude' && images.length) {
         child.stdin.end(JSON.stringify({
@@ -457,6 +474,9 @@ async function spawnSubscriptionReply(
         if (provider === 'claude') {
           const message = parseLine<ClaudeResult>(line);
           if (message?.type !== 'result') continue;
+          if (message.is_error || message.subtype !== 'success') checkUsageLimit(message.result, message, diagnostic);
+          // Some CLI versions wrap the subscription refusal in a successful result.
+          if (/^(?:you.ve hit|you have reached|usage limit|rate limit|credit balance)/i.test(message.result ?? '')) checkUsageLimit(message.result);
           if (message.subtype === 'success' && !message.is_error && typeof message.result === 'string' && message.result.trim()) {
             const usage = message.usage;
             const counts = usage && tokenCounts(
@@ -476,9 +496,14 @@ async function spawnSubscriptionReply(
             : `Claude Code did not return a reply (${message.subtype ?? 'no result'}). Check your Claude sign-in and plan usage in Terminal.`);
         }
         const message = parseLine(line);
+        if (message?.event === 'error') checkUsageLimit(message, message.error, message.params, message.result);
         if (message?.event !== 'result') continue;
         const result = message.result;
-        if (result?.status === 'SUCCESS' && typeof result.response === 'string' && result.response.trim()) return result.response;
+        if (result?.status === 'SUCCESS' && typeof result.response === 'string' && result.response.trim()) {
+          if (/^(?:you.ve hit|you have reached|usage limit|rate limit|credit balance)/i.test(result.response)) checkUsageLimit(result.response);
+          return result.response;
+        }
+        checkUsageLimit(result, diagnostic);
         diagnostic += ` ${typeof result?.error === 'string' ? result.error : ''}`;
         break;
       }
@@ -497,6 +522,7 @@ async function spawnSubscriptionReply(
     // The real reason: how the CLI ended and its own last words (stderr).
     const ended = exitSignal ? `was stopped by ${exitSignal}` : exitCode !== null && exitCode !== 0 ? `exited with code ${exitCode}` : 'ended without a reply';
     const said = short(diagnostic, 400);
+    if (isUsageLimitError(diagnostic)) checkUsageLimit(`${labels[provider]} ${ended}: ${diagnostic.trim().slice(0, 450)}`, diagnostic);
     throw new Error(`${labels[provider]} ${ended}${said ? `: ${said}` : '. Check sign-in and usage in its own app.'}`);
   } catch (error) {
     if (signal.aborted) throw signal.reason;
@@ -557,6 +583,7 @@ async function codexReply(
   let actualEffort = selection.effort;
   let counts: TokenCounts | undefined;
   let reply = '';
+  let limit: unknown;
   const startThread = (models: CodexModel[]) => {
     const model = selection.model ? models.find(entry => entry.model === selection.model) : defaultCodexModel(models);
     if (!model?.model) throw new Error(selection.model
@@ -583,6 +610,7 @@ async function codexReply(
       continue;
     }
     if (error) {
+      checkUsageLimit(error);
       if (id === 2) throw new Error('Run codex login and use your ChatGPT account.');
       throw new Error('Codex could not start a ChatGPT session. Check sign-in and usage in Codex.');
     }
@@ -614,6 +642,10 @@ async function codexReply(
         break;
     }
     if (!threadId || params?.threadId !== threadId) continue;
+    if (method === 'error' && isUsageLimitError(params?.error)) {
+      if (params?.willRetry === false) checkUsageLimit(params.error);
+      limit = params?.error;
+    }
     if (options.onStep && method === 'item/started') {
       const item = params.item ?? {};
       if (item.type === 'commandExecution') options.onStep('command', `Ran ${short(Array.isArray(item.command) ? item.command.join(' ') : item.command, 140)}`);
@@ -634,8 +666,11 @@ async function codexReply(
     if (method === 'turn/completed') {
       if (counts) options.onUsage?.(counts);
       if (params.turn?.status === 'completed' && reply.trim()) return reply;
+      if (reply.trim()) options.onStep?.('note', reply.slice(0, 2000));
+      checkUsageLimit(params.turn?.error, limit);
       throw new Error('Codex did not return a reply. Check your ChatGPT plan usage in Codex.');
     }
   }
+  checkUsageLimit(limit);
   throw new Error('Codex closed before returning a reply. Update the Codex CLI and check codex login status.');
 }

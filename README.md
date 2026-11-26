@@ -34,6 +34,12 @@ Use the picker above the composer to set a chat's provider, model, and reasoning
 - **Connected apps** use a Composio project key. In **Settings → Connected apps**, verify and save the key, then choose **Link an app**. For hosted setups, `COMPOSIO_API_KEY` also enables Google sign-in. See [Composio's toolkit catalog](https://docs.composio.dev/toolkits).
 - **xAI** is optional. `XAI_API_KEY` enables the approval-gated Grok tool and hosted speech and realtime voice.
 
+## Project actions on macOS
+
+- **Usage-limit handoff:** When a relayed Claude, Codex, or Gemini run hits its limit, Marion saves a private JSON handoff in the app data’s `handoffs/` directory and offers to continue in chat. Save a preferred fallback under **Settings → Models**. **Auto-handoff** is off by default; enable it there to run the fallback without asking. A fallback that also hits a limit needs a manual switch.
+- **Claude Cloud:** In a bot chat, open **Sessions → Start Claude Cloud…**. Use a recent Claude Code CLI signed in to a Claude account with Cloud and headless connected sessions enabled. Marion tracks the run and links to it in both Sessions views. If Marion disconnects, check Claude for the remote session's current status.
+- **GitHub:** In the workspace account menu, choose **Create GitHub repository…**. Install `gh` and sign in with `gh auth login`. You can create an empty repository or review and publish a local folder’s current branch and history. Bots can request approval to create an empty repository, but publishing a local folder requires the form.
+
 ## Workspace controls
 
 - Open **+ → Start from a template** to create a bot with ready-made instructions, skills, and routines. Template routines start paused. Bot profiles export as `.marionbot.json` for importing elsewhere.

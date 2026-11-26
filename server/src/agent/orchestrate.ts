@@ -1,3 +1,4 @@
+import { isUsageLimitError } from './usage-limit.js';
 import { availableLocalModels } from './models.js';
 import { modelReply } from './orchestration.js';
 import { subscriptionModels, subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
@@ -65,13 +66,13 @@ function jsonFrom(text: string): any {
   try { return JSON.parse(text.slice(start, end + 1)); } catch { return undefined; }
 }
 
-async function callAgent(agent: Agent, prompt: string, signal: AbortSignal, card: WorkCard, folder?: Folder, images: UploadedAttachment[] = [], session?: SessionTrack) {
+async function callAgent(agent: Agent, prompt: string, signal: AbortSignal, card: WorkCard, folder?: Folder, images: UploadedAttachment[] = [], session?: SessionTrack, handoffProgress?: string[], handoffContinuation?: boolean) {
   // No wall-clock limit on a subagent: relayed runs are never timed out; only the owner stopping the run ends one early.
   if (agent.provider === 'local') return modelReply(agent.selection, prompt, signal);
-  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, signal, images, { folder, onStep: card.feed(agent.label), session })).trim();
+  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, signal, images, { folder, onStep: card.feed(agent.label), session, handoffProgress, handoffContinuation })).trim();
 }
 
-export async function orchestrate(ctx: { userId: string; botId: string; signal?: AbortSignal; allowSubscriptionTeam?: boolean }, args: any, folder?: Folder) {
+export async function orchestrate(ctx: { userId: string; botId: string; signal?: AbortSignal; allowSubscriptionTeam?: boolean; turn?: { handoff?: boolean } }, args: any, folder?: Folder) {
   const goal = String(args?.goal ?? '').trim().slice(0, 20_000);
   if (!goal) throw new Error('Describe the work for the team.');
   const models = await catalog(ctx.allowSubscriptionTeam !== false);
@@ -103,8 +104,9 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
     request: goal, title: miniTitle(goal, args?.title), folder: folder && { path: folder.path, label: folder.label },
     role: agent.role, agent: agent.label, groupId: `orchestrate:${ctx.botId}:${runId}`,
   });
-  const call = (agent: Agent, prompt: string, stopSignal: AbortSignal, workCard: WorkCard, where?: Folder, withMedia = false) =>
-    callAgent(agent, [prompt, withMedia ? media.note : '', lean].filter(Boolean).join('\n\n'), stopSignal, workCard, where, withMedia ? media.images : [], trackFor(agent));
+  const call = (agent: Agent, prompt: string, stopSignal: AbortSignal, workCard: WorkCard, where?: Folder, withMedia = false, assignment?: string) =>
+    callAgent(agent, [prompt, withMedia ? media.note : '', lean].filter(Boolean).join('\n\n'), stopSignal, workCard,
+      where, withMedia ? media.images : [], { ...trackFor(agent), handoffTask: assignment }, results.slice(-6), ctx.turn?.handoff);
   const brief = goal.length > 2000 ? `${goal.slice(0, 2000)}…` : goal;
   const card = new WorkCard(ctx.botId, ctx.userId, {
     title: miniTitle(goal, args?.title), detail: goal.split('\n')[0], reporter: bot?.name,
@@ -151,16 +153,22 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
             `The overall goal:\n${goal}`, results.length ? `Earlier phases produced:\n${results.join('\n\n').slice(-RESULT_CHARS)}` : '', extra,
             `Your task (phase "${phase.title}"):\n${task}`,
             'Do the task completely. Finish with a short summary of exactly what you did or produced (full code when you wrote code and there is no folder).',
-          ].filter(Boolean).join('\n\n'), signal, card, folder, true);
+          ].filter(Boolean).join('\n\n'), signal, card, folder, true, task);
           card.step(worker.label, 'note', 'Finished its task');
           return { worker, text };
         } catch (error) {
           if (signal.aborted) throw error;
           card.step(worker.label, 'error', String((error as Error).message ?? error));
-          return { worker, text: `FAILED: ${(error as Error).message ?? error}` };
+          return { worker, text: `FAILED: ${(error as Error).message ?? error}`, limit: isUsageLimitError(error) && worker.provider !== 'local' ? error : undefined };
         }
       }));
       let outputs = await run(phase.tasks);
+      // The handoff owns the limited task; don't send it back to the exhausted worker in review.
+      const requireNoLimit = (batch: typeof outputs) => {
+        const limited = batch.find(output => 'limit' in output && output.limit);
+        if (limited && 'limit' in limited) throw limited.limit;
+      };
+      requireNoLimit(outputs);
       for (let round = 0; round < 2; round++) {
         card.step(lead.label, 'review', `Reviewing ${phase.title}`);
         const review = jsonFrom(await call(lead, [
@@ -178,6 +186,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
         }
         card.step(lead.label, 'review', `Asked for ${fixes.length} fix${fixes.length === 1 ? '' : 'es'}: ${review.note ?? ''}`);
         const fixed = await run(fixes, `The orchestrator reviewed earlier work and asked for this fix. Earlier result:\n${outputs.map(o => `## ${o.worker.label}\n${o.text.slice(0, 2000)}`).join('\n\n')}`);
+        requireNoLimit(fixed);
         outputs = [...outputs, ...fixed];
       }
       results.push(`### ${phase.title}\n${outputs.map(o => `${o.worker.label}: ${o.text.slice(0, RESULT_CHARS / outputs.length)}`).join('\n')}`);

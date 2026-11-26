@@ -1,3 +1,8 @@
+import { basename } from 'node:path';
+import { env } from './env.js';
+import { continueHandoff, validateFallback } from './features/handoffs.js';
+import { startCloudSession } from './features/cloud-sessions.js';
+import { createGitHubRepo } from './features/github-repos.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { db, now } from './db.js';
@@ -29,12 +34,12 @@ import { clearRecordings, deleteRecording, listRecordings, recordingFrame, saveR
 import { agentSettings, RECORDING_DAY_OPTIONS, saveAgentSettings } from './features/agent-settings.js';
 import { listScreenshots, screenshotImage } from './features/screenshots.js';
 import { isDesktop } from './lib/desktop-access.js';
-import { addBotFolder, hasFullAccess, storedFolders, pickFolder, removeBotFolder, screenshotFolder, updateBotFolder } from './features/folders.js';
+import { addBotFolder, checkFolder, hasFullAccess, storedFolders, pickFolder, removeBotFolder, screenshotFolder, updateBotFolder } from './features/folders.js';
 
 /** Templates, bot profiles, context and compaction, computer sleep, teaching, notifications and the Marion Life link. */
 export const featuresApi = new Hono<AuthVars>();
 // Scope the auth check to these paths only: a '*' here would also run for sign-in routes mounted after it.
-for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/stats', '/app/update', '/app/update/*', '/recordings', '/recordings/*', '/agent-settings', '/screenshots', '/screenshots/*']) featuresApi.use(path, requireUser);
+for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/stats', '/app/update', '/app/update/*', '/recordings', '/recordings/*', '/agent-settings', '/github/repos', '/screenshots', '/screenshots/*']) featuresApi.use(path, requireUser);
 
 const ownBot = (userId: string, botId: string) =>
   db.prepare('SELECT * FROM bots WHERE id=? AND user_id=?').get(botId, userId) as any;
@@ -301,9 +306,50 @@ featuresApi.delete('/recordings', async (c) => c.json({ removed: await clearReco
 
 // ---------- how bots work (Settings → General → Bots) ----------
 
+const localAction = (c: Parameters<typeof remoteAccessFor>[0]) =>
+  isDesktop && !remoteAccessFor(c) && env.trustedOrigins.includes(c.req.header('origin') ?? '');
+
 featuresApi.get('/agent-settings', (c) => c.json({ settings: agentSettings(c.get('user').id), recordingDayOptions: RECORDING_DAY_OPTIONS }));
 featuresApi.put('/agent-settings', async (c) => {
-  try { return c.json({ settings: saveAgentSettings(c.get('user').id, await c.req.json()) }); }
+  try {
+    const patch = await c.req.json();
+    if (patch?.autoHandoff !== undefined || patch?.handoffFallback !== undefined) {
+      if (!localAction(c)) return c.json({ error: 'Change handoff settings on the Mac.' }, 403);
+      if (patch.handoffFallback != null) patch.handoffFallback = await validateFallback(patch.handoffFallback);
+    }
+    return c.json({ settings: saveAgentSettings(c.get('user').id, patch) });
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+featuresApi.post('/bots/:id/handoffs/:handoff/continue', async (c) => {
+  if (!localAction(c)) return c.json({ error: 'Continue handoffs on the Mac.' }, 403);
+  try {
+    const { selection, seq } = await c.req.json();
+    await continueHandoff(c.get('user').id, c.req.param('id'), c.req.param('handoff'), selection, seq);
+    return c.json({ ok: true }, 202);
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+featuresApi.post('/bots/:id/cloud-session', async (c) => {
+  if (!localAction(c)) return c.json({ error: 'Start Cloud sessions on the Mac.' }, 403);
+  const userId = c.get('user').id;
+  const bot = ownBot(userId, c.req.param('id'));
+  if (!bot || bot.deleted_at || bot.kind === 'room') return c.json({ error: 'Bot not found.' }, 404);
+  try {
+    const { goal, folder, allowLocalEdits } = await c.req.json();
+    if (typeof goal !== 'string' || !goal.trim() || goal.length > 20_000) throw new Error('Enter a Cloud task of up to 20,000 characters.');
+    if (typeof folder !== 'string') throw new Error('Enter the path of your local project folder.');
+    const path = await checkFolder(folder);
+    const current = ownBot(userId, bot.id);
+    if (!current || current.deleted_at || current.generation !== bot.generation) throw new Error('The conversation changed. Open the Cloud form again.');
+    const id = startCloudSession(userId, bot.id, bot.generation, goal.trim(), { path, label: basename(path), write: allowLocalEdits === true });
+    return c.json({ id }, 202);
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+featuresApi.post('/github/repos', async (c) => {
+  if (!localAction(c)) return c.json({ error: 'Create GitHub repositories on the Mac.' }, 403);
+  try { return c.json(await createGitHubRepo(await c.req.json()), 201); }
   catch (error) { return c.json({ error: (error as Error).message }, 400); }
 });
 

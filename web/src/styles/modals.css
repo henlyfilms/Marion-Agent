@@ -177,3 +177,19 @@ button.swatch-cell { outline: none; }
 .group-pick__opt:hover { background: var(--color-bg-hover); }
 .group-pick__opt.is-active { background: var(--color-bg-active, var(--color-bg-hover)); }
 .group-pick__name { flex: 1; font-size: 13px; line-height: 18px; color: var(--color-ink); }
+
+/* Project actions and usage handoffs fit the drawer and half-width chats. */
+.utility-modal { width: min(440px, calc(100vw - 28px)); }
+.utility-modal form { min-width: 0; min-height: 0; overflow: auto; }
+.utility-modal .modal__header { padding-inline-end: 48px; }
+.utility-body, .utility-fields { display: grid; gap: 10px; min-width: 0; }
+.utility-body { padding: 14px 20px 20px; overflow-wrap: anywhere; }
+.utility-body label:not(.utility-check), .utility-fields label { display: grid; gap: 5px; min-width: 0; }
+.utility-body .text-input, .utility-fields .text-input { width: 100%; min-width: 0; }
+.utility-body textarea { resize: vertical; }
+.utility-check { display: flex; align-items: flex-start; gap: 8px; }
+.utility-check input { flex: none; }
+.utility-settings, .utility-handoff { display: grid; gap: 10px; padding: 12px; min-width: 0; overflow-wrap: anywhere; }
+.utility-handoff { margin-block: 8px; width: min(100%, 400px); }
+.utility-handoff p, .utility-body p { margin: 0; }
+.utility-cloud-action { padding: 8px 12px; }

@@ -208,7 +208,7 @@ export function Sidebar() {
     { label: 'Statistics', onSelect: () => setModal('stats') },
     { label: 'Connect apps', onSelect: () => setModal('apps') },
     { label: 'Sessions', onSelect: () => useConfigUI.getState().setView('sessions') },
-    ...(isLocalMac ? [{
+    ...(isLocalMac ? [{ label: 'Create GitHub repository…', onSelect: () => setModal('github-repo') }, {
       label: updateBusy(update) ? 'Updating…' : updateAvailable(update) ? 'Install update…' : 'Check for updates…',
       separator: true, disabled: updateBusy(update), onSelect: checkUpdates,
     }] : []),

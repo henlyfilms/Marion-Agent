@@ -586,6 +586,9 @@ api.post('/bots/:id/fresh', (c) => {
 
 api.post('/approvals/:id', async (c) => {
   const { decision } = await c.req.json<{ decision: 'allow' | 'always' | 'deny' }>();
+  if (decision !== 'deny' && remoteAccessFor(c) &&
+    db.prepare("SELECT 1 FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND b.user_id=? AND a.tool='github_create_repo'")
+      .get(c.req.param('id'), c.get('user').id)) return c.json({ error: 'Approve GitHub repository creation on the Mac.' }, 403);
   try { resolveApproval(c.get('user').id, c.req.param('id'), decision); } catch { return c.json({ error: 'not found' }, 404); }
   return c.json({ ok: true });
 });

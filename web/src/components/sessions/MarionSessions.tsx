@@ -16,7 +16,7 @@ import { ProviderLogo } from '../ProviderLogo';
 
 export const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' } as const;
 const KIND_NAMES: Record<string, string> = {
-  chat: 'Chat', ask_subscription: 'Asked directly', subscription_bot: 'Chat model', orchestration: 'Orchestrated', team: 'Team',
+  chat: 'Chat', ask_subscription: 'Asked directly', subscription_bot: 'Chat model', orchestration: 'Orchestrated', team: 'Team', cloud: 'Cloud', handoff: 'Handoff',
 };
 const STATUS_NAMES: Record<string, string> = {
   running: 'Running', completed: 'Done', failed: 'Failed', stopped: 'Stopped', active: 'Current', archived: 'Earlier',
@@ -113,6 +113,8 @@ function Details({ s, onOpenBot }: { s: MarionSession; onOpenBot?: (botId: strin
         {relay && s.provider && <Detail label="Agent">{PROVIDER_NAMES[s.provider]}{s.agent && s.agent !== PROVIDER_NAMES[s.provider] ? ` · ${s.agent}` : ''}</Detail>}
         {relay && <Detail label="Started by">{KIND_NAMES[s.kind] ?? s.kind}{s.role ? ` · ${s.role}` : ''}</Detail>}
         {relay && (s.modelLabel || s.model) && <Detail label="Model">{s.modelLabel || s.model}{s.effort ? ` · ${s.effort}` : ''}</Detail>}
+        {s.kind === 'cloud' && <Detail label="Runs on">Claude Cloud</Detail>}
+        {s.cloudUrl && <Detail label="Cloud session"><a href={s.cloudUrl} target="_blank" rel="noreferrer">Open in Claude ↗</a></Detail>}
         {s.folder && <Detail label="Folder"><span title={s.folder.path}>{s.folder.name}</span></Detail>}
         <Detail label="Started">{dividerLabel(s.startedAt)}</Detail>
         {s.status !== 'running' && s.endedAt && <Detail label="Ended">{dividerLabel(s.endedAt)}</Detail>}

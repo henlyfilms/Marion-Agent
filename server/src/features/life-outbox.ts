@@ -14,7 +14,7 @@ import { LifeToolMissing, hasLifeKey, lifeKey, lifeLinkSettings, lifeTool } from
  * docs/MARION-LIFE-CONTRACT.md.
  */
 
-export type SessionKind = 'ask_subscription' | 'subscription_bot' | 'orchestration' | 'team';
+export type SessionKind = import('../types.js').RelayKind;
 
 /** What a caller knows about a Claude run it is about to start. */
 export interface SessionTrack {
@@ -29,6 +29,8 @@ export interface SessionTrack {
   folder?: { path: string; label: string };
   /** Orchestration role or team member this run played. */
   role?: string;
+  /** Narrower worker assignment, when the owner goal belongs to the entire team. */
+  handoffTask?: string;
   agent?: string;
   groupId?: string;
   /** Why this run started a fresh provider session instead of continuing the last one (shown in Marion Agent's Sessions). */

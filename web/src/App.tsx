@@ -1,3 +1,4 @@
+import { GitHubRepoModal } from './components/modals/ProjectActions';
 import { useEffect, useRef, useState } from 'react';
 import { BotProfile, TemplateGallery } from './components/features/BotProfile';
 import { TeachRecorder } from './components/features/TeachRecorder';
@@ -164,6 +165,7 @@ function Shell() {
       {forwarding && <ForwardPicker />}
       {modal === 'apps' && <ConnectAppsModal />}
       {modal === 'usage' && <UsageDashboard />}
+      {modal === 'github-repo' && <GitHubRepoModal />}
       {modal === 'stats' && <StatsDashboard />}
       {modal === 'team' && <TeamModal />}
       {viewerOpen && <ComputerViewer />}

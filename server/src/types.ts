@@ -225,7 +225,8 @@ export type CardBody =
       approvalId: string;
       status: 'pending' | 'sent' | 'discarded';
     }
-  | WorkCardBody;
+  | WorkCardBody
+  | { type: 'card'; card: 'handoff'; id: string; provider: RelayProvider; goal: string; status: 'pending' | 'started'; fallback: ChatModelSelection | null };
 
 /** Who is doing the work in a work card: a model reached through a CLI or a local server. */
 export interface WorkAgent { id: string; label: string; provider: ChatProvider; model: string; role: 'orchestrator' | 'worker' }
@@ -327,7 +328,7 @@ export interface Toolkit {
 // ---------- sessions (bot chats and relayed agents) ----------
 
 export type RelayProvider = 'claude' | 'codex' | 'gemini';
-export type RelayKind = 'ask_subscription' | 'subscription_bot' | 'orchestration' | 'team';
+export type RelayKind = 'ask_subscription' | 'subscription_bot' | 'orchestration' | 'team' | 'cloud' | 'handoff';
 export type RelayStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 /**
@@ -338,6 +339,7 @@ export interface MarionSession {
   id: string;
   type: 'chat' | 'relay';
   kind: 'chat' | RelayKind;
+  cloudUrl?: string | null;
   provider: RelayProvider | null;
   /** Chats: 'active' (the conversation on screen) or 'archived' (an earlier one). Relays: running, completed, failed, stopped. */
   status: 'active' | 'archived' | RelayStatus;

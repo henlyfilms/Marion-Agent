@@ -19,7 +19,7 @@ const { ffmpegPath, forModel, lookableMedia, sampleTimes } = await import('../se
 const { miniTitle } = await import('../server/dist/agent/work-feed.js');
 const R = await import('../server/dist/agent/relay.js');
 const { createBotRecord } = await import('../server/dist/features/bots.js');
-const { appendRow } = await import('../server/dist/store.js');
+const { appendHistory, appendRow, loadHistory, markSubscriptionStart } = await import('../server/dist/store.js');
 const { toolMap } = await import('../server/dist/agent/tools.js');
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -111,19 +111,52 @@ try {
   // subscription-backed bots: replayed context is trimmed when big or unrelated
   const turn = (role, text) => role === 'user' ? { role, content: text } : { type: 'message', role, content: [{ type: 'output_text', text }] };
   const small = [turn('user', 'Fix the login redirect bug in the auth middleware'), turn('assistant', 'Fixed it.'), turn('user', 'Also cover the logout middleware redirect')];
-  assert.equal(R.freshStart(small).reason, null);
-  assert.equal(R.freshStart(small).history, small);
+  assert.equal(R.freshStart(small, 'gemini').reason, null);
+  assert.equal(R.freshStart(small, 'gemini').history, small);
   const unrelated = [...small.slice(0, 2), turn('user', 'Write a haiku about quiet mountain mornings and snow')];
-  const rotated = R.freshStart(unrelated);
+  const rotated = R.freshStart(unrelated, 'gemini');
   assert.equal(rotated.reason, 'this is a different topic');
   assert.deepEqual(rotated.history, [unrelated[2]]);
   const huge = [turn('user', 'Fix the login redirect bug'), turn('assistant', 'x'.repeat(60_000)), turn('user', 'Now handle the logout redirect as well')];
-  const trimmed = R.freshStart(huge);
+  const trimmed = R.freshStart(huge, 'gemini');
   assert.equal(trimmed.reason, 'the conversation had grown large');
   assert.equal(trimmed.history.length, 2, 'previous reply (short) + current request');
   assert.ok(trimmed.history[0].content.length < 1000 && trimmed.history.at(-1) === huge[2]);
   const withTools = [...unrelated, { type: 'function_call', call_id: 'c1', name: 'x', arguments: '{}' }, { type: 'function_call_output', call_id: 'c1', output: 'ok' }];
-  assert.deepEqual(R.freshStart(withTools).history, withTools.slice(2), 'later steps of the same turn keep the same cut');
+  assert.deepEqual(R.freshStart(withTools, 'gemini').history, withTools.slice(2), 'later steps of the same turn keep the same cut');
+
+  // Persist the replay checkpoint, then reload the full stored history for every CLI call.
+  const summary = turn('user', '[Automatic summary] ' + 'x'.repeat(49_000));
+  const toolSteps = withTools.slice(3);
+  const reply = turn('assistant', 'Fixed the logout redirect.');
+  appendHistory(botId, [summary, ...huge]);
+  const stored = loadHistory(botId);
+  const firstReplay = R.freshStart(stored, 'gemini');
+  markSubscriptionStart(botId, generation, stored.indexOf(firstReplay.checkpoint.item), 'gemini', firstReplay.checkpoint.carryReply);
+  appendHistory(botId, toolSteps);
+  const duringTools = R.freshStart(loadHistory(botId), 'gemini');
+  assert.equal(duringTools.reason, null, 'tool steps reuse the checkpoint rather than rotating again');
+  assert.deepEqual(duringTools.history.slice(-2), toolSteps);
+  assert.deepEqual(duringTools.history[0], summary, 'the summary is reference material, not a rotation trigger');
+  assert.equal(duringTools.history[1].content, firstReplay.history[1].content);
+
+  const next = turn('user', 'Also test the logout redirect');
+  appendHistory(botId, [reply, next]);
+  const full = loadHistory(botId);
+  const followUp = R.freshStart(full, 'gemini');
+  assert.equal(followUp.reason, null, 'old large context does not cause another rotation on the next turn');
+  assert.deepEqual(followUp.history.slice(-2), [reply, next], 'new turns build on the fresh session');
+  assert.equal(full[2].content[0].text.length, 60_000, 'rotation does not delete the stored history');
+  assert.equal(R.freshStart(full, 'claude').reason, 'the conversation had grown large', 'another provider has its own boundary');
+
+  const shortTurns = Array.from({ length: 9 }, (_, i) => [turn('user', `Also test case ${i}`), reply]).flat();
+  const byCount = [full[3], reply, ...shortTurns, next];
+  assert.match(R.freshStart(byCount, 'gemini').reason, /10 earlier requests/, 'the new session still rotates at the turn limit');
+  assert.equal(R.freshStart([full[3], turn('assistant', 'x'.repeat(49_000)), next], 'gemini').reason,
+    'the conversation had grown large', 'new oversized context still triggers rotation');
+  const topicCheckpoint = { ...unrelated[2], marionSubscriptionStarts: { gemini: false } };
+  assert.deepEqual(R.freshStart([...unrelated.slice(0, 2), topicCheckpoint, ...toolSteps], 'gemini').history,
+    [topicCheckpoint, ...toolSteps], 'a topic rotation never brings back the old reply');
 
   // ---- 4. token optimizer: one lean line from the owner's own skill ----
   const line = R.leanLine(botId, false);

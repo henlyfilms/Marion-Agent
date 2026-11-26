@@ -17,7 +17,7 @@ const { backgroundScript } = await import('../server/src/agent/tools.ts');
 initSubagents();
 
 // 1. The background script returns immediately, survives, and records output and the exit code (/workspace → temp dir).
-const script = backgroundScript('job-abc-1', `echo "it's running"; sleep 1; echo done; exit 3`).replaceAll('/workspace', work);
+const script = backgroundScript('job-abc-1', `echo "it's running"; sleep 1; echo done; exit 3`).replaceAll('/workspace', `'${work.replaceAll("'", "'\\''")}'`);
 const t0 = Date.now();
 const out = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 5000 });
 assert.ok(Date.now() - t0 < 900, `returns at once, not after the 1 s job (${Date.now() - t0} ms)`);

@@ -116,6 +116,8 @@ CREATE TABLE IF NOT EXISTS life_sync (
 );
 `);
 
+addColumn('agent_sessions', 'cloud_url', 'TEXT');
+
 export function getSetting<T>(userId: string, key: string, fallback: T): T {
   const row = db.prepare('SELECT value FROM user_settings WHERE user_id=? AND key=?').get(userId, key) as { value: string } | undefined;
   if (!row) return fallback;

@@ -15,7 +15,7 @@ function viewingBotId() {
   return s.selectedBotId;
 }
 
-export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'stats' | 'group' | 'team' | 'screenshots' | null;
+export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'stats' | 'group' | 'team' | 'screenshots' | 'github-repo' | null;
 
 interface Transcript { generation: number; bySeq: Record<number, Row>; loaded: boolean }
 

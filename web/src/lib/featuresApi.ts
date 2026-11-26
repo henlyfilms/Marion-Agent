@@ -1,4 +1,4 @@
-import type { Bot, MarionSession, NotificationSettings, StatsRange, StatsSummary } from '@shared/types';
+import type { Bot, ChatModelSelection, MarionSession, NotificationSettings, StatsRange, StatsSummary } from '@shared/types';
 import { create } from 'zustand';
 import { ApiError } from './api';
 
@@ -19,7 +19,7 @@ async function req<T>(method: string, path: string, body?: unknown, signal?: Abo
 }
 
 export interface BotFolder { path: string; label: string; write: boolean }
-export interface AgentSettings { appControl: boolean; liveFeed: boolean; recordingDays: number }
+export interface AgentSettings { appControl: boolean; liveFeed: boolean; recordingDays: number; autoHandoff: boolean; handoffFallback: ChatModelSelection | null }
 export interface TeachRecording { id: string; botId: string; title: string; narration: string; notes: string; seconds: number; frames: { name: string; at: number }[]; source: 'screen' | 'upload'; createdAt: number; expiresAt: number }
 export interface ProfileSkill { name: string; description: string; body: string }
 export interface ProfileRoutine { name: string; prompt: string; schedule: string; enabled: boolean }
@@ -111,6 +111,12 @@ export const featuresApi = {
   testNotification: () => req<{ devices: number; delivered: number }>('POST', '/notifications/test'),
   folders: (botId: string) => req<{ folders: BotFolder[]; fullAccess?: boolean; suggestion: string | null }>('GET', `/bots/${botId}/folders`),
   setFullAccess: (botId: string, enabled: boolean, confirm?: string) => req<{ fullAccess: boolean }>('PUT', `/bots/${botId}/full-access`, { enabled, confirm }),
+  continueHandoff: (botId: string, id: string, seq: number, selection: ChatModelSelection) =>
+    req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/handoffs/${encodeURIComponent(id)}/continue`, { seq, selection }),
+  startCloudSession: (botId: string, body: { goal: string; folder: string; allowLocalEdits: boolean }) =>
+    req<{ id: string }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-session`, body),
+  createGitHubRepo: (body: { name: string; description: string; visibility: 'private' | 'public'; folder?: string; confirmPush: boolean }) =>
+    req<{ url: string; pushed: boolean; warning?: string }>('POST', '/github/repos', body),
   agentSettings: () => req<{ settings: AgentSettings; recordingDayOptions: number[] }>('GET', '/agent-settings'),
   saveAgentSettings: (patch: Partial<AgentSettings>) => req<{ settings: AgentSettings }>('PUT', '/agent-settings', patch),
   recordings: (botId?: string) => req<{ recordings: TeachRecording[]; keepDays: number }>('GET', `/recordings${botId ? `?botId=${encodeURIComponent(botId)}` : ''}`),

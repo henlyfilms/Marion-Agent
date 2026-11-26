@@ -1,3 +1,4 @@
+import { UsageHandoffCard } from '../HandoffControls';
 import { useEffect, useState } from 'react';
 import { copyText } from '../../lib/clipboard';
 import type { CardBody, Row } from '@shared/types';
@@ -47,7 +48,7 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
         <>
           <div className="card__actions">
             <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>
-            {!['ask_grok', 'ask_subscription'].includes(body.tool) && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>}
+            {!['ask_grok', 'ask_subscription', 'github_create_repo'].includes(body.tool) && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>}
             <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('allow')}>Allow</button>
           </div>
           {error && <div className="card__error">{error}</div>}
@@ -205,6 +206,7 @@ export function CardRow({ row }: { row: Row }) {
     case 'question': return <QuestionCard row={row} body={b} />;
     case 'connect': return <ConnectCard row={row} body={b} />;
     case 'draft': return <DraftCard body={b} />;
+    case 'handoff': return <UsageHandoffCard row={row} body={b} />;
     case 'work': return <WorkCard body={b} />;
     default: return null;
   }

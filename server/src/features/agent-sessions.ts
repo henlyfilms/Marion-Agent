@@ -21,7 +21,7 @@ const oneLine = (text: string, max: number) => {
 
 interface AgentSessionRow {
   id: string; user_id: string; bot_id: string; provider: RelayProvider; kind: RelayKind; title: string; summary: string; request: string;
-  status: RelayStatus; error: string | null; chat_generation: number | null; folder_path: string | null; folder_label: string | null;
+  cloud_url: string | null; status: RelayStatus; error: string | null; chat_generation: number | null; folder_path: string | null; folder_label: string | null;
   model: string | null; model_label: string | null; effort: string | null; tokens_in: number | null; tokens_out: number | null;
   started_at: number; ended_at: number | null; duration_ms: number; calls: number; active_calls: number;
   role: string | null; agent: string | null; group_id: string | null; rotated: string | null; updated_at: number;
@@ -49,6 +49,12 @@ export function beginAgentSession(track: SessionTrack, provider: RelayProvider, 
   } catch (error) {
     console.warn('[agent-sessions] could not record a session start', (error as Error).message);
   }
+}
+
+export function linkCloudSession(track: SessionTrack, url: string) {
+  const result = db.prepare("UPDATE agent_sessions SET cloud_url=?, updated_at=? WHERE id=? AND kind='cloud' AND user_id=?")
+    .run(url, now(), track.id, track.userId);
+  if (result.changes) notifyChange(track.userId, track.botId);
 }
 
 /** A run ended (any outcome). Calls of one session (an orchestration's plan, tasks and reviews) merge into one record. */
@@ -81,7 +87,7 @@ export function recoverAgentSessions() {
   const rows = db.prepare("SELECT id, user_id, bot_id, started_at FROM agent_sessions WHERE status='running'").all() as Pick<AgentSessionRow, 'id' | 'user_id' | 'bot_id' | 'started_at'>[];
   const at = now();
   for (const row of rows) {
-    db.prepare("UPDATE agent_sessions SET status='stopped', active_calls=0, ended_at=?, duration_ms=?, error=COALESCE(error,'Marion Agent restarted before this finished.'), updated_at=? WHERE id=?")
+    db.prepare("UPDATE agent_sessions SET status='stopped', active_calls=0, ended_at=?, duration_ms=?, error=COALESCE(error,CASE WHEN kind='cloud' THEN 'Marion disconnected on restart; check Claude for the current status.' ELSE 'Marion Agent restarted before this finished.' END), updated_at=? WHERE id=?")
       .run(at, Math.max(0, at - row.started_at), at, row.id);
   }
   db.prepare('DELETE FROM agent_sessions WHERE status != ? AND updated_at < ?').run('running', at - KEEP_MS);
@@ -103,7 +109,7 @@ export interface SessionQuery {
 
 const toRelay = (row: AgentSessionRow, botName: string): MarionSession => ({
   id: `relay:${row.id}`,
-  type: 'relay', kind: row.kind, provider: row.provider, status: row.status,
+  type: 'relay', kind: row.kind, ...(row.kind === 'cloud' ? { cloudUrl: row.cloud_url } : {}), provider: row.provider, status: row.status,
   title: row.title, summary: row.summary, request: row.request || null, error: row.error,
   botId: row.bot_id, botName, chatId: `${row.bot_id}:${row.chat_generation ?? 0}`, generation: row.chat_generation,
   folder: row.folder_path ? { name: row.folder_label || row.folder_path, path: row.folder_path } : null,
