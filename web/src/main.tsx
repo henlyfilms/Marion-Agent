@@ -17,6 +17,7 @@ import './styles/features.css';
 import './styles/sheet.css';
 import './styles/sessions.css';
 import './styles/notify.css';
+import './styles/workfx.css';
 import './styles/motion.css';
 
 if (/Electron\//.test(navigator.userAgent)) {

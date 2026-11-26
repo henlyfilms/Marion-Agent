@@ -48,7 +48,7 @@ export function ChatView() {
           <span className="chat__pill-anchor">
           <button type="button" className="chat__pill" onClick={() => setMenu(!menu)} aria-expanded={menu} title={displayName(bot)}
             {...contextMenu(displayName(bot), () => { setMenu(false); return botMenuItems(bot); })}>
-            <BotAvatarFor bot={bot} size={26} />
+            <BotAvatarFor bot={bot} size={26} working={!!live?.isRunning && !live?.awaiting} />
             <span className="chat__pill-name">{bot.name}</span>
           </button>
           {menu && (

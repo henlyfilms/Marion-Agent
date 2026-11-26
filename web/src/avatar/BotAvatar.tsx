@@ -4,6 +4,7 @@ import type { AvatarColor, AvatarShape, Bot } from '@shared/types';
 import { palette } from '../lib/colors';
 import { Icon } from '../components/Icon';
 import { SHAPES, type ShapeDef } from './shapes';
+import { WorkFx } from './WorkFx';
 
 interface Props {
   shape: AvatarShape | string;
@@ -13,6 +14,9 @@ interface Props {
   star?: boolean;
   /** Soft bloom in the bot's own color. */
   glow?: boolean;
+  /** Bot is working: eyes come alive and a per-bot aura plays (seeded by `fxSeed`, usually the bot id). */
+  working?: boolean;
+  fxSeed?: string;
   className?: string;
   title?: string;
 }
@@ -62,7 +66,7 @@ function Stem({ color, point: [x, y] }: { color: string; point: readonly [number
   );
 }
 
-export function BotAvatar({ shape, color, stemColor, size, star, glow, className, title }: Props) {
+export function BotAvatar({ shape, color, stemColor, size, star, glow, working, fxSeed, className, title }: Props) {
   const gradientId = useId();
   const berry = isBerryShape(shape) ? BERRY_SHAPES[shape][1] : null;
   const lobes = typeof berry === 'string' ? null : berry;
@@ -71,7 +75,7 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, className
   const stem = lobes ? berryStem(lobes) : berry ? [50, 14] as const : CLASSIC_STEMS[classicShape];
   const fill = palette(color).fill;
   return (
-    <span className={`bot-avatar${glow ? ' is-glowing' : ''}${className ? ` ${className}` : ''}`}
+    <span className={`bot-avatar${glow ? ' is-glowing' : ''}${working ? ' is-working' : ''}${className ? ` ${className}` : ''}`}
       style={glow ? { width: size, height: size, '--avatar-glow': fill, '--avatar-glow-r': `${Math.max(2, size * 0.09)}px` } as React.CSSProperties : { width: size, height: size }}
       title={title} role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true}
       data-avatar-shape={berry || Object.hasOwn(SHAPES, shape) ? shape : 'blob'}>
@@ -90,6 +94,7 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, className
         </g>
         <Eyes eyes={shape === 'funkyberry' ? FUNKY_EYES : berry ? BERRY_EYES : classic.eyes} />
       </svg>
+      {working && <WorkFx seed={fxSeed ?? String(shape) + color} fill={fill} />}
       {star && (
         <span className="bot-avatar__star" style={{ width: size * 0.2667, height: size * 0.2667 }}>
           <Icon name="star" size={size * 0.1333} color="#FFFFFF" />
@@ -99,6 +104,6 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, className
   );
 }
 
-export function BotAvatarFor({ bot, size, star, className }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'name'> & { avatarGlow?: boolean }; size: number; star?: boolean; className?: string }) {
-  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} stemColor={bot.avatarStemColor} glow={bot.avatarGlow} size={size} star={star} className={className} title={bot.name} />;
+export function BotAvatarFor({ bot, size, star, working, className }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'name'> & { avatarGlow?: boolean; id?: string }; size: number; star?: boolean; working?: boolean; className?: string }) {
+  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} stemColor={bot.avatarStemColor} glow={bot.avatarGlow} size={size} star={star} working={working} fxSeed={bot.id} className={className} title={bot.name} />;
 }

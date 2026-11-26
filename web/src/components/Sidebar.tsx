@@ -126,7 +126,7 @@ function ChatAvatar({ bot, running, awaiting, size, ring, star }: { bot: Bot; ru
   const showCelebration = celebrate && !running && !awaiting;
   return (
     <span className={`bot-row__avatar${showCelebration ? ' is-complete' : ''}${ring && running && !awaiting ? ' is-working' : ''}`}>
-      <BotAvatarFor bot={bot} size={size} star={star} />
+      <BotAvatarFor bot={bot} size={size} star={star} working={running && !awaiting} />
       {showCelebration && <span key={bot.completedAt} className="completion-mark" role="img" aria-label="Task completed"><Icon name="check" size={11} /></span>}
       {!showCelebration && !(running && !awaiting) && (awaiting || bot.unread > 0) && (
         <span className={`status-dot ${awaiting ? 'is-attention' : running ? 'is-working' : 'is-unread'}`} aria-label={awaiting ? 'Needs attention' : running ? 'Working' : 'Unread activity'} />
