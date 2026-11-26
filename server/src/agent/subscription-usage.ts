@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import type { SubscriptionUsage, UsageWindow } from '../types.js';
 import { getSetting, setSetting } from '../features/schema.js';
 import {
-  claudeIsolation, cliEnvironment, codexArgs, executable, googleSettings, initializeCodex,
+  claudeIsolation, claudePermissionArgs, cliEnvironment, codexArgs, executable, googleSettings, initializeCodex,
   parseLine, requireClaudeSubscription, type SubscriptionProvider,
 } from './subscriptions.js';
 
@@ -118,7 +118,7 @@ async function claudeUsage(program: string, cwd: string): Promise<UsageReading> 
 async function claudeUsageWindows(program: string, cwd: string): Promise<UsageWindow[]> {
   return run(program, [
     ...claudeIsolation, '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--tools', '',
-    '--permission-mode', 'dontAsk', '--no-session-persistence', '--print', '/usage', '--output-format', 'json',
+    ...claudePermissionArgs(), '--no-session-persistence', '--print', '/usage', '--output-format', 'json',
   ], {
     cwd, env: { ...cliEnvironment(), DISABLE_AUTOUPDATER: '1' }, timeout: 12_000, maxBuffer: 128_000,
   }).then(({ stdout }) => {

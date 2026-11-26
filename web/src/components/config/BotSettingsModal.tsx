@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AvatarColor, AvatarShape, Bot, Memory, Routine, Skill, UniversalSkill } from '@shared/types';
+import type { AvatarColor, AvatarShape, Bot, Memory, Routine, Skill, UniversalMemory, UniversalSkill } from '@shared/types';
 import type { WorkFxChoice } from '@shared/avatarShapes';
 import { BotAvatar, BotAvatarFor } from '../../avatar/BotAvatar';
 import { BotShapePicker } from '../../avatar/BotShapePicker';
@@ -60,7 +60,7 @@ export function BotSettingsModal() {
     { id: 'general', label: 'General' },
     { id: 'theme', label: 'Theme' },
     { id: 'skills', label: 'Skills', count: data ? data.skills.length + (data.universalSkills?.length ?? 0) : undefined },
-    { id: 'memories', label: 'Memories', count: data?.memories.length },
+    { id: 'memories', label: 'Memories', count: data ? data.memories.length + (data.universalMemories?.length ?? 0) : undefined },
     { id: 'routines', label: 'Routines', count: (routines ?? data?.routines)?.length },
     ...(bot.kind === 'room' ? [] : [{ id: 'access' as const, label: 'Access' }]),
   ];
@@ -709,9 +709,10 @@ function MemoriesTab({ bot, data, onChange }: { bot: Bot; data: BotSettingsBundl
   const fill = data ? Math.min(100, Math.round((data.memory.historyChars / data.memory.compactAtChars) * 100)) : 0;
   return (
     <div className="cfg-page">
-      <div className="cfg-page__head">
+      <UniversalMemories memories={data?.universalMemories} onChange={onChange} />
+      <div className="cfg-page__head" style={{ marginTop: 20 }}>
         <div>
-          <div className="cfg-page__title">Memories</div>
+          <div className="cfg-page__title">Only {bot.name}</div>
           <div className="cfg-page__sub">What {bot.name} remembers about you. It saves things when you share them, and picks up more on its own once a chat goes quiet.</div>
         </div>
       </div>
@@ -749,6 +750,74 @@ function MemoriesTab({ bot, data, onChange }: { bot: Bot; data: BotSettingsBundl
         </div>
       )}
     </div>
+  );
+}
+
+/** Universal memories: one shared list every Bot remembers. Mirrors the Universal skills section. */
+function UniversalMemories({ memories, onChange }: { memories: UniversalMemory[] | undefined; onChange: () => void }) {
+  const [editing, setEditing] = useState<string | 'new' | null>(null);
+  const done = () => { setEditing(null); onChange(); };
+  return (
+    <>
+      <div className="cfg-page__head">
+        <div>
+          <div className="cfg-page__title">Universal memories</div>
+          <div className="cfg-page__sub">Remembered by <strong>every Bot</strong> on your team, including new ones. Edit one here and all Bots see the change.</div>
+        </div>
+        {editing !== 'new' && <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => setEditing('new')}><Icon name="plus" size={12} /> New universal memory</button>}
+      </div>
+      {editing === 'new' && <UniversalMemoryEditor onDone={done} />}
+      {!memories ? <div className="cfg-empty">Loading…</div> : memories.length === 0 && editing !== 'new' ? (
+        <div className="cfg-empty">No universal memories. Add anything every Bot should know.</div>
+      ) : (
+        <div className="cfg-list">
+          {memories.map((m) => editing === m.id ? (
+            <UniversalMemoryEditor key={m.id} memory={m} onDone={done} />
+          ) : (
+            <div key={m.id} className="cfg-item" data-memory-scope="universal">
+              <div className="cfg-item__text">
+                <div className="cfg-item__body">{m.text}</div>
+                <div className="cfg-item__meta">
+                  <span className="cfg-chip" title="Remembered by every Bot on your team">Universal · all Bots</span>
+                  <span>{shortDate(m.updatedAt)}</span>
+                </div>
+              </div>
+              <div className="cfg-item__actions">
+                <button type="button" className="cfg-icon-btn" onClick={() => setEditing(m.id)} aria-label="Edit universal memory" title="Edit for all Bots"><Icon name="edit" size={14} /></button>
+                <ConfirmButton className="cfg-icon-btn" title="Delete for all Bots" onConfirm={async () => { await configApi.deleteUniversalMemory(m.id); onChange(); }}><Glyph name="trash" size={14} /></ConfirmButton>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function UniversalMemoryEditor({ memory, onDone }: { memory?: UniversalMemory; onDone: () => void }) {
+  const [text, setText] = useState(memory?.text ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const can = text.trim() && !busy;
+  const save = async () => {
+    if (!can) return;
+    setBusy(true); setError(null);
+    try {
+      if (memory) await configApi.updateUniversalMemory(memory.id, text);
+      else await configApi.createUniversalMemory(text);
+      onDone();
+    } catch (e) { setError((e as Error).message); setBusy(false); }
+  };
+  return (
+    <form className="cfg-editor" onSubmit={(e) => { e.preventDefault(); save(); }}>
+      <div className="cfg-skill-hint">Universal memory: saving changes it for every Bot on your team.</div>
+      <textarea className="text-input cfg-textarea" rows={3} maxLength={600} placeholder="A fact every Bot should remember" value={text} onChange={(e) => setText(e.target.value)} autoFocus aria-label="Universal memory" />
+      {error && <div className="cfg-error">{error}</div>}
+      <div className="cfg-editor__actions">
+        <button type="button" className="cfg-btn cfg-btn--secondary" onClick={onDone}>Cancel</button>
+        <button type="submit" className="cfg-btn cfg-btn--primary" disabled={!can}>{busy ? 'Saving…' : memory ? 'Save for all Bots' : 'Add universal memory'}</button>
+      </div>
+    </form>
   );
 }
 

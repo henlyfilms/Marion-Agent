@@ -20,6 +20,7 @@ import { consolidateBot, historySize, maybeCompact, memoryConfig } from './agent
 import { idleConfig, viewerCount } from './idle.js';
 import { loadHistory } from './store.js';
 import { deleteUniversalSkill, listUniversalSkills, universalNames, updateUniversalSkill, upsertUniversalSkill } from './features/universal-skills.js';
+import { addUniversalMemory, deleteUniversalMemory, listUniversalMemories, updateUniversalMemory } from './features/universal-memory.js';
 import { chatProviders, type ChatModel, type ChatModelSettings, type ChatProvider, type ChatModelSelection, type LibraryFile, type Memory, type Skill } from './types.js';
 
 /**
@@ -301,6 +302,7 @@ configApi.get('/bots/:id/settings', (c) => {
     memories,
     skills: listSkills(b.id),
     universalSkills: listUniversalSkills(b.user_id),
+    universalMemories: listUniversalMemories(b.user_id),
     routines: listRoutines(b.id),
     tasks: listTasks(b.id),
     memory: {
@@ -366,6 +368,25 @@ configApi.patch('/skills/universal/:id', async (c) => {
 
 configApi.delete('/skills/universal/:id', (c) =>
   deleteUniversalSkill(c.get('user').id, c.req.param('id')) ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404));
+
+// Universal memories: one shared copy per user, injected into every Bot's prompt.
+configApi.get('/memories/universal', (c) => c.json({ memories: listUniversalMemories(c.get('user').id) }));
+
+configApi.post('/memories/universal', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const r = addUniversalMemory(c.get('user').id, body?.text);
+  return r.ok ? c.json({ memory: r.memory }) : c.json({ error: r.message }, 400);
+});
+
+configApi.patch('/memories/universal/:id', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const r = updateUniversalMemory(c.get('user').id, c.req.param('id'), body?.text);
+  if (r.ok) return c.json({ memory: r.memory });
+  return c.json({ error: r.message }, r.message === 'not found' ? 404 : 400);
+});
+
+configApi.delete('/memories/universal/:id', (c) =>
+  deleteUniversalMemory(c.get('user').id, c.req.param('id')) ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404));
 
 const ownSkill = (userId: string, id: string) =>
   db.prepare('SELECT s.* FROM skills s JOIN bots b ON b.id=s.bot_id WHERE s.id=? AND b.user_id=?').get(id, userId) as any;

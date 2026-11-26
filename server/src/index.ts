@@ -11,6 +11,7 @@ import { remoteAccessFor, remoteWorkspaceUser } from './lib/auth.js';
 import { migrateStarterAgent } from './db.js';
 import './features/schema.js';
 import { migrateUniversalSkills } from './features/universal-skills.js';
+import { migrateUniversalMemories } from './features/universal-memory.js';
 import { featuresApi } from './routes-features.js';
 import { startLifeSync } from './features/life-link.js';
 import { startLifeOutbox } from './features/life-outbox.js';
@@ -36,6 +37,7 @@ initSubagents();
 initRooms();
 migrateStarterAgent();
 migrateUniversalSkills();
+migrateUniversalMemories();
 
 const app = new Hono();
 app.use('*', async (c, next) => {

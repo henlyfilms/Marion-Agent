@@ -37,6 +37,20 @@ CREATE TABLE IF NOT EXISTS universal_skill_seeds (
   key TEXT NOT NULL,
   PRIMARY KEY (user_id, key)
 );
+-- Universal memories: durable facts shared by every Bot of a user. Seeds record which shipped ones were already added.
+CREATE TABLE IF NOT EXISTS universal_memories (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS universal_memories_user ON universal_memories(user_id, created_at);
+CREATE TABLE IF NOT EXISTS universal_memory_seeds (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
 CREATE TABLE IF NOT EXISTS local_model_preferences (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   model TEXT NOT NULL

@@ -100,11 +100,14 @@ const agyArgs = [
   '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--settings', googleSettings,
   '--input-format', 'stream-json', '--output-format', 'stream-json',
 ];
+/** Claude Code always launches in auto mode (never dontAsk) unless a caller passes an explicit override. */
+export const CLAUDE_PERMISSION_MODE = 'auto';
+export const claudePermissionArgs = (mode: string = CLAUDE_PERMISSION_MODE) => ['--permission-mode', mode];
 export const claudeIsolation = ['--restricted', '--safe-mode', '--setting-sources', '', '--settings', '{"disableAllHooks":true}'];
-const claudeArgs = [
+export const claudeArgs = [
   ...claudeIsolation, '--print', '--output-format', 'stream-json', '--verbose',
   '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-  '--tools', '', '--permission-mode', 'dontAsk', '--no-session-persistence', '--disable-slash-commands',
+  '--tools', '', ...claudePermissionArgs(), '--no-session-persistence', '--disable-slash-commands',
   // Replaces Claude Code's own coding prompt (about 1,600 tokens per call); Marion's instructions are in the message.
   '--system-prompt', 'You are the chat model inside Marion Agent. Follow the instructions in the user message.',
 ];
@@ -114,7 +117,7 @@ const providerArgs = { codex: codexArgs, gemini: agyArgs, claude: claudeArgs };
  * Arguments for a task inside a folder the bot shares. The CLI still starts in Marion's empty temp folder
  * and gets the shared folder as its only extra directory. Writes are confined by each CLI's own sandbox.
  */
-function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write: boolean }, photosFolder?: string[]) {
+export function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write: boolean }, photosFolder?: string[]) {
   if (provider === 'claude') {
     const settings = folder.write
       ? { disableAllHooks: true, sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } }
@@ -124,7 +127,7 @@ function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write
       '--print', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
       '--tools', folder.write ? 'Read,Glob,Grep,Edit,Write,Bash' : 'Read,Glob,Grep',
       ...(folder.write ? ['--allowedTools', 'Read', 'Glob', 'Grep', 'Edit', 'Write'] : ['--allowedTools', 'Read', 'Glob', 'Grep']),
-      '--permission-mode', 'dontAsk', '--no-session-persistence', '--disable-slash-commands', '--add-dir', folder.path,
+      ...claudePermissionArgs(), '--no-session-persistence', '--disable-slash-commands', '--add-dir', folder.path,
     ];
   }
   // File tools are allowed only under the shared folder (Antigravity's write_file otherwise reaches any path);

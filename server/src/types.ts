@@ -303,6 +303,9 @@ export interface Task { id: string; botId: string; title: string; state: 'workin
 
 export interface Memory { id: string; botId: string; text: string; createdAt: number; source?: 'chat' | 'learned' }
 
+/** A memory shared by every Bot on the user's team (one copy, injected into each prompt). */
+export interface UniversalMemory { id: string; text: string; createdAt: number; updatedAt: number; universal: true }
+
 export interface Skill { id: string; botId: string; name: string; description: string; body: string; createdAt: number; updatedAt: number; universal?: false }
 
 /** A skill shared by every Bot on the user's team (one copy, injected into each prompt). */

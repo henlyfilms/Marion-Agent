@@ -11,6 +11,7 @@ import { teamRoster } from '../features/coordination.js';
 import { createBotRecord } from '../features/bots.js';
 import { AVATAR_SHAPE_IDS, normalizeAvatarShape } from '../avatarShapes.js';
 import { saveLearnedSkill } from '../features/improve.js';
+import { addUniversalMemory, searchUniversalMemories } from '../features/universal-memory.js';
 import { notify } from '../features/notify.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
@@ -408,18 +409,24 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'remember',
-    description: 'Save a durable memory about the user, their preferences, or your job, so you remember it in future conversations.',
-    parameters: obj({ text: { type: 'string' } }, ['text']),
+    description: 'Save a durable memory about the user, their preferences, or your job, so you remember it in future conversations. Set universal: true only for a fact every Bot on the team should know (it is shared with all Bots).',
+    parameters: obj({ text: { type: 'string' }, universal: { type: 'boolean', description: 'Optional. true = remember for every Bot on the team' } }, ['text']),
     activity: 'remembering',
     label: 'Saving notes',
     impl: async (a, ctx) => {
+      if (a.universal === true) {
+        const r = addUniversalMemory(ctx.userId, a.text);
+        return r.ok
+          ? { output: r.created ? 'Saved to universal memory (every Bot will remember it).' : 'Already in universal memory.', summary: 'Saved a universal memory' }
+          : { output: r.message };
+      }
       db.prepare('INSERT INTO memories(id,bot_id,text,created_at) VALUES (?,?,?,?)').run(newId('mem'), ctx.botId, String(a.text), now());
       return { output: 'Saved to memory.', summary: 'Saved a memory' };
     },
   },
   {
     name: 'recall',
-    description: 'Search your saved memories.',
+    description: 'Search your saved memories and the universal memories shared by every Bot.',
     parameters: obj({ query: { type: 'string' } }, ['query']),
     activity: 'remembering',
     label: 'Searching memory',
@@ -427,7 +434,7 @@ export const TOOLS: ToolDef[] = [
       const words = String(a.query).toLowerCase().split(/\W+/).filter((w) => w.length > 2);
       const all = db.prepare('SELECT text, created_at FROM memories WHERE bot_id=? ORDER BY created_at DESC').all(ctx.botId) as any[];
       const hits = all.filter((m) => !words.length || words.some((w) => m.text.toLowerCase().includes(w))).slice(0, 20);
-      return { output: JSON.stringify(hits.map((h) => h.text)) };
+      return { output: JSON.stringify([...searchUniversalMemories(ctx.userId, words), ...hits.map((h) => h.text)]) };
     },
   },
   {

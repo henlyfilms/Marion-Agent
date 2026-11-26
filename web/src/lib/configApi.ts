@@ -1,5 +1,5 @@
 import type { OrchestrationSettings, TeamMember } from '@shared/types';
-import type { Bot, ChatModel, ChatModelSelection, ChatModelSettings, ChatProvider, ComputerState, LibraryFile, Memory, Routine, Skill, Task, Toolkit, UniversalSkill } from '@shared/types';
+import type { Bot, ChatModel, ChatModelSelection, ChatModelSettings, ChatProvider, ComputerState, LibraryFile, Memory, Routine, Skill, Task, Toolkit, UniversalMemory, UniversalSkill } from '@shared/types';
 import { ApiError } from './api';
 
 async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -22,6 +22,7 @@ export interface BotSettingsBundle {
   memories: Memory[];
   skills: Skill[];
   universalSkills: UniversalSkill[];
+  universalMemories: UniversalMemory[];
   routines: Routine[];
   tasks: Task[];
   memory: { lastConsolidatedAt: number | null; historyChars: number; compactAtChars: number; lastCompaction: { method: string; created_at: number } | null };
@@ -70,6 +71,9 @@ export const configApi = {
   fresh: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/fresh`),
 
   deleteMemory: (id: string) => req<{ ok: true }>('DELETE', `/memories/${id}`),
+  createUniversalMemory: (text: string) => req<{ memory: UniversalMemory }>('POST', '/memories/universal', { text }),
+  updateUniversalMemory: (id: string, text: string) => req<{ memory: UniversalMemory }>('PATCH', `/memories/universal/${id}`, { text }),
+  deleteUniversalMemory: (id: string) => req<{ ok: true }>('DELETE', `/memories/universal/${id}`),
 
   createSkill: (botId: string, s: Pick<Skill, 'name' | 'description' | 'body'>) => req<{ skill: Skill }>('POST', `/bots/${botId}/skills`, s),
   updateSkill: (id: string, s: Partial<Pick<Skill, 'name' | 'description' | 'body'>>) => req<{ skill: Skill }>('PATCH', `/skills/${id}`, s),

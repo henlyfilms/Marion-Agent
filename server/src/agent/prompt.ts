@@ -4,6 +4,7 @@ import { db } from '../db.js';
 import { getBotRow, getLive, listRoutines } from '../store.js';
 import { connectedToolkits, withinChatBudget } from '../composio.js';
 import { memoriesForPrompt } from './memory.js';
+import { universalMemoriesForPrompt } from '../features/universal-memory.js';
 import { lifePromptLine } from '../features/life-link.js';
 import { liveTeam } from '../features/coordination.js';
 import { foldersPromptLine } from '../features/folders.js';
@@ -28,6 +29,8 @@ export async function systemPrompt(userId: string, botId: string, voice = false)
   // Bounded: most relevant to the last few user messages, then most recent, within a character budget.
   const mem = memoriesForPrompt(botId);
   const memories = mem.lines.length ? mem.lines.join('\n') + (mem.omitted ? `\n(${mem.omitted} older memories not shown; use recall to search them.)` : '') : '';
+  const shared = universalMemoriesForPrompt(userId);
+  const universalMemories = shared.lines.join('\n') + (shared.omitted ? `\n(${shared.omitted} more universal memories not shown; use recall to search them.)` : '');
   const routines = listRoutines(botId).map((r) => `- ${r.name} (${r.id}): ${r.enabled ? r.description : 'paused'}; ${r.prompt.slice(0, 120)}`).join('\n');
   let apps = '';
   if (!voice) {
@@ -62,6 +65,7 @@ You coordinate the team. Break requests into pieces, hand each piece to the Bot 
 ${voice ? '- Use app discovery tools when the user asks to work with a connected app.' : `- Connected apps: ${apps || 'none yet'}`}
 ${liveTeamPrompt(userId, botId)}
 ${routines ? `\n## Your routines\n${routines}` : ''}
+${universalMemories ? `\n## Universal memory (shared by every Bot)\n${universalMemories}` : ''}
 ${memories ? `\n## What you remember\n${memories}` : ''}
 
 ${agentSkills(botId)}
