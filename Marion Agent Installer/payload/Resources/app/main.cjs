@@ -32,18 +32,19 @@ const windowOptions = () => ({
 
 function configureSession() {
   appSession = session.fromPartition('persist:marion-agent');
-  // Local pages may use the microphone (dictation, calls), show notifications, and record the
+  // Local pages may use the microphone (dictation, calls), show notifications, copy text, and record the
   // screen for "Teach by screen recording". Nothing else, and nothing for other origins.
   appSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const requesting = details.requestingUrl || contents?.getURL();
     if (!isLocal(requesting)) return callback(false);
-    if (permission === 'notifications' || permission === 'display-capture') return callback(true);
+    if (permission === 'notifications' || permission === 'display-capture' || permission === 'clipboard-sanitized-write') return callback(true);
     callback(permission === 'media' && Boolean(details.mediaTypes?.length)
       && details.mediaTypes.every(type => type === 'audio' || type === 'video'));
   });
   appSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
     if (requestingOrigin !== origin) return false;
-    if (permission === 'notifications') return true;
+    // "Copy message" and the other Copy actions write plain text to the clipboard.
+    if (permission === 'notifications' || permission === 'clipboard-sanitized-write') return true;
     return permission === 'media' && (details.mediaType === 'audio' || details.mediaType === 'video');
   });
   // getDisplayMedia(): use the macOS screen picker when available, else share the main screen.

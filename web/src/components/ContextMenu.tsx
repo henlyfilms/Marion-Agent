@@ -49,7 +49,7 @@ export function ContextMenuProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const close = (restoreFocus = false) => {
-    if (restoreFocus && target?.trigger.isConnected) target.trigger.focus({ preventScroll: true });
+    if (restoreFocus && target?.trigger.isConnected) target.trigger.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
     leaveGhost(menuRef.current, 180);
     setTarget(null);
   };

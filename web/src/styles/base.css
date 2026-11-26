@@ -127,6 +127,8 @@ a { color: inherit; }
   height: 30px; padding: 0 10px; border-radius: 6px; font-size: 13px; line-height: 18px; letter-spacing: 0.195px; white-space: nowrap;
 }
 .menu__item:hover, .menu__item:focus-visible { background: var(--color-bg-hover); }
+/* The highlight already shows which item is active; no focus ring around menu items. */
+.menu__item:focus, .menu__item:focus-visible { outline: none; }
 .menu__item.is-separated { border-top: 1px solid var(--color-border-secondary); border-top-left-radius: 0; border-top-right-radius: 0; margin-top: 4px; }
 .menu__item.is-danger { color: var(--color-danger); }
 .menu__hint { color: var(--color-text-tertiary); font-size: 12px; }

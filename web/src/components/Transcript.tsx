@@ -1,4 +1,5 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { copyText } from '../lib/clipboard';
 import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
 import { Paperclip } from 'lucide-react';
 import { api } from '../lib/api';
@@ -70,8 +71,8 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
         {...contextMenu('Message actions', () => {
           const selection = window.getSelection()?.toString();
           return [
-            ...(selection ? [{ label: 'Copy selection', onSelect: () => navigator.clipboard.writeText(selection) }] : []),
-            ...(b.text ? [{ label: 'Copy message', onSelect: () => navigator.clipboard.writeText(b.text) }] : []),
+            ...(selection ? [{ label: 'Copy selection', onSelect: () => copyText(selection) }] : []),
+            ...(b.text ? [{ label: 'Copy message', onSelect: () => copyText(b.text) }] : []),
           ];
         })}>
         {!!b.attachments?.length && <div className="bubble__attachments">
@@ -96,7 +97,7 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
       {side === 'left' && showTokens && !b.streaming && !!b.usage?.length && (
         <div className="bubble__usage" aria-label="Response usage" tabIndex={-1}
           {...contextMenu('Token counts', () => [
-            { label: 'Copy token counts', onSelect: () => navigator.clipboard.writeText(b.usage!.map(u => `${u.label || u.model || u.provider} · ${usageLabel(u)}`).join('\n')) },
+            { label: 'Copy token counts', onSelect: () => copyText(b.usage!.map(u => `${u.label || u.model || u.provider} · ${usageLabel(u)}`).join('\n')) },
             { label: 'Hide token counts', onSelect: () => useConfigUI.getState().setShowTokenStats(false) },
           ])}>
           {b.usage.map(usage => <span key={`${usage.provider}:${usage.model}`} title={usage.model}>

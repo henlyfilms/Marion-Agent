@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { copyText } from '../../lib/clipboard';
 import { SegmentPill } from '../SegmentPill';
 import type { Bot, Task } from '@shared/types';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
@@ -36,8 +37,8 @@ function TaskRow({ t, bot, showBot }: { t: Task; bot?: Bot; showBot: boolean }) 
       {...contextMenu(t.title, () => [
         ...(bot ? [{ label: 'Open Bot chat', onSelect: open }] : []),
         { label: t.state === 'done' ? 'Mark in progress' : 'Mark as done', onSelect: setState },
-        { label: 'Copy task title', separator: true, onSelect: () => navigator.clipboard.writeText(t.title) },
-        ...(t.note ? [{ label: 'Copy task note', onSelect: () => navigator.clipboard.writeText(t.note) }] : []),
+        { label: 'Copy task title', separator: true, onSelect: () => copyText(t.title) },
+        ...(t.note ? [{ label: 'Copy task note', onSelect: () => copyText(t.note) }] : []),
       ])}>
       <span className={`task-row__check is-${t.state}`} aria-hidden>{t.state === 'done' ? <Glyph name="check_circle" size={18} /> : <span className="task-row__ring" />}</span>
       <span className="task-row__text">

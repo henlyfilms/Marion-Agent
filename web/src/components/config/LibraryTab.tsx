@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { copyText } from '../../lib/clipboard';
 import type { Bot, LibraryFile } from '@shared/types';
 import { configApi, type LibraryListing } from '../../lib/configApi';
 import { relativeShort } from '../../lib/time';
@@ -82,7 +83,7 @@ export function LibraryTab({ bot }: { bot: Bot }) {
               const openOrDownload = () => f.isDir ? setPath(relativePath) : download(f);
               const fileMenu = contextMenu(f.name, () => [
                 ...(busyFile === f.name ? [] : [{ label: f.isDir ? 'Open folder' : 'Download file', onSelect: openOrDownload }]),
-                { label: 'Copy relative path', onSelect: () => navigator.clipboard.writeText(relativePath) },
+                { label: 'Copy relative path', onSelect: () => copyText(relativePath) },
               ]);
               return (
                 <div key={f.name} className={`lib-row${f.isDir ? ' is-dir' : ''}`} onContextMenu={fileMenu.onContextMenu}>

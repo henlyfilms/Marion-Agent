@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { copyText } from '../../lib/clipboard';
 import { useConfigUI } from '../../configStore';
 import { featuresApi, type CodingSession, type SessionMessage, type SessionProvider } from '../../lib/featuresApi';
 import { relativeShort } from '../../lib/time';
@@ -65,8 +66,8 @@ function SessionRow({ s, index, selected, onOpen }: { s: CodingSession; index: n
   return (
     <button type="button" className={`session-row${selected ? ' is-selected' : ''}`} onClick={onOpen} style={{ animationDelay: `${Math.min(index, 12) * 22}ms` }}
       {...contextMenu(s.title, () => [
-        { label: 'Copy title', onSelect: () => navigator.clipboard.writeText(s.title) },
-        ...(s.path ? [{ label: 'Copy project path', onSelect: () => navigator.clipboard.writeText(s.path) }] : []),
+        { label: 'Copy title', onSelect: () => copyText(s.title) },
+        ...(s.path ? [{ label: 'Copy project path', onSelect: () => copyText(s.path) }] : []),
       ])}>
       <span className="session-row__logo"><ProviderLogo provider={s.provider} size={18} />{s.active && <span className="session-row__live" aria-label="Active now" />}</span>
       <span className="session-row__text">

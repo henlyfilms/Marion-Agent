@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { copyText } from '../../lib/clipboard';
 import type { CardBody, Row } from '@shared/types';
 import { api, openPopup } from '../../lib/api';
 import { useStore } from '../../store';
@@ -157,7 +158,7 @@ export function DraftCard({ body }: { body: Card<'draft'> }) {
   const user = useStore((s) => s.user);
   const pending = body.status === 'pending';
   const [copied, setCopied] = useState(false);
-  const copy = async () => { try { await navigator.clipboard.writeText(body.text); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch { /* ignore */ } };
+  const copy = async () => { try { await copyText(body.text); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch { /* ignore */ } };
   const handle = user?.email ? `@${user.email.split('@')[0]}` : '';
   return (
     <div className={`card draft-card${pending ? '' : ' is-resolved'}`}>
