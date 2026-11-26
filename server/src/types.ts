@@ -22,6 +22,8 @@ export interface Bot {
   avatarStemColor: string | null;
   /** Soft bloom around the avatar in its own color. */
   avatarGlow?: boolean;
+  /** Working animation around the avatar: 'auto' (from the bot's place in the list) or a fixed style. */
+  workFx?: 'auto' | 'halo' | 'orbit' | 'comet' | 'ripple' | 'sparkle' | 'swirl';
   /** Uploaded photo (data URL) shown instead of the berry; null = use the berry. */
   avatarImage?: string | null;
   mode: 'personal' | 'teammate';
@@ -160,6 +162,10 @@ export interface MessageBody {
   from?: { kind: 'bot' | 'routine' | 'voice' | 'model'; id: string; name: string; provider?: ChatProvider };
   citations?: { url: string; title?: string }[];
   usage?: ResponseUsage[];
+  /** The earlier message this one answers (Message menu → Reply). `text` is a short quote taken by the server. */
+  replyTo?: { seq: number; role: 'user' | 'assistant'; name: string; text: string };
+  /** Set when the user forwarded this message from another chat (Message menu → Forward). */
+  forwarded?: { name: string };
 }
 
 export interface ToolCallBody {

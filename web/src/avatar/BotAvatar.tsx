@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { BERRY_SHAPES, isBerryShape, type ClassicShape } from '@shared/avatarShapes';
+import type { WorkFxChoice } from '@shared/avatarShapes';
 import type { AvatarColor, AvatarShape, Bot } from '@shared/types';
 import { palette } from '../lib/colors';
 import { Icon } from '../components/Icon';
@@ -19,6 +20,8 @@ interface Props {
   /** Bot is working: eyes come alive and a per-bot aura plays (seeded by `fxSeed`, usually the bot id). */
   working?: boolean;
   fxSeed?: string;
+  /** Chosen working animation (Bot settings → Theme); 'auto' = from the bot's place in the list. */
+  workFx?: WorkFxChoice;
   className?: string;
   title?: string;
 }
@@ -68,7 +71,7 @@ function Stem({ color, point: [x, y] }: { color: string; point: readonly [number
   );
 }
 
-export function BotAvatar({ shape, color, stemColor, size, star, glow, image, working, fxSeed, className, title }: Props) {
+export function BotAvatar({ shape, color, stemColor, size, star, glow, image, working, fxSeed, workFx, className, title }: Props) {
   const gradientId = useId();
   const berry = isBerryShape(shape) ? BERRY_SHAPES[shape][1] : null;
   const lobes = typeof berry === 'string' ? null : berry;
@@ -77,7 +80,7 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, image, wo
   const stem = lobes ? berryStem(lobes) : berry ? [50, 14] as const : CLASSIC_STEMS[classicShape];
   const fill = palette(color).fill;
   // `fx` outlives `working` by a moment so the aura can fade out; it is null for idle avatars.
-  const fx = useWorkFx(!!working, fxSeed ?? String(shape) + color, fill, size);
+  const fx = useWorkFx(!!working, fxSeed ?? String(shape) + color, fill, size, workFx);
   return (
     <span className={`bot-avatar${glow ? ' is-glowing' : ''}${fx ? ' is-working' : ''}${className ? ` ${className}` : ''}`}
       style={glow ? { width: size, height: size, '--avatar-glow': fill, '--avatar-glow-r': `${Math.max(2, size * 0.09)}px` } as React.CSSProperties : { width: size, height: size }}
@@ -109,6 +112,6 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, image, wo
   );
 }
 
-export function BotAvatarFor({ bot, size, star, working, className }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'name'> & { avatarGlow?: boolean; avatarImage?: string | null; id?: string }; size: number; star?: boolean; working?: boolean; className?: string }) {
-  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} stemColor={bot.avatarStemColor} glow={bot.avatarGlow} image={bot.avatarImage} size={size} star={star} working={working} fxSeed={bot.id} className={className} title={bot.name} />;
+export function BotAvatarFor({ bot, size, star, working, className }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'name'> & { avatarGlow?: boolean; workFx?: WorkFxChoice; avatarImage?: string | null; id?: string }; size: number; star?: boolean; working?: boolean; className?: string }) {
+  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} stemColor={bot.avatarStemColor} glow={bot.avatarGlow} image={bot.avatarImage} size={size} star={star} working={working} fxSeed={bot.id} workFx={bot.workFx} className={className} title={bot.name} />;
 }

@@ -16,6 +16,8 @@ addColumn('bots', 'last_reflected_at', 'INTEGER');
 addColumn('bots', 'avatar_glow', 'INTEGER NOT NULL DEFAULT 0');
 /** Theme → Upload photo: a small square image (data URL, resized in the browser) shown instead of the berry. */
 addColumn('bots', 'avatar_image', 'TEXT');
+/** Theme → Working animation: 'auto' or one of the aura styles. */
+addColumn('bots', 'work_fx', "TEXT NOT NULL DEFAULT 'auto'");
 /** Set when a chat is deleted; it can be restored for DELETED_KEEP_MS before it is removed for good. */
 addColumn('bots', 'deleted_at', 'INTEGER');
 /** Bot settings → Access → Full access (whole home folder for its CLIs, no approval prompts for them). */

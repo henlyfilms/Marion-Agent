@@ -24,9 +24,9 @@ import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
-import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type Toolkit } from './types.js';
+import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type MessageBody, type Toolkit } from './types.js';
 import { orderChats, tier } from './chat-order.js';
-import { isAvatarColor, isBerryShape, isStemColor } from './avatarShapes.js';
+import { isAvatarColor, isBerryShape, isStemColor, isWorkFxChoice } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
 
 export const api = new Hono<AuthVars>();
@@ -300,6 +300,7 @@ api.patch('/bots/:id', async (c) => {
   }
   if (p.avatarColor !== undefined && !isAvatarColor(p.avatarColor)) return c.json({ error: 'Choose a bot color.' }, 400);
   if (p.avatarGlow !== undefined && typeof p.avatarGlow !== 'boolean') return c.json({ error: 'Choose whether the avatar glows.' }, 400);
+  if (p.workFx !== undefined && !isWorkFxChoice(p.workFx)) return c.json({ error: 'Choose a working animation.' }, 400);
   if (p.avatarStemColor !== undefined && p.avatarStemColor !== null && !isStemColor(p.avatarStemColor)) {
     return c.json({ error: 'Choose a six-digit hex stem color.' }, 400);
   }
@@ -315,7 +316,7 @@ api.patch('/bots/:id', async (c) => {
   if (p.compactAtTokens !== undefined && p.compactAtTokens !== null && !(Number.isInteger(p.compactAtTokens) && p.compactAtTokens >= 0 && p.compactAtTokens <= 1_000_000)) {
     return c.json({ error: 'Choose a compaction size between 0 and 1,000,000 tokens.' }, 400);
   }
-  const cols: Record<string, string> = { role: 'role', compactAtTokens: 'compact_at_tokens', name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', avatarGlow: 'avatar_glow', avatarImage: 'avatar_image', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
+  const cols: Record<string, string> = { role: 'role', compactAtTokens: 'compact_at_tokens', name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', avatarGlow: 'avatar_glow', avatarImage: 'avatar_image', workFx: 'work_fx', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
   const changes = Object.entries(cols).filter(([key]) => p[key] !== undefined);
   if (changes.length === 1 && changes[0][0] === 'pinned') {
     db.prepare('UPDATE bots SET pinned=? WHERE id=?').run(Number(p.pinned), b.id);
@@ -440,6 +441,8 @@ api.post('/bots/:id/messages', bodyLimit({
   let text = '';
   let call: string | null = null;
   let override: unknown;
+  let replySeq: unknown;
+  let forwardedFrom: unknown;
   let attachments: UploadedAttachment[] = [];
   if (c.req.header('content-type')?.startsWith('multipart/form-data')) {
     try {
@@ -447,11 +450,16 @@ api.post('/bots/:id/messages', bodyLimit({
       const message = form.get('text');
       text = typeof message === 'string' ? message.trim() : '';
       attachments = await readAttachments(form.getAll('attachments'));
+      const reply = form.get('replyTo');
+      replySeq = typeof reply === 'string' ? Number(reply) : undefined;
+      forwardedFrom = form.get('forwardedFrom');
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : 'Could not read the attachments.' }, 400);
     }
   } else {
-    const body = await c.req.json<{ text?: unknown; call?: unknown; model?: unknown }>().catch(() => null);
+    const body = await c.req.json<{ text?: unknown; call?: unknown; model?: unknown; replyTo?: unknown; forwardedFrom?: unknown }>().catch(() => null);
+    replySeq = body?.replyTo;
+    forwardedFrom = body?.forwardedFrom;
     text = typeof body?.text === 'string' ? body.text.trim() : '';
     call = typeof body?.call === 'string' && /^[\w-]{1,80}$/.test(body.call) ? body.call : null;
     override = body?.model;
@@ -467,16 +475,22 @@ api.post('/bots/:id/messages', bodyLimit({
     selection = chosen;
   }
   const { provider, model, effort } = selection;
+  const replyTo = typeof replySeq === 'number' && Number.isInteger(replySeq) ? replyQuote(b.id, replySeq, current.name) : null;
+  const forwarded = typeof forwardedFrom === 'string' && forwardedFrom.trim() ? { name: forwardedFrom.trim().slice(0, 80) } : null;
+  // The bot sees the quote or forward note in front of the message; the chat shows them as a quote or a label.
+  const notes = (replyTo ? `[The user is replying to ${replyTo.role === 'user' ? 'their own earlier message' : `an earlier message from ${replyTo.name}`}: "${replyTo.text}"]\n` : '')
+    + (forwarded ? `[The user forwarded this message from their chat with ${forwarded.name}.]\n` : '');
   const row = appendRow(b.id, 'message', {
     type: 'message', role: 'user', text,
+    ...(replyTo ? { replyTo } : {}), ...(forwarded ? { forwarded } : {}),
     ...(call ? { from: { kind: 'voice' as const, id: call, name: 'Voice call' } } : {}),
     ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),
   }, attachments);
   // Group chats dispatch to their member Bots instead of running their own loop.
-  if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, attachments);
+  if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, attachments, notes);
   else {
     const voice = call ? { call, seq: row.seq, fast: !override } : undefined;
-    const turn = { type: 'user' as const, text, attachments, generation: row.generation, voice,
+    const turn = { type: 'user' as const, text: notes + text, attachments, generation: row.generation, voice,
       allowSubscriptionTeam: isDesktop && !remoteAccessFor(c) };
     enqueue(b.id, provider === 'local'
       ? { ...turn, local: { model, label: selection.label, effort: voice?.fast ? 'low' : effort ?? 'medium' } }
@@ -484,6 +498,15 @@ api.post('/bots/:id/messages', bodyLimit({
   }
   return c.json({ row });
 });
+
+/** A short quote of message `seq` in this chat, for Reply. Taken here so the client can't invent what was said. */
+function replyQuote(botId: string, seq: number, botName: string): NonNullable<MessageBody['replyTo']> | null {
+  const target = getRow(botId, seq)?.body;
+  if (target?.type !== 'message') return null;
+  const text = target.text.replace(/\s+/g, ' ').trim().slice(0, 400) || (target.attachments?.length ? 'Attachment' : '');
+  if (!text) return null;
+  return { seq, role: target.role, name: target.role === 'user' ? 'You' : target.from?.name ?? botName, text };
+}
 
 /** Check a model picked for voice calls the same way the chat model picker does. */
 async function callModel(raw: unknown): Promise<ChatModelSelection | null> {

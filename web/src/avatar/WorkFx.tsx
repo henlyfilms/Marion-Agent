@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { WORK_FX_STYLES, type WorkFxChoice } from '@shared/avatarShapes';
 import { useStore } from '../store';
 
 /**
@@ -13,7 +14,7 @@ import { useStore } from '../store';
  * elements, so the browser runs it on the GPU compositor with no per-frame painting.
  */
 
-export const FX_STYLES = ['halo', 'orbit', 'comet', 'ripple', 'sparkle', 'swirl'] as const;
+export const FX_STYLES = WORK_FX_STYLES;
 export type FxStyle = typeof FX_STYLES[number];
 const FAMILIES = ['rainbow', 'aurora', 'neon', 'candy'] as const;
 type Family = typeof FAMILIES[number];
@@ -100,7 +101,7 @@ export interface WorkFxState { style: FxStyle; eyes: string; spin: number; color
  * Drives the aura for one avatar. It stays mounted briefly after work ends (`leaving`) so it can fade out
  * instead of vanishing. Returns null while idle, and does no store work for avatars that aren't working.
  */
-export function useWorkFx(working: boolean, seed: string, fill: string, size: number): WorkFxState | null {
+export function useWorkFx(working: boolean, seed: string, fill: string, size: number, choice: WorkFxChoice = 'auto'): WorkFxState | null {
   const rank = useStore(s => working ? rankOf(s.bots, seed) : -1);
   const [lingering, setLingering] = useState(false);
   useEffect(() => {
@@ -109,7 +110,7 @@ export function useWorkFx(working: boolean, seed: string, fill: string, size: nu
     return () => clearTimeout(timer);
   }, [working]);
   const last = useRef<{ fx: ReturnType<typeof fxFor>; colors: string[] }>();
-  if (working) { const fx = fxFor(seed, rank); last.current = { fx, colors: fxColors(fill, fx.family, fx.hueSeed) }; }
+  if (working) { const fx = fxFor(seed, rank); if (choice !== 'auto') fx.style = choice; last.current = { fx, colors: fxColors(fill, fx.family, fx.hueSeed) }; }
   const shown = working || lingering ? last.current : undefined;
   if (!shown) return null;
   return { style: shown.fx.style, eyes: shown.fx.eyes, spin: shown.fx.spin, colors: shown.colors, size, leaving: !working };

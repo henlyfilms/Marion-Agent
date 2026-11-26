@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type TouchEvent } from 'react';
 import { leaveGhost } from '../lib/exitGhost';
 import { createPortal } from 'react-dom';
 import { MenuItems, type MenuItem } from './Menu';
@@ -14,10 +14,40 @@ interface MenuTarget {
 const ContextMenu = createContext<(target: MenuTarget) => void>(() => {});
 const nativeTargets = 'a[href], input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 
+const LONG_PRESS_MS = 450;
+const PRESS_SLOP = 10;
+let press: { timer: number; x: number; y: number } | null = null;
+let lastOpenAt = 0;
+const cancelPress = () => { if (press) { clearTimeout(press.timer); press = null; } };
+
 export function useContextMenu() {
   const open = useContext(ContextMenu);
-  return (label: string, getItems: () => MenuItem[]) => ({
+  return (label: string, getItems: () => MenuItem[], opts: { longPress?: boolean } = {}) => ({
     'aria-haspopup': 'menu' as const,
+    // iPhone / touch: holding a finger still for ~0.45 s opens the same menu. Moving (scrolling) or lifting early cancels it.
+    ...(opts.longPress ? {
+      onTouchStart(event: TouchEvent<HTMLElement>) {
+        cancelPress();
+        if (event.touches.length !== 1 || (event.target as Element).closest(nativeTargets)) return;
+        const { clientX: x, clientY: y } = event.touches[0];
+        const trigger = event.currentTarget;
+        press = { x, y, timer: window.setTimeout(() => {
+          press = null;
+          const items = getItems();
+          if (!items.length) return;
+          window.getSelection()?.removeAllRanges();
+          navigator.vibrate?.(8);
+          lastOpenAt = Date.now();
+          open({ label, items, trigger, x, y });
+        }, LONG_PRESS_MS) };
+      },
+      onTouchMove(event: TouchEvent<HTMLElement>) {
+        const touch = event.touches[0];
+        if (press && touch && Math.hypot(touch.clientX - press.x, touch.clientY - press.y) > PRESS_SLOP) cancelPress();
+      },
+      onTouchEnd: cancelPress,
+      onTouchCancel: cancelPress,
+    } : {}),
     onContextMenu(event: MouseEvent<HTMLElement>) {
       if (event.defaultPrevented || (event.target as Element).closest(nativeTargets)) return;
       const items = getItems();
@@ -66,6 +96,8 @@ export function ContextMenuProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!target) return;
     const dismiss = (event: Event) => {
+      // The finger that held down to open the menu is still on the screen for a moment; its wobble must not close it.
+      if (event.type === 'touchmove' && Date.now() - lastOpenAt < 900) return;
       if (!menuRef.current?.contains(event.target as Node)) { leaveGhost(menuRef.current, 180); setTarget(null); }
     };
     document.addEventListener('pointerdown', dismiss, true);
@@ -105,6 +137,8 @@ export function ContextMenuProvider({ children }: { children: ReactNode }) {
   };
 
   const select = async (item: MenuItem) => {
+    // Lifting the finger that held down to open the menu can land a click on an item under it; ignore that one.
+    if (Date.now() - lastOpenAt < 400) return;
     close(true);
     try {
       await item.onSelect();

@@ -56,3 +56,9 @@ export function isAvatarColor(color: unknown): color is string {
 export function isStemColor(color: unknown): color is string {
   return typeof color === 'string' && /^#[a-f0-9]{6}$/i.test(color);
 }
+
+/** Working animations a bot can play around its avatar; 'auto' picks one from the bot's place in the list. */
+export const WORK_FX_STYLES = ['halo', 'orbit', 'comet', 'ripple', 'sparkle', 'swirl'] as const;
+export type WorkFxStyle = typeof WORK_FX_STYLES[number];
+export type WorkFxChoice = WorkFxStyle | 'auto';
+export const isWorkFxChoice = (v: unknown): v is WorkFxChoice => v === 'auto' || (WORK_FX_STYLES as readonly string[]).includes(v as string);

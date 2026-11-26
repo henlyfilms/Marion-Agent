@@ -22,6 +22,8 @@ import { CreateBotModal } from './components/modals/CreateBotModal';
 import { CreateGroupModal } from './components/modals/CreateGroupModal';
 import { SearchModal } from './components/modals/SearchModal';
 import { ScreenshotPicker } from './components/modals/ScreenshotPicker';
+import { ForwardPicker } from './components/modals/ForwardPicker';
+import { useMessageActions } from './lib/messageActions';
 import { isScreenshotShortcut } from './lib/screenshots';
 import { ConfigLayer } from './components/config/ConfigLayer';
 import { TasksView } from './components/config/TasksView';
@@ -50,6 +52,7 @@ function Shell() {
   const detailsOpen = useDetailsOpen();
   const compact = useCompactLayout();
   const modal = useStore((s) => s.modal);
+  const forwarding = useMessageActions((s) => !!s.forward);
   const viewerOpen = useStore((s) => s.viewerOpen);
   const collapsed = useStore((s) => s.sidebarCollapsed);
   const selectedBotId = useStore(s => s.selectedBotId);
@@ -157,6 +160,7 @@ function Shell() {
       {modal === 'group' && <CreateGroupModal />}
       {modal === 'search' && <SearchModal />}
       {modal === 'screenshots' && <ScreenshotPicker />}
+      {forwarding && <ForwardPicker />}
       {modal === 'apps' && <ConnectAppsModal />}
       {modal === 'usage' && <UsageDashboard />}
       {modal === 'team' && <TeamModal />}

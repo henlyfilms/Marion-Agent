@@ -34,7 +34,7 @@ export interface ComputerDetails {
   hibernation: { idleMinutes: number; viewers: number; dryRun: boolean };
 }
 
-export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow' | 'effort' | 'mode' | 'pinned'>>;
+export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow' | 'workFx' | 'effort' | 'mode' | 'pinned'>>;
 
 export interface LocalModels { selected: string; defaultModel: string; models: string[]; reachable: boolean }
 export interface LocalMemory { available: number; total: number }

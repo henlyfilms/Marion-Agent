@@ -1,6 +1,7 @@
 import { orchestrationFor } from './agent/orchestration-settings.js';
 import { saveAttachments, type UploadedAttachment } from './attachments.js';
 import { db, now } from './db.js';
+import { isWorkFxChoice } from './avatarShapes.js';
 import { hub } from './lib/hub.js';
 import type { Bot, LiveState, Row, RowBody, RowKind, Routine, Task } from './types.js';
 import { Cron } from 'croner';
@@ -29,6 +30,7 @@ export function toBot(r: any): Bot {
     avatarStemColor: r.avatar_stem_color,
     avatarGlow: !!r.avatar_glow,
     avatarImage: r.avatar_image || null,
+    workFx: isWorkFxChoice(r.work_fx) ? r.work_fx : 'auto',
     mode: r.mode,
     isPrimary: !!r.is_primary,
     kind: r.kind === 'room' ? 'room' : 'agent',

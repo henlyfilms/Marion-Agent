@@ -14,6 +14,7 @@ import { Icon } from './Icon';
 import { Markdown } from './Markdown';
 import { usageLabel } from '../lib/modelUsage';
 import { useContextMenu } from './ContextMenu';
+import { quoteText, useMessageActions } from '../lib/messageActions';
 
 type Item =
   | { kind: 'divider'; key: string; ts: number }
@@ -65,16 +66,31 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
   const b = row.body as MessageBody;
   const contextMenu = useContextMenu();
   const showTokens = useConfigUI(s => s.showTokenStats);
+  const botName = useStore(s => s.bots.find(bot => bot.id === row.botId)?.name ?? 'Bot');
+  const quoted = b.replyTo;
   return (
-    <div className={`bubble-wrap is-${side}`}>
+    <div className={`bubble-wrap is-${side}`} data-seq={row.seq}>
       <div className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}
         {...contextMenu('Message actions', () => {
           const selection = window.getSelection()?.toString();
+          const who = b.role === 'user' && !b.from ? 'You' : b.from?.name ?? botName;
           return [
             ...(selection ? [{ label: 'Copy selection', onSelect: () => copyText(selection) }] : []),
             ...(b.text ? [{ label: 'Copy message', onSelect: () => copyText(b.text) }] : []),
+            ...(b.text || b.attachments?.length ? [{ label: 'Reply', onSelect: () => useMessageActions.getState().setReply(row.botId, { seq: row.seq, name: who, text: quoteText(b.text) || 'Attachment' }) }] : []),
+            ...(b.text ? [{ label: 'Forward…', onSelect: () => useMessageActions.getState().setForward({ fromBotId: row.botId, fromName: botName, text: b.text }) }] : []),
           ];
-        })}>
+        }, { longPress: true })}>
+        {b.forwarded && <div className="bubble__forwarded">Forwarded from {b.forwarded.name}</div>}
+        {quoted && (
+          <button type="button" className="bubble__reply" title="Show the message" onClick={() => {
+            const target = document.querySelector<HTMLElement>(`.bubble-wrap[data-seq="${quoted.seq}"]`);
+            target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          }}>
+            <span className="bubble__reply-name">{quoted.name}</span>
+            <span className="bubble__reply-text">{quoteText(quoted.text, 160)}</span>
+          </button>
+        )}
         {!!b.attachments?.length && <div className="bubble__attachments">
           {b.attachments.map(file => {
             const url = api.attachmentUrl(row.botId, file.id);

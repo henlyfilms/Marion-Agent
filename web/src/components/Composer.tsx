@@ -19,6 +19,7 @@ import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut
 import { useConfigUI } from '../configStore';
 import { setDetailsOpen, useCompactLayout, useDetailsOpen } from '../lib/layout';
 import { getDraft, setDraft } from '../lib/drafts';
+import { useMessageActions } from '../lib/messageActions';
 import { ATTACH_EVENT, SCREENSHOT_SHORTCUT_LABEL } from '../lib/screenshots';
 
 const MAX_H = 200;
@@ -52,6 +53,7 @@ function DraftAttachment({ file, remove, disabled }: { file: File; remove: () =>
 
 export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const inputId = useId();
+  const reply = useMessageActions(s => s.replies[bot.id]);
   const savingModel = useStore(s => !!s.savingChatModels[bot.id]);
   const [text, renderText] = useState(() => getDraft(bot.id));
   // Persist immediately: a speech callback and a chat switch may batch into the same React commit.
@@ -105,6 +107,9 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     else fileDrafts.delete(bot.id);
   }, [bot.id, files]);
   useEffect(() => { if (!compact) ref.current?.focus(); }, [compact]);
+  // Choosing Reply puts the cursor straight into the box.
+  const replySeq = reply?.seq;
+  useEffect(() => { if (replySeq !== undefined) ref.current?.focus({ preventScroll: true }); }, [replySeq]);
 
   // ⌘I focuses the prompt.
   useEffect(() => {
@@ -121,7 +126,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     discardDictation();
     setSending(true); setError(null);
     try {
-      await api.send(bot.id, t, files);
+      await api.send(bot.id, t, files, reply ? { replyTo: reply.seq } : {});
+      useMessageActions.getState().setReply(bot.id, null);
       setFiles([]);
       fileDrafts.delete(bot.id);
       setText('');
@@ -386,6 +392,16 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       <div className="composer__progress" role="status" data-visible={sending}>
         <span className="loading-dot" aria-hidden="true" />Sending…
       </div>
+      {reply && (
+        <div className="composer-reply" role="group" aria-label="Replying to">
+          <span className="composer-reply__text">
+            <span className="composer-reply__name">Replying to {reply.name}</span>
+            <span className="composer-reply__quote">{reply.text}</span>
+          </span>
+          <button type="button" className="composer-reply__close" aria-label="Cancel reply" title="Cancel reply" disabled={sending}
+            onClick={() => { useMessageActions.getState().setReply(bot.id, null); ref.current?.focus(); }}><Icon name="close" size={12} /></button>
+        </div>
+      )}
       {/* Attachments sit above the model/effort/Team/dictation row. */}
       {files.length > 0 && <ul className="composer-files" aria-label="Draft attachments">
         {files.map((file, index) => <DraftAttachment key={`${file.name}:${file.lastModified}:${index}`} file={file} disabled={sending}

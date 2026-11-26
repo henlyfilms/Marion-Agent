@@ -399,3 +399,32 @@
   padding: inherit; pointer-events: none; white-space: nowrap;
 }
 .chat__pill-ghost > .bot-avatar { flex-shrink: 0; }
+
+/* ---------- message menu: reply quote, forward label, reply bar ---------- */
+.bubble__reply {
+  display: flex; flex-direction: column; gap: 1px; width: 100%; max-width: 100%; margin: 0 0 6px; padding: 4px 8px;
+  text-align: left; border-radius: 8px; border-left: 3px solid currentColor;
+  background: color-mix(in srgb, currentColor 11%, transparent); cursor: pointer; font-size: 12px; line-height: 16px;
+}
+.bubble__reply-name { font-weight: 600; opacity: 0.86; }
+.bubble__reply-text { opacity: 0.74; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.bubble__forwarded { margin: 0 0 4px; font-size: 11.5px; line-height: 15px; font-style: italic; opacity: 0.7; }
+.composer-reply {
+  display: flex; align-items: center; gap: 8px; max-width: 960px; margin: 0 auto 6px; padding: 5px 6px 5px 10px;
+  border-radius: 10px; border: 1px solid var(--color-border-tertiary); border-left: 3px solid var(--bot-action, var(--color-text-secondary));
+  background: var(--color-bg-elevated);
+}
+.composer-reply__text { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12px; line-height: 16px; }
+.composer-reply__name { font-weight: 600; color: var(--color-ink); }
+.composer-reply__quote { color: var(--color-text-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.composer-reply__close { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 7px; }
+.composer-reply__close:hover:not(:disabled) { background: var(--color-bg-hover); }
+.forward-preview {
+  padding: 8px 10px; border-radius: 10px; border-left: 3px solid var(--color-border-tertiary);
+  background: var(--color-bg-subtle); font-size: 13px; line-height: 18px; color: var(--color-text-secondary); overflow-wrap: anywhere;
+}
+.forward-pick__busy { font-size: 12px; color: var(--color-text-secondary); }
+/* On touch screens a long press opens the message menu, so the system's own callout / text selection must stay out of the way. */
+@media (hover: none) {
+  .bubble { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+}

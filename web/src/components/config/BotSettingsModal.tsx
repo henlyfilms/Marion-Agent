@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AvatarColor, AvatarShape, Bot, Memory, Routine, Skill } from '@shared/types';
+import type { WorkFxChoice } from '@shared/avatarShapes';
 import { BotAvatar, BotAvatarFor } from '../../avatar/BotAvatar';
 import { BotShapePicker } from '../../avatar/BotShapePicker';
 import { BotColorPicker } from '../../avatar/BotColorPicker';
@@ -447,8 +448,12 @@ function LookPicker({ shape, color, stemColor, glow, onShape, onColor, onStem, o
 
 // ---------------------------------------------------------------------------
 
-type Look = Pick<Draft, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow'> & { avatarImage: string | null };
-const lookOf = (b: Bot): Look => ({ avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, avatarGlow: !!b.avatarGlow, avatarImage: b.avatarImage ?? null });
+type Look = Pick<Draft, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow'> & { avatarImage: string | null; workFx: WorkFxChoice };
+const WORK_FX_OPTIONS: { value: WorkFxChoice; label: string }[] = [
+  { value: 'auto', label: 'Automatic' }, { value: 'halo', label: 'Halo' }, { value: 'orbit', label: 'Orbit' }, { value: 'comet', label: 'Comet' },
+  { value: 'ripple', label: 'Ripple' }, { value: 'sparkle', label: 'Sparkle' }, { value: 'swirl', label: 'Swirl' },
+];
+const lookOf = (b: Bot): Look => ({ avatarShape: b.avatarShape, avatarColor: b.avatarColor, avatarStemColor: b.avatarStemColor, avatarGlow: !!b.avatarGlow, avatarImage: b.avatarImage ?? null, workFx: b.workFx ?? 'auto' });
 
 /** Any photo → a 256px square, centre-cropped, small enough to keep with the Bot (WebP, or PNG where WebP can't be made). */
 async function squarePhoto(file: File): Promise<string> {
@@ -469,6 +474,7 @@ async function squarePhoto(file: File): Promise<string> {
 function ThemeTab({ bot }: { bot: Bot }) {
   const [look, setLook] = useState<Look>(() => lookOf(bot));
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
   const base = lookOf(bot);
   const changed = (Object.keys(look) as (keyof Look)[]).filter((k) => look[k] !== base[k]);
@@ -499,7 +505,7 @@ function ThemeTab({ bot }: { bot: Bot }) {
       </div>
       <section className="cfg-section">
         <div className="cfg-look">
-          <BotAvatar shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow} image={look.avatarImage} size={72} />
+          <BotAvatar shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow} image={look.avatarImage} size={72} working={preview} fxSeed={bot.id} workFx={look.workFx} />
           <div className="cfg-look__text">
             <div className="cfg-look__name">{bot.name}</div>
             <div className="cfg-look__actions">
@@ -517,6 +523,12 @@ function ThemeTab({ bot }: { bot: Bot }) {
         </div>
         <LookPicker shape={look.avatarShape} color={look.avatarColor} stemColor={look.avatarStemColor} glow={look.avatarGlow}
           onShape={(s) => setLook((d) => ({ ...d, avatarShape: s, avatarImage: null }))} onColor={(c) => put('avatarColor', c)} onStem={(c) => put('avatarStemColor', c)} onGlow={(on) => put('avatarGlow', on)} />
+        <Field label="Working animation" hint={`Plays around ${bot.name} while it works, in the sidebar and at the top of the chat. Automatic gives each bot its own.`}>
+          <Segmented label="Working animation" value={look.workFx} options={WORK_FX_OPTIONS} onChange={(v) => { put('workFx', v); setPreview(true); }} />
+          <div className="cfg-look__actions">
+            <button type="button" className="cfg-btn cfg-btn--secondary" aria-pressed={preview} onClick={() => setPreview((on) => !on)}>{preview ? 'Stop preview' : 'Preview'}</button>
+          </div>
+        </Field>
       </section>
       <div className={`cfg-savebar${dirty ? ' is-dirty' : ''}`}>
         <span className={`cfg-savebar__note${note?.tone === 'error' ? ' is-error' : ''}`} role="status">{note?.text ?? (dirty ? 'Unsaved changes' : '')}</span>
