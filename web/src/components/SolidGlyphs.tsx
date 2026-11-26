@@ -16,9 +16,10 @@ export function MicSolid({ size = 15 }: { size?: number }) {
   const { box, viewBox } = evenBox(size);
   return (
     <svg width={box} height={box} viewBox={viewBox} fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" aria-hidden>
-      <rect x="8.25" y="1.75" width="7.5" height="13" rx="3.75" fill="currentColor" stroke="none" />
-      <path d="M18.5 11a6.5 6.5 0 0 1-13 0" />
-      <path d="M12 17.5V22" />
+      {/* Outline runs 1..23 (stand end + round cap) so the drawn mic is centred top to bottom (owner, Nov 25). */}
+      <rect x="8.25" y="1" width="7.5" height="13" rx="3.75" fill="currentColor" stroke="none" />
+      <path d="M18.5 10.25a6.5 6.5 0 0 1-13 0" />
+      <path d="M12 16.75V21.9" />
     </svg>
   );
 }

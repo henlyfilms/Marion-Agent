@@ -95,7 +95,7 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
           const text = await voiceApi.transcribe(new Blob(chunks, { type: media.mimeType || mime || 'audio/webm' }), cb.current.language, signal, cb.current.native);
           if (!signal.aborted) {
             if (text) cb.current.onText(text);
-            else cb.current.onError('No speech heard. Try again closer to the microphone.');
+            else cb.current.onError('No speech heard'); // short, so it never wraps the model row (owner, Nov 25)
           }
         } catch (cause) {
           if (!signal.aborted) cb.current.onError((cause as Error).message || 'Transcription failed');

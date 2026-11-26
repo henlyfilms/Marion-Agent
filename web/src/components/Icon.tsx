@@ -37,7 +37,7 @@ const ICONS: Record<IconName, { icon: LucideIcon; filled?: boolean; lift?: numbe
   refresh: { icon: RotateCw },
   save: { icon: Bookmark },
   search: { icon: Search },
-  share: { icon: Share, lift: 1.5 }, // the wide tray pulls its visual centre ~1.8 units down
+  share: { icon: Share }, // centred on its outline like every other icon (owner, Nov 25: the old 1px lift read as "off by a couple pixels")
   sidebar: { icon: PanelLeft },
   slack: { icon: Hash },
   sort: { icon: ListOrdered },

@@ -1,5 +1,5 @@
 /* Team mode (multi-model orchestration) */
-.composer__models { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.composer__models { position: relative; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .composer__models .chat-model { min-width: 0; flex: 0 1 auto; }
 .team-trigger { flex: none; color: var(--color-text-secondary); transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease; }
 .team-trigger.is-on { color: var(--bot-action, var(--color-primary)); border-color: color-mix(in srgb, var(--bot-action, var(--color-primary)) 45%, transparent); }
@@ -54,9 +54,12 @@
   .team-select { flex-basis: 100%; }
 }
 
-/* Dictation status ("Listening…", "No speech heard…") sits at the right end of the model row, right above the mic. */
+/* Dictation status ("Listening…", "No speech heard") floats at the right end of the model row, right above the mic.
+   It takes no room in the row, so showing it never wraps the row and lifts the model, effort and Team buttons
+   (owner, Nov 25: "it moves the UI up"). */
 .mic-note {
-  display: inline-flex; align-items: center; gap: 7px; margin-left: auto; max-width: min(360px, 60%); min-height: 28px;
+  position: absolute; right: 0; bottom: 0; z-index: 2;
+  display: inline-flex; align-items: center; gap: 7px; max-width: min(360px, 100%); min-height: 28px;
   padding: 4px 10px; border-radius: var(--radius-full); font-size: 12px; line-height: 16px;
   background: var(--color-bg-pane); color: var(--color-text-secondary);
   box-shadow: var(--shadow-pill), inset 0 0 0 0.5px var(--color-border-tertiary);
@@ -76,5 +79,9 @@
 .mic-note__wave i:nth-child(2) { animation-delay: 150ms; }
 .mic-note__wave i:nth-child(3) { animation-delay: 300ms; }
 @keyframes mic-wave { from { transform: scaleY(0.3); } to { transform: scaleY(1); } }
-@media (max-width: 630px) { .mic-note { max-width: 100%; } }
+@media (max-width: 630px) {
+  .mic-note { max-width: 100%; }
+  /* Phone: the free-memory note pushed Team onto a second line; the model row stays one line (owner, Nov 25). */
+  .composer__models .chat-model__memory { display: none; }
+}
 .mic-note:not([data-visible="true"]) .mic-note__wave i { animation-play-state: paused; }

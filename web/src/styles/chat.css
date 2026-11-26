@@ -292,7 +292,7 @@
   .chat__header .sidebar-back { display: inline-flex; align-self: center; }
   .conversation-actions { right: calc(env(safe-area-inset-right) + 8px); top: calc(var(--native-titlebar-height, 0px) + env(safe-area-inset-top) + 6px); }
   .conversation-actions .icon-btn { width: 44px; height: 44px; flex: 0 0 44px; }
-  .chat .sidebar-back { border-radius: 50%; border: 1px solid var(--color-border-tertiary); }
+  .chat .sidebar-back { border-radius: 50%; }
   .chat-model__trigger { min-height: 36px; }
   .transcript { padding: 8px 10px 12px; }
   .bubble-wrap { max-width: 93%; }

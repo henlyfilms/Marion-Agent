@@ -3,8 +3,9 @@
 // and on whole pixels. Run at both pixel densities: DPR=1 (non-Retina monitor) and DPR=2 (Retina).
 // Usage: npm run build && DPR=1 BROWSER_EXECUTABLE=... node tests/shot.mjs <outDir> tests/shot-center-all.mjs
 const TOL = 0.26; // css px
-// Deliberate optical offsets: Share's wide tray makes it read low, so it is lifted 1px (owner, Nov 24-25).
-const OPTICAL = { Share: { dx: 0, dy: -1 } };
+// No optical offsets any more: Share's old 1px lift read as "off by a couple pixels" (owner, Nov 25), so every
+// icon is centred on its outline. For zoomed windows (90%, 110%) see tests/shot-center-zoom.mjs.
+const OPTICAL = {};
 
 async function sweep(page, label, bad, seen) {
   const handles = await page.$$('button');
@@ -51,7 +52,7 @@ async function sweep(page, label, bad, seen) {
 }
 
 export default async function (page) {
-  await page.addStyleTag({ content: '.shot-bare { border-color: transparent !important; box-shadow: none !important; background: #000 !important; color: #fff !important; }' });
+  await page.addStyleTag({ content: '.shot-bare { border-color: transparent !important; box-shadow: none !important; background: #000 !important; color: #fff !important; border-color: transparent !important; }' });
   const bad = [], seen = [];
   for (const width of (process.env.WIDTHS ?? '1320,1287,1451,1517').split(',').map(Number)) {
     await page.setViewportSize({ width, height: 860 });

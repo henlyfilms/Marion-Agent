@@ -25,14 +25,17 @@ a { color: inherit; }
 .boot { height: 100%; background: var(--color-bg-chrome); }
 
 /* ---------- shared controls ---------- */
+/* Icon buttons are just the glyph; the round fill shows only on hover, while pressed, or while their menu or
+   menu is open, like the sidebar toggle (owner, Nov 25: "just have it be the graphic itself"). The border stays
+   (see-through) so every size and position is unchanged. */
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 36px; height: 36px; border-radius: var(--radius-full);
-  background: var(--color-bg-pane); border: 0.5px solid var(--color-border-tertiary);
+  background: transparent; border: 0.5px solid transparent;
   color: var(--color-text-primary); flex-shrink: 0;
   transition: background-color 120ms var(--ease-out);
 }
-.icon-btn:hover { background: var(--color-bg-elevated-hover); }
+.icon-btn:hover:not(:disabled), .icon-btn:active:not(:disabled), .icon-btn[aria-haspopup][aria-expanded="true"] { background: var(--color-bg-hover); }
 .icon-btn--bordered { border-width: 1px; }
 .icon-btn--sm { width: 32px; height: 32px; background: transparent; border: 0; color: var(--color-text-secondary); }
 .icon-btn--sm:hover { background: var(--color-bg-hover); color: var(--color-ink); }

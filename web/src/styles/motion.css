@@ -136,7 +136,7 @@ button:active, [role="button"]:active { transform: none; }
     justify-content: flex-start; gap: 8px; padding-inline: 13px;
     transition: padding var(--dur-base) var(--ease-ios), gap var(--dur-base) var(--ease-ios);
   }
-  .sidebar.is-collapsed .sidebar__footer { justify-content: flex-start; gap: 0; padding-inline: 13px 19px; }
+  .sidebar.is-collapsed .sidebar__footer { justify-content: flex-start; gap: 0; padding-inline: calc(13px + var(--rail-extra, 0px)) 19px; }
   .sidebar__footer .account--desktop { display: flex; flex: 1 1 0; min-width: 0; overflow: hidden; transition: opacity 150ms var(--ease-out); }
   .sidebar.is-collapsed .account--desktop { display: flex; opacity: 0; pointer-events: none; }
 }

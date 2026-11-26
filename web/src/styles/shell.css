@@ -10,10 +10,28 @@
  * drag the window; the sidebar's first row starts after the window buttons (close, minimise, zoom at x 15–68,
  * centred 20px down), and its buttons line up with them.
  */
-:root[data-desktop-window] { --native-titlebar-height: 0px; --window-buttons-width: 78px; --window-buttons-row: 40px; }
+/*
+ * The window buttons are drawn by macOS at a fixed size, but the page zooms (View → Zoom In/Out). main.tsx keeps
+ * --window-zoom current, so the spacing around them is set in screen points and never crowds or drifts when zoomed
+ * (owner, Nov 25). Whole pixels only, so icons stay sharp.
+ */
+:root { --window-zoom: 1; }
+:root[data-desktop-window] {
+  --native-titlebar-height: 0px;
+  --window-buttons-width: round(up, calc(78px / var(--window-zoom)), 1px);
+  --window-buttons-row: round(nearest, calc(40px / var(--window-zoom)), 1px);
+}
 /* Every control can be clicked even where it sits over a draggable strip (share, side panel, settings). */
 :root[data-desktop-window] :is(.sidebar__titlebar, .chat__header, .details__top, .sessions-view__header) { -webkit-app-region: drag; }
 :root[data-desktop-window] :is(button, a, input, textarea, select, label, [role="button"], [role="menu"], .menu, .chat__pill-anchor, .conversation-actions) { -webkit-app-region: no-drag; }
+/* The Mac window applies drag strips in page order, so a later strip can re-cover earlier buttons. The details
+   panel's strip also leaves a no-drag hole where Share and the side-panel button float over it (owner, Nov 25:
+   "they don't work at all"), so the buttons work whatever the page order. */
+:root[data-desktop-window] .details__top { position: relative; }
+:root[data-desktop-window] .details__top::after {
+  content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: calc(28px + var(--conversation-actions-width));
+  -webkit-app-region: no-drag; pointer-events: none;
+}
 @media (min-width: 701px) {
   /*
    * The window buttons (close, minimise, zoom: x 15–67, centred 20px down) get the whole top strip of the
@@ -26,8 +44,16 @@
   :root[data-desktop-window] .sidebar__titlebar :is(.sidebar-toggle, .icon-btn) { width: 36px; height: 36px; flex-basis: 36px; }
   :root[data-desktop-window] .sidebar__brand { visibility: hidden; }
   :root[data-desktop-window] .sidebar__search { margin-top: 8px; }
-  :root[data-desktop-window] .sidebar.is-collapsed .sidebar__titlebar { padding: var(--window-buttons-row) 0 0 19px; justify-content: flex-start; }
+  :root[data-desktop-window] .sidebar.is-collapsed .sidebar__titlebar { padding: var(--window-buttons-row) 0 0 calc(19px + var(--rail-extra)); justify-content: flex-start; }
   :root[data-desktop-window] .sidebar.is-collapsed :is(.sidebar__brand, .sidebar__controls) { display: none; }
+  /*
+   * Collapsed rail: always wide enough for the window buttons with a little room after them (the owner's screenshot:
+   * about 78 screen points), at every zoom. Zoomed out, the rail grows in page pixels and everything in it shifts
+   * right by --rail-extra so the toggle, avatars and footer stay centred. Even steps keep that shift whole pixels.
+   */
+  :root[data-desktop-window] .sidebar { --rail-width: max(74px, round(up, calc(78px / var(--window-zoom)), 2px)); }
+  :root[data-desktop-window] .sidebar__titlebar { padding-left: calc(19px + var(--rail-extra)); }
+  .sidebar.is-collapsed :is(.sidebar__scroll, .sidebar__tools) { padding-inline: calc(8px + var(--rail-extra)) calc(10px + var(--rail-extra)); } /* avatars line up with the toggle */
 }
 
 .sidebar {
@@ -36,7 +62,9 @@
   background: var(--color-bg-sidebar); border-right: 1px solid var(--color-border-tertiary);
   transition: width var(--panel-duration) var(--ease-out);
 }
-.sidebar.is-collapsed { width: 74px; }
+.sidebar { --rail-width: 74px; --rail-extra: calc((var(--rail-width) - 74px) / 2); }
+.sidebar.is-collapsed { width: var(--rail-width); }
+.sidebar__scroll, .sidebar__tools { transition: padding var(--panel-duration) var(--ease-out); }
 .sidebar__titlebar {
   display: flex; align-items: center; gap: 10px; min-height: 62px; flex-shrink: 0;
   padding: 8px 14px;
@@ -208,8 +236,7 @@
   .sidebar .account--mobile { flex: 0 0 auto; }
   .sidebar .account--mobile .account__btn { min-height: 44px; min-width: 44px; padding: 0; justify-content: center; }
   .sidebar .sidebar__mobile-search, .sidebar .sidebar__create, .sidebar .sidebar__sort-trigger {
-    display: grid; place-items: center; width: 44px; height: 44px; background: var(--color-bg-pane);
-    border: 1px solid var(--color-border-tertiary); border-radius: 50%;
+    display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; /* bare glyphs, fill on press */
   }
   .sidebar__scroll { order: 1; padding: 0 12px 8px; overscroll-behavior-y: contain; }
   .sidebar__featured { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 8px 0 14px; }

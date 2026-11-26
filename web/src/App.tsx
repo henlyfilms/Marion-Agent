@@ -134,12 +134,14 @@ function Shell() {
     <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${showingChat ? ' has-mobile-chat' : ''}${popping ? ' is-popping' : ''}${detailsOpen && hasDetails ? ' has-details' : ''}`}>
       <Sidebar />
       {view === 'tasks' ? <TasksView /> : view === 'sessions' ? <SessionsView /> : <ChatView />}
-      {hasDetails && <ConversationActions key={selectedBotId} detailsOpen={detailsOpen} />}
       {hasDetails && (
         <div className="details-slot" aria-hidden={!detailsOpen} ref={node => { if (node) node.inert = !detailsOpen; }}>
           <DetailsPanel open={detailsOpen} />
         </div>
       )}
+      {/* After the details panel on purpose: the Mac window applies drag strips in page order, so the panel's
+          draggable top strip, coming later, swallowed clicks on Share and the side-panel button (owner, Nov 25). */}
+      {hasDetails && <ConversationActions key={selectedBotId} detailsOpen={detailsOpen} />}
       {modal === 'create' && <CreateBotModal />}
       {modal === 'group' && <CreateGroupModal />}
       {modal === 'search' && <SearchModal />}
