@@ -1,7 +1,7 @@
 import { ArrowDownToLine } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import type { Bot, ChatSort } from '@shared/types';
-import { orderChats } from '@shared/chat-order';
+import { orderChats, tier } from '@shared/chat-order';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { useConfigUI } from '../configStore';
 import { api } from '../lib/api';
@@ -238,19 +238,18 @@ export function Sidebar() {
     if (!pendingMove) return ordered;
     const source = ordered.find(bot => bot.id === pendingMove.id);
     const target = ordered.find(bot => bot.id === pendingMove.targetId);
-    if (!source || !target || source.pinned !== target.pinned) return ordered;
+    if (!source || !target || tier(source) !== tier(target)) return ordered;
     const next = ordered.filter(bot => bot !== source);
     next.splice(next.indexOf(target) + Number(pendingMove.after), 0, source);
     return next;
   }, [bots, sort, pendingMove]);
   const featured = useMemo(() => {
     if (sort === 'custom' || pendingMove) return [];
-    const primary = sorted.find(bot => bot.isPrimary);
-    return [...(primary ? [primary] : []), ...sorted.filter(bot => !bot.isPrimary && bot.pinned)].slice(0, 3);
+    return sorted.filter(bot => tier(bot) < 3).slice(0, 3);
   }, [sorted, sort, pendingMove]);
 
   const moveItems = (bot: Bot): MenuItem[] => {
-    const peers = sorted.filter(other => other.pinned === bot.pinned);
+    const peers = sorted.filter(other => tier(other) === tier(bot));
     const index = peers.indexOf(bot);
     const previous = peers[index - 1];
     const next = peers[index + 1];
@@ -378,7 +377,7 @@ export function Sidebar() {
         </div>}
         <div className="bot-list" ref={list} {...handlers}>
           {sorted.map(bot => (
-            <div key={bot.id} data-chat-id={bot.id} data-starred={bot.pinned} className={featured.includes(bot) ? 'is-featured' : undefined}>
+            <div key={bot.id} data-chat-id={bot.id} data-starred={bot.pinned} data-tier={tier(bot)} className={featured.includes(bot) ? 'is-featured' : undefined}>
               {renderChat(bot, collapsed ? 'rail' : 'row')}
             </div>
           ))}

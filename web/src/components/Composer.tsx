@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
-import { Activity, BarChart3, Brain, Clapperboard, Eraser, FileText, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Brain, Eraser, FileText, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
 import { featuresApi, formatTokens, useFeatureUI } from '../lib/featuresApi';
-import { MicSolid, PhoneSolid } from './SolidGlyphs';
+import { MicSolid, PhoneSolid, ScreenRecordGlyph } from './SolidGlyphs';
 import type { Bot, ChatModel } from '@shared/types';
 import { configApi } from '../lib/configApi';
 import { callModelFor, chatCallModel, defaultCallModel, endLocalCall, isLocalCallActive, setChatCallModel, setDefaultCallModel, startLocalCall, useLocalCall } from '../voice/localCall';
@@ -307,7 +307,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     { label: '/call', detail: `Start a voice call with ${displayName(bot)}`, icon: <Phone size={15} />, onSelect: openCall },
     { label: '/dictate', detail: 'Toggle dictation', icon: <Mic size={15} />, onSelect: toggleDictation },
     { label: '/attach', detail: 'Add files or photos', icon: <Paperclip size={15} />, onSelect: chooseFiles },
-    ...(room ? [] : [{ label: '/teach', detail: 'Teach by screen recording', icon: <Clapperboard size={15} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
+    ...(room ? [] : [{ label: '/teach', detail: 'Teach by screen recording', icon: <ScreenRecordGlyph size={15} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
     { label: '/details', detail: detailsOpen ? 'Hide the side panel' : 'Show the side panel', icon: <PanelRight size={15} />, onSelect: () => setDetailsOpen(!detailsOpen) },
     { label: '/bot', detail: `${displayName(bot)}’s settings, skills and memories`, icon: <Sliders size={15} />, onSelect: () => useConfigUI.getState().openBotSettings(bot.id) },
     { label: '/apps', detail: 'Connect apps', icon: <Activity size={15} />, onSelect: () => setModal('apps') },
@@ -439,7 +439,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
                 onClose={() => setMenu(null)}
                 items={menu === 'commands' ? commands.map(command => ({ ...command, onSelect: () => runCommand(command) })) : [
                   { label: 'Add files or photos', icon: <Paperclip size={16} />, onSelect: chooseFiles },
-                  ...(bot.kind === 'room' ? [] : [{ label: 'Teach by screen recording', icon: <Clapperboard size={16} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
+                  ...(bot.kind === 'room' ? [] : [{ label: 'Teach by screen recording', icon: <ScreenRecordGlyph size={16} />, onSelect: () => useFeatureUI.getState().set({ teachBotId: bot.id }) }]),
                   { label: 'Slash commands', icon: <SquareSlash size={16} />, onSelect: () => setMenu('commands') },
                 ]}
               />
@@ -492,7 +492,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             onPointerCancel={() => { if (micPress.current?.started) discardDictation(); micPress.current = undefined; }}
             onContextMenu={event => { event.preventDefault(); event.stopPropagation(); showInputs(); }}
           >
-            <MicSolid size={15} />
+            <MicSolid size={15} fill={28} />
           </button>
           {audioMenu && <Menu label="Audio input" placement="above" align="right" className="microphone-menu" onClose={() => setAudioMenu(false)} items={[
             { label: 'System default', checked: selectedInput === '', onSelect: () => selectMic('') },

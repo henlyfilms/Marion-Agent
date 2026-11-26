@@ -22,6 +22,8 @@ export interface Bot {
   avatarStemColor: string | null;
   /** Soft bloom around the avatar in its own color. */
   avatarGlow?: boolean;
+  /** Uploaded photo (data URL) shown instead of the berry; null = use the berry. */
+  avatarImage?: string | null;
   mode: 'personal' | 'teammate';
   isPrimary: boolean;
   /** 'room' = group chat (members answer instead of the bot itself). */

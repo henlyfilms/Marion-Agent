@@ -25,7 +25,7 @@ import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
 import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type Toolkit } from './types.js';
-import { orderChats } from './chat-order.js';
+import { orderChats, tier } from './chat-order.js';
 import { isAvatarColor, isBerryShape, isStemColor } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
 
@@ -267,7 +267,7 @@ api.put('/bots/order', async (c) => {
       if (move) {
         const source = bots.find(bot => bot.id === body.id);
         const target = bots.find(bot => bot.id === body.targetId);
-        if (!source || !target || source.id === target.id || source.pinned !== target.pinned) return null;
+        if (!source || !target || source.id === target.id || tier(source) !== tier(target)) return null;
         ordered = ordered.filter(bot => bot.id !== source.id);
         ordered.splice(ordered.indexOf(target) + Number(body.after), 0, source);
       }
@@ -306,12 +306,16 @@ api.patch('/bots/:id', async (c) => {
   if (p.effort !== undefined && !localEfforts.some(effort => effort === p.effort)) {
     return c.json({ error: 'Choose a supported local effort.' }, 400);
   }
+  if (p.avatarImage !== undefined && p.avatarImage !== null
+    && !(typeof p.avatarImage === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(p.avatarImage) && p.avatarImage.length <= 600_000)) {
+    return c.json({ error: 'Choose a PNG, JPEG or WebP photo under 400 KB.' }, 400);
+  }
   if (p.pinned !== undefined && typeof p.pinned !== 'boolean') return c.json({ error: 'Choose whether to star this chat.' }, 400);
   if (p.role !== undefined && p.role !== null && p.role !== 'executive') return c.json({ error: 'Choose executive or no role.' }, 400);
   if (p.compactAtTokens !== undefined && p.compactAtTokens !== null && !(Number.isInteger(p.compactAtTokens) && p.compactAtTokens >= 0 && p.compactAtTokens <= 1_000_000)) {
     return c.json({ error: 'Choose a compaction size between 0 and 1,000,000 tokens.' }, 400);
   }
-  const cols: Record<string, string> = { role: 'role', compactAtTokens: 'compact_at_tokens', name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', avatarGlow: 'avatar_glow', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
+  const cols: Record<string, string> = { role: 'role', compactAtTokens: 'compact_at_tokens', name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', avatarStemColor: 'avatar_stem_color', avatarGlow: 'avatar_glow', avatarImage: 'avatar_image', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
   const changes = Object.entries(cols).filter(([key]) => p[key] !== undefined);
   if (changes.length === 1 && changes[0][0] === 'pinned') {
     db.prepare('UPDATE bots SET pinned=? WHERE id=?').run(Number(p.pinned), b.id);
@@ -373,6 +377,16 @@ api.post('/bots/:id/primary', (c) => {
   const b = ownBot(user.id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   db.prepare('UPDATE bots SET is_primary = (id = ?) WHERE user_id=?').run(b.id, user.id);
+  hub.emit(user.id, { type: 'roster' });
+  return c.json({ ok: true });
+});
+
+/** Turn Primary off again (owner, Nov 25): no Bot is primary until another one is made primary. */
+api.delete('/bots/:id/primary', (c) => {
+  const user = c.get('user');
+  const b = ownBot(user.id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  db.prepare('UPDATE bots SET is_primary = 0 WHERE id=?').run(b.id);
   hub.emit(user.id, { type: 'roster' });
   return c.json({ ok: true });
 });

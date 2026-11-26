@@ -18,7 +18,7 @@ import { SegmentPill } from './SegmentPill';
 import { botMenuItems } from './botMenuItems';
 import { setDetailsOpen } from '../lib/layout';
 import { featuresApi, useFeatureUI } from '../lib/featuresApi';
-import { Clapperboard } from 'lucide-react';
+import { ScreenRecordGlyph } from './SolidGlyphs';
 import { ModelUsage } from './features/ModelUsage';
 import { ContextCard } from './features/ContextCard';
 
@@ -234,7 +234,7 @@ export function DetailsPanel({ open }: { open: boolean }) {
                 <ComputerCard bot={bot} open={open} />
                 <div className="panel-card panel-card--teach">
                   <button type="button" className="panel-row panel-row--link" onClick={() => useFeatureUI.getState().set({ teachBotId: bot.id })}>
-                    <span className="panel-row__glyph"><Clapperboard size={14} strokeWidth={1.8} /></span>
+                    <span className="panel-row__glyph"><ScreenRecordGlyph size={14} strokeWidth={1.8} /></span>
                     <span className="panel-row__title" style={{ flex: 1 }}>Teach by screen recording</span>
                     <Icon name="chev_right" size={12} opacity={0.56} />
                   </button>

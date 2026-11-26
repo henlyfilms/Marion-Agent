@@ -70,6 +70,10 @@
 
 .cfg-look { display: flex; align-items: center; gap: 16px; }
 .cfg-look__text { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.cfg-look__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cfg-upload { position: relative; cursor: pointer; }
+.cfg-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.cfg-upload:focus-within { box-shadow: 0 0 0 2px var(--color-border-focus); }
 .cfg-look__name { font-size: 17px; font-weight: 500; line-height: 24px; color: var(--color-text-primary); }
 .cfg-picker { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 14px; background: var(--color-bg-chrome); border: 0.5px solid var(--color-border-tertiary); }
 

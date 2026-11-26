@@ -24,6 +24,8 @@
 /* Every control can be clicked even where it sits over a draggable strip (share, side panel, settings). */
 :root[data-desktop-window] :is(.sidebar__titlebar, .chat__header, .details__top, .sessions-view__header) { -webkit-app-region: drag; }
 :root[data-desktop-window] :is(button, a, input, textarea, select, label, [role="button"], [role="menu"], .menu, .chat__pill-anchor, .conversation-actions) { -webkit-app-region: no-drag; }
+/* While a menu is open the strips take clicks (so clicking beside the menu closes it) instead of dragging. */
+:root[data-desktop-window][data-open-menus] :is(.sidebar__titlebar, .chat__header, .details__top, .sessions-view__header) { -webkit-app-region: no-drag; }
 /* The Mac window applies drag strips in page order, so a later strip can re-cover earlier buttons. The details
    panel's strip also leaves a no-drag hole where Share and the side-panel button float over it (owner, Nov 25:
    "they don't work at all"), so the buttons work whatever the page order. */

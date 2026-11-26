@@ -6,7 +6,7 @@ import { displayName, sortedRows, useSelectedBot, useStore } from '../store';
 import { Composer } from './Composer';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
-import { useContextMenu } from './ContextMenu';
+import { useConfigUI } from '../configStore';
 import { botMenuItems } from './botMenuItems';
 import { Transcript } from './Transcript';
 import { CallStage } from './CallStage';
@@ -20,7 +20,6 @@ export function ChatView() {
   const [menu, setMenu] = useState(false);
   const toastTimer = useRef<number>();
   useEffect(() => () => clearTimeout(toastTimer.current), []);
-  const contextMenu = useContextMenu();
   const [toast, setToast] = useState<string | null>(null);
   const rows = useMemo(() => sortedRows(transcript), [transcript]);
 
@@ -46,8 +45,11 @@ export function ChatView() {
         </button>
         <div className="chat__header-main">
           <span className="chat__pill-anchor">
-          <button type="button" className="chat__pill" onClick={() => setMenu(!menu)} aria-expanded={menu} title={displayName(bot)}
-            {...contextMenu(displayName(bot), () => { setMenu(false); return botMenuItems(bot); })}>
+          {/* Click opens the Bot's settings; right-click (or the menu key) opens the menu (owner, Nov 25). */}
+          <button type="button" className="chat__pill" aria-haspopup="menu" aria-expanded={menu} title={`${displayName(bot)} settings · Right-click for more`}
+            onClick={() => { setMenu(false); useConfigUI.getState().openBotSettings(bot.id); }}
+            onContextMenu={(event) => { event.preventDefault(); setMenu(true); }}
+            onKeyDown={(event) => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); setMenu(true); } }}>
             <BotAvatarFor bot={bot} size={26} />
             <span className="chat__pill-name">{bot.name}</span>
           </button>

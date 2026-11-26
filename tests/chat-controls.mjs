@@ -187,7 +187,7 @@ try {
   assert.ok(research.completedAt);
   assert.equal(requests.at(-1).model, selectedModel);
   assert.equal(requests.at(-1).reasoning.effort, 'xhigh');
-  await page.waitForFunction(() => document.querySelector('.bot-list [data-chat-id]:nth-child(3) .bot-row__name')?.textContent === 'Research');
+  await page.waitForFunction(() => document.querySelector('.bot-list [data-chat-id]:nth-child(4) .bot-row__name')?.textContent === 'Research');
   await page.getByRole('button', { name: 'Operations', exact: true }).click();
   await page.getByRole('button', { name: /^Model:/ }).click();
   await page.getByRole('menuitemradio', { name: otherModel, exact: true }).click();

@@ -40,6 +40,16 @@ export function Menu({ items, onClose, align = 'left', placement = 'below', chil
   const ref = useRef<HTMLDivElement>(null);
   useExitGhost(ref, 180);
   const trigger = useRef(document.activeElement);
+  // In the Mac window, clicks on a draggable title strip never reach the page, so "click beside the menu to close it"
+  // did nothing there (owner, Nov 25). While a menu is open the strips stop dragging and take the click instead.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.openMenus = String(Number(root.dataset.openMenus ?? 0) + 1);
+    return () => {
+      const left = Number(root.dataset.openMenus ?? 1) - 1;
+      if (left > 0) root.dataset.openMenus = String(left); else delete root.dataset.openMenus;
+    };
+  }, []);
   useEffect(() => {
     const down = (e: MouseEvent) => { if (ref.current && !ref.current.parentElement?.contains(e.target as Node)) onClose(); };
     const key = (e: globalThis.KeyboardEvent) => {
