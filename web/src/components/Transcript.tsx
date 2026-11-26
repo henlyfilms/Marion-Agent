@@ -1,7 +1,7 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { copyText } from '../lib/clipboard';
 import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
-import { Paperclip } from 'lucide-react';
+import { Film, Paperclip } from 'lucide-react';
 import { api } from '../lib/api';
 import { DEFAULT_BERRY } from '@shared/avatarShapes';
 import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
@@ -15,6 +15,13 @@ import { Markdown } from './Markdown';
 import { usageLabel } from '../lib/modelUsage';
 import { useContextMenu } from './ContextMenu';
 import { quoteText, useMessageActions } from '../lib/messageActions';
+
+/** A screen recording in a message. If the browser can't decode it (e.g. HEVC .mov), it becomes a download chip instead of a blank player. */
+function ChatVideo({ url, name }: { url: string; name: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <a href={url} download={name} className="bubble__file"><Film size={15} /> {name}</a>;
+  return <video src={url} controls preload="metadata" muted playsInline title={name} className="bubble__video" onError={() => setFailed(true)} />;
+}
 
 type Item =
   | { kind: 'divider'; key: string; ts: number }
@@ -94,9 +101,10 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
         {!!b.attachments?.length && <div className="bubble__attachments">
           {b.attachments.map(file => {
             const url = api.attachmentUrl(row.botId, file.id);
+            if (file.mime.startsWith('video/')) return <ChatVideo key={file.id} url={url} name={file.name} />;
             return file.mime.startsWith('image/')
               ? <a key={file.id} href={url} download={file.name} title={`Download ${file.name}`}><img src={url} alt={file.name} loading="lazy" /></a>
-              : <a key={file.id} href={url} download={file.name} className="bubble__file"><Paperclip size={15} /> {file.name}</a>;
+              :<a key={file.id} href={url} download={file.name} className="bubble__file"><Paperclip size={15} /> {file.name}</a>;
           })}
         </div>}
         {side === 'right' ? (b.text && <div className="bubble__plain">{b.text}</div>) : <Markdown text={b.text || ' '} />}

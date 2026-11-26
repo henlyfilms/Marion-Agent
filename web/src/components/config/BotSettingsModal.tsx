@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AvatarColor, AvatarShape, Bot, Memory, Routine, Skill } from '@shared/types';
+import type { AvatarColor, AvatarShape, Bot, Memory, Routine, Skill, UniversalSkill } from '@shared/types';
 import type { WorkFxChoice } from '@shared/avatarShapes';
 import { BotAvatar, BotAvatarFor } from '../../avatar/BotAvatar';
 import { BotShapePicker } from '../../avatar/BotShapePicker';
@@ -57,7 +57,7 @@ export function BotSettingsModal() {
   const tabs: { id: BotSettingsTab; label: string; count?: number }[] = [
     { id: 'general', label: 'General' },
     { id: 'theme', label: 'Theme' },
-    { id: 'skills', label: 'Skills', count: data?.skills.length },
+    { id: 'skills', label: 'Skills', count: data ? data.skills.length + (data.universalSkills?.length ?? 0) : undefined },
     { id: 'memories', label: 'Memories', count: data?.memories.length },
     { id: 'routines', label: 'Routines', count: (routines ?? data?.routines)?.length },
     ...(bot.kind === 'room' ? [] : [{ id: 'access' as const, label: 'Access' }]),
@@ -98,7 +98,7 @@ export function BotSettingsModal() {
           {loadError && <div className="cfg-error">Couldn’t load settings: {loadError}</div>}
           {target.tab === 'general' && <GeneralTab key={bot.id} bot={bot} onClose={onClose} />}
           {target.tab === 'theme' && <ThemeTab key={bot.id} bot={bot} />}
-          {target.tab === 'skills' && <SkillsTab bot={bot} skills={data?.skills} onChange={reload} />}
+          {target.tab === 'skills' && <SkillsTab bot={bot} skills={data?.skills} universal={data?.universalSkills} onChange={reload} />}
           {target.tab === 'memories' && <MemoriesTab bot={bot} data={data} onChange={reload} />}
           {target.tab === 'routines' && <RoutinesTab bot={bot} routines={routines ?? data?.routines} />}
           {target.tab === 'access' && <AccessTab bot={bot} />}
@@ -541,38 +541,53 @@ function ThemeTab({ bot }: { bot: Bot }) {
 
 // ---------------------------------------------------------------------------
 
-function SkillsTab({ bot, skills, onChange }: { bot: Bot; skills: Skill[] | undefined; onChange: () => void }) {
-  const [editing, setEditing] = useState<string | 'new' | null>(null);
+/** `scope` says where a skill lives: 'bot' = only this Bot, 'universal' = every Bot on the team (one shared copy). */
+type SkillScope = 'bot' | 'universal';
+
+function SkillsTab({ bot, skills, universal, onChange }: { bot: Bot; skills: Skill[] | undefined; universal: UniversalSkill[] | undefined; onChange: () => void }) {
+  const [editing, setEditing] = useState<string | 'new-bot' | 'new-universal' | null>(null);
+  const done = () => { setEditing(null); onChange(); };
+  const shared = new Set((universal ?? []).map((s) => s.name.trim().toLowerCase()));
   return (
     <div className="cfg-page">
       <div className="cfg-page__head">
         <div>
-          <div className="cfg-page__title">Skills</div>
-          <div className="cfg-page__sub">Step-by-step how-tos {bot.name} follows for specific jobs. Ask for one by name in chat.</div>
+          <div className="cfg-page__title">Universal skills</div>
+          <div className="cfg-page__sub">Shared by <strong>every Bot</strong> on your team, including new ones. Edit one here and all Bots follow the new version.</div>
         </div>
-        {editing !== 'new' && <button type="button" className="cfg-btn cfg-btn--primary" onClick={() => setEditing('new')}><Icon name="plus" size={12} /> New skill</button>}
+        {editing !== 'new-universal' && <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => setEditing('new-universal')}><Icon name="plus" size={12} /> New universal skill</button>}
       </div>
-      {editing === 'new' && <SkillEditor botId={bot.id} onDone={() => { setEditing(null); onChange(); }} />}
-      {!skills ? <div className="cfg-empty">Loading…</div> : skills.length === 0 && editing !== 'new' ? (
+      {editing === 'new-universal' && <SkillEditor scope="universal" botId={bot.id} onDone={done} />}
+      {!universal ? <div className="cfg-empty">Loading…</div> : universal.length === 0 && editing !== 'new-universal' ? (
+        <div className="cfg-empty">No universal skills. Add one for anything every Bot should follow.</div>
+      ) : (
+        <div className="cfg-list">
+          {universal.map((s) => editing === s.id ? (
+            <SkillEditor key={s.id} scope="universal" botId={bot.id} skill={s} onDone={done} />
+          ) : (
+            <SkillRow key={s.id} skill={s} scope="universal" onEdit={() => setEditing(s.id)} onDelete={async () => { await configApi.deleteUniversalSkill(s.id); onChange(); }} />
+          ))}
+        </div>
+      )}
+
+      <div className="cfg-page__head" style={{ marginTop: 20 }}>
+        <div>
+          <div className="cfg-page__title">Only {bot.name}</div>
+          <div className="cfg-page__sub">Step-by-step how-tos only {bot.name} follows for specific jobs. Ask for one by name in chat.</div>
+        </div>
+        {editing !== 'new-bot' && <button type="button" className="cfg-btn cfg-btn--primary" onClick={() => setEditing('new-bot')}><Icon name="plus" size={12} /> New skill</button>}
+      </div>
+      {editing === 'new-bot' && <SkillEditor scope="bot" botId={bot.id} onDone={done} />}
+      {!skills ? <div className="cfg-empty">Loading…</div> : skills.length === 0 && editing !== 'new-bot' ? (
         <div className="cfg-empty">
-          No skills yet. Write down how you like something done, like “Prep for a sales call”, and {bot.name} will follow it every time.
+          No Bot-only skills yet. Write down how you like something done, like “Prep for a sales call”, and {bot.name} will follow it every time.
         </div>
       ) : (
         <div className="cfg-list">
           {skills.map((s) => editing === s.id ? (
-            <SkillEditor key={s.id} botId={bot.id} skill={s} onDone={() => { setEditing(null); onChange(); }} />
+            <SkillEditor key={s.id} scope="bot" botId={bot.id} skill={s} onDone={done} />
           ) : (
-            <div key={s.id} className="cfg-item">
-              <span className="cfg-item__icon"><Glyph name="spark" size={14} /></span>
-              <div className="cfg-item__text">
-                <div className="cfg-item__title">{s.name}</div>
-                <div className="cfg-item__sub">{s.description || s.body.split('\n')[0]}</div>
-              </div>
-              <div className="cfg-item__actions">
-                <button type="button" className="cfg-icon-btn" onClick={() => setEditing(s.id)} aria-label={`Edit ${s.name}`} title="Edit"><Icon name="edit" size={14} /></button>
-                <ConfirmButton className="cfg-icon-btn" title="Delete" onConfirm={async () => { await configApi.deleteSkill(s.id); onChange(); }}><Glyph name="trash" size={14} /></ConfirmButton>
-              </div>
-            </div>
+            <SkillRow key={s.id} skill={s} scope="bot" replaced={shared.has(s.name.trim().toLowerCase())} onEdit={() => setEditing(s.id)} onDelete={async () => { await configApi.deleteSkill(s.id); onChange(); }} />
           ))}
         </div>
       )}
@@ -580,7 +595,28 @@ function SkillsTab({ bot, skills, onChange }: { bot: Bot; skills: Skill[] | unde
   );
 }
 
-function SkillEditor({ botId, skill, onDone }: { botId: string; skill?: Skill; onDone: () => void }) {
+function SkillRow({ skill, scope, replaced, onEdit, onDelete }: { skill: Skill | UniversalSkill; scope: SkillScope; replaced?: boolean; onEdit: () => void; onDelete: () => Promise<void> }) {
+  const universal = scope === 'universal';
+  return (
+    <div className="cfg-item" data-skill-scope={scope}>
+      <span className="cfg-item__icon"><Glyph name="spark" size={14} /></span>
+      <div className="cfg-item__text">
+        <div className="cfg-item__title">
+          {skill.name}{' '}
+          <span className={universal ? 'cfg-chip' : 'cfg-chip cfg-chip--muted'} title={universal ? 'Applies to every Bot on your team' : 'Only this Bot uses it'}>{universal ? 'Universal · all Bots' : 'This Bot only'}</span>
+        </div>
+        <div className="cfg-item__sub">{replaced ? 'Hidden from the prompt: a universal skill with this name is used instead. ' : ''}{skill.description || skill.body.split('\n')[0]}</div>
+      </div>
+      <div className="cfg-item__actions">
+        <button type="button" className="cfg-icon-btn" onClick={onEdit} aria-label={`Edit ${skill.name}`} title={universal ? 'Edit for all Bots' : 'Edit'}><Icon name="edit" size={14} /></button>
+        <ConfirmButton className="cfg-icon-btn" title={universal ? 'Delete for all Bots' : 'Delete'} onConfirm={onDelete}><Glyph name="trash" size={14} /></ConfirmButton>
+      </div>
+    </div>
+  );
+}
+
+function SkillEditor({ botId, skill, scope, onDone }: { botId: string; skill?: Skill | UniversalSkill; scope: SkillScope; onDone: () => void }) {
+  const universal = scope === 'universal';
   const [name, setName] = useState(skill?.name ?? '');
   const [description, setDescription] = useState(skill?.description ?? '');
   const [body, setBody] = useState(skill?.body ?? '');
@@ -591,20 +627,24 @@ function SkillEditor({ botId, skill, onDone }: { botId: string; skill?: Skill; o
     if (!can) return;
     setBusy(true); setError(null);
     try {
-      if (skill) await configApi.updateSkill(skill.id, { name, description, body });
+      if (universal) {
+        if (skill) await configApi.updateUniversalSkill(skill.id, { name, description, body });
+        else await configApi.createUniversalSkill({ name, description, body });
+      } else if (skill) await configApi.updateSkill(skill.id, { name, description, body });
       else await configApi.createSkill(botId, { name, description, body });
       onDone();
     } catch (e) { setError((e as Error).message); setBusy(false); }
   };
   return (
     <form className="cfg-editor" onSubmit={(e) => { e.preventDefault(); save(); }}>
+      {universal && <div className="cfg-skill-hint">Universal skill: saving changes it for every Bot on your team.</div>}
       <input className="text-input" placeholder="Skill name, e.g. Weekly report" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} autoFocus aria-label="Skill name" />
       <input className="text-input" placeholder="When to use it (optional)" value={description} maxLength={300} onChange={(e) => setDescription(e.target.value)} aria-label="Skill description" />
       <textarea className="text-input cfg-textarea cfg-textarea--tall" rows={8} placeholder={'Write the steps to follow:\n1. …\n2. …'} value={body} onChange={(e) => setBody(e.target.value)} aria-label="Skill steps" />
       {error && <div className="cfg-error">{error}</div>}
       <div className="cfg-editor__actions">
         <button type="button" className="cfg-btn cfg-btn--secondary" onClick={onDone}>Cancel</button>
-        <button type="submit" className="cfg-btn cfg-btn--primary" disabled={!can}>{busy ? 'Saving…' : skill ? 'Save skill' : 'Add skill'}</button>
+        <button type="submit" className="cfg-btn cfg-btn--primary" disabled={!can}>{busy ? 'Saving…' : skill ? (universal ? 'Save for all Bots' : 'Save skill') : (universal ? 'Add universal skill' : 'Add skill')}</button>
       </div>
     </form>
   );

@@ -23,7 +23,8 @@ import { botFolders, hasFullAccess, folderForTask, listFolder, moveInFolder } fr
 import { appControlTool, runAppControl } from '../features/app-control.js';
 import { agentSettings } from '../features/agent-settings.js';
 import { orchestrate } from './orchestrate.js';
-import { trailingQuestion, WorkCard } from './work-feed.js';
+import { miniTitle, trailingQuestion, WorkCard } from './work-feed.js';
+import { leanLine, planRelaySession, recordRelayTurn, relayMedia } from './relay.js';
 import { lifePlannerTools, lifeToolsEnabled, runLifePlannerTool, type LifePlannerTool } from '../features/life-link.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
@@ -40,6 +41,8 @@ export interface ToolCtx {
   signal?: AbortSignal;
   textScreen?: boolean;
   allowSubscriptionTeam?: boolean;
+  /** The chat turn this call belongs to (a subscription-backed bot makes several Claude calls per turn). */
+  turn?: { id: string; startedAt: number; request: string };
 }
 
 export interface ToolResult {
@@ -249,6 +252,8 @@ export const TOOLS: ToolDef[] = [
       provider: { type: 'string', enum: ['claude', 'codex', 'gemini'] },
       prompt: { type: 'string', description: 'The full task. The provider knows nothing else, so include every detail it needs' },
       folder: { type: 'string', description: 'Optional: a folder on this Mac to work in, by name (e.g. "Marion Agent") or full path. It does not need to be shared with you; the owner approves it' },
+      title: { type: 'string', description: 'Optional: a mini title of 3-8 words for the work card (e.g. "Fix login redirect"). Derived from the prompt if omitted' },
+      new_session: { type: 'boolean', description: 'Optional: true to start this provider from a fresh session. Marion also does that by itself when the folder changes, the topic is clearly different, or the session has grown large' },
     }, ['provider', 'prompt']),
     activity: 'working',
     label: 'Asking another assistant',
@@ -257,18 +262,39 @@ export const TOOLS: ToolDef[] = [
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
       const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
-      const task = folder
-        ? `${prompt}\n\nWork only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.`
-        : prompt;
       const selection = subscriptionSelection(ctx.userId, provider);
       const name = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[provider as 'claude' | 'codex' | 'gemini'];
+      const generation = getBotRow(ctx.botId)?.generation ?? 0;
+      // Continue this chat's session with the provider, or start a fresh one (asked for, new folder, big, or a new topic).
+      const plan = planRelaySession({ botId: ctx.botId, generation, provider, prompt, folder: folder?.path, newSession: args.new_session === true });
+      // The user's screenshots and screen recordings (as frames) go along with the request.
+      const media = await relayMedia(ctx.botId);
+      const task = [
+        plan.carried,
+        prompt,
+        media.note,
+        folder ? `Work only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.` : '',
+        leanLine(ctx.botId, Boolean(folder)),
+      ].filter(Boolean).join('\n\n');
       const card = new WorkCard(ctx.botId, ctx.userId, {
-        title: prompt.split('\n')[0].slice(0, 120), reporter: getBotRow(ctx.botId)?.name,
+        title: miniTitle(prompt, args.title), detail: prompt.split('\n')[0], reporter: getBotRow(ctx.botId)?.name,
         agents: [{ id: 'worker-0', label: selection.label || name, provider, model: selection.model, role: 'worker' }],
       });
       const who = selection.label || name;
+      const askedAt = Date.now();
+      if (plan.rotated) card.step(who, 'note', `Fresh session: ${plan.rotated}`);
+      if (media.images.length) card.step(who, 'note', `Sent ${media.images.length} image${media.images.length === 1 ? '' : 's'} from your message`);
       try {
-        const text = await subscriptionReply(selection, task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), [], { folder, onStep: card.feed(who) });
+        let used: number | undefined;
+        const text = await subscriptionReply(selection, task, ctx.signal ?? AbortSignal.timeout(folder ? 900_000 : 180_000), media.images, {
+          folder, onStep: card.feed(who), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
+          session: {
+            id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
+            request: prompt, title: miniTitle(prompt, args.title), folder: folder && { path: folder.path, label: folder.label },
+            groupId: `${ctx.botId}:${generation}:${provider}:${plan.session.startedAt}`, rotated: plan.rotated,
+          },
+        });
+        recordRelayTurn(plan.session, prompt, text, used);
         const question = trailingQuestion(text);
         if (question) card.step(who, 'question', question);
         card.finish(question ? 'needs-input' : 'done', question || undefined);
@@ -572,12 +598,12 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'save_skill',
-    description: 'Save or update one of your own skills: a short step-by-step playbook for a task you will do again. Use it when the user teaches you a process (including by screen recording), corrects how you did something, or you find a better way. Same name = update.',
-    parameters: obj({ name: { type: 'string' }, description: { type: 'string' }, body: { type: 'string', description: 'Numbered steps, 3-15 lines' } }, ['name', 'description', 'body']),
+    description: 'Save or update one of your own skills: a short step-by-step playbook for a task you will do again. Use it when the user teaches you a process (including by screen recording), corrects how you did something, or you find a better way. Same name = update. If the name matches a universal skill (shared by every Bot, like Token optimizer), that universal skill is updated for the whole team. Set universal: true to save a new skill for every Bot instead of only yourself.',
+    parameters: obj({ name: { type: 'string' }, description: { type: 'string' }, body: { type: 'string', description: 'Numbered steps, 3-15 lines' }, universal: { type: 'boolean', description: 'Optional. true = apply to every Bot on the team' } }, ['name', 'description', 'body']),
     activity: 'working',
     label: 'Saving a skill',
     impl: async (a, ctx) => {
-      const result = saveLearnedSkill(ctx.botId, String(a.name ?? ''), String(a.description ?? ''), String(a.body ?? ''));
+      const result = saveLearnedSkill(ctx.botId, String(a.name ?? ''), String(a.description ?? ''), String(a.body ?? ''), { universal: typeof a.universal === 'boolean' ? a.universal : undefined });
       return { output: result.message, summary: result.message };
     },
   },

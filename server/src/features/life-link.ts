@@ -48,6 +48,8 @@ export const lifeLinkSettings = (userId: string) => {
   return { ...DEFAULTS, ...saved, endpoint: saved.endpoint || DEFAULT_ENDPOINT };
 };
 export const hasLifeKey = (userId: string) => Boolean(getSecret(keyName(userId)));
+/** The saved Marion Life key (never sent anywhere except Life's own address). */
+export const lifeKey = (userId: string) => getSecret(keyName(userId));
 
 /** True when the saved Life connection is on and this bot (if given) is allowed to use it. */
 export function lifeToolsEnabled(userId: string, botId?: string) {
@@ -142,12 +144,12 @@ function normalizeEndpoint(raw: string) {
   return `${url.origin}${url.pathname}`;
 }
 
-class LifeToolMissing extends Error {}
+export class LifeToolMissing extends Error {}
 class LifeResponseUncertain extends Error {}
 let rpcId = 0;
 
 /** Call one Marion Life tool through the key door. */
-async function lifeTool<T>(endpoint: string, key: string, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+export async function lifeTool<T>(endpoint: string, key: string, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const timeout = AbortSignal.timeout(20_000);
   let response: Response;
   try {

@@ -16,6 +16,7 @@ import { ConversationActions } from './components/ConversationActions';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
 import { UsageDashboard } from './components/modals/UsageDashboard';
+import { StatsDashboard } from './components/modals/StatsDashboard';
 import { TeamModal } from './components/modals/TeamModal';
 import { ConnectAppsModal } from './components/modals/ConnectAppsModal';
 import { CreateBotModal } from './components/modals/CreateBotModal';
@@ -163,6 +164,7 @@ function Shell() {
       {forwarding && <ForwardPicker />}
       {modal === 'apps' && <ConnectAppsModal />}
       {modal === 'usage' && <UsageDashboard />}
+      {modal === 'stats' && <StatsDashboard />}
       {modal === 'team' && <TeamModal />}
       {viewerOpen && <ComputerViewer />}
       <ConfigLayer />

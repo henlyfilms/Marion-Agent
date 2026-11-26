@@ -1,4 +1,4 @@
-import { ArrowDownToLine } from 'lucide-react';
+import { ArrowDownToLine, BarChart3 } from 'lucide-react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import type { Bot, ChatSort } from '@shared/types';
 import { orderChats, tier } from '@shared/chat-order';
@@ -205,6 +205,7 @@ export function Sidebar() {
   const accountItems: MenuItem[] = [
     { label: 'Settings', hint: '⌘,', onSelect: openSettings },
     { label: 'Subscription usage', onSelect: () => setModal('usage') },
+    { label: 'Statistics', onSelect: () => setModal('stats') },
     { label: 'Connect apps', onSelect: () => setModal('apps') },
     { label: 'Sessions', onSelect: () => useConfigUI.getState().setView('sessions') },
     ...(isLocalMac ? [{
@@ -399,6 +400,7 @@ export function Sidebar() {
         <div className="sidebar__footer">
           {account('desktop')}
           <button type="button" className="icon-btn icon-btn--bordered" onClick={() => setModal('usage')} aria-label="Subscription usage" title="Subscription usage"><MeterIcon size={18} /></button>
+          <button type="button" className="icon-btn icon-btn--bordered sidebar__stats-btn" onClick={() => setModal('stats')} aria-label="Statistics" title="Statistics"><BarChart3 size={18} strokeWidth={1.8} aria-hidden /></button>
         </div>
       </div>
       {pendingDelete && <Modal onClose={closeDelete} className="delete-chat" label="Delete chat">

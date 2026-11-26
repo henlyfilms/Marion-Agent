@@ -67,6 +67,7 @@
 .work-card__logos > span + span { margin-left: -7px; }
 .work-card__who { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; }
 .work-card__who strong { font-size: 13px; font-weight: 600; line-height: 18px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.work-card__who .work-card__title { font-size: 14px; line-height: 19px; }
 .work-card__who span { font-size: 12px; line-height: 16px; color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .work-card__status {
   display: inline-flex; align-items: center; gap: 6px; flex: none; height: 22px; padding: 0 9px; border-radius: var(--radius-full);

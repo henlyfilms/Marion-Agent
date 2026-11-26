@@ -1,8 +1,7 @@
 const { app, BrowserWindow, Menu, desktopCapturer, dialog, nativeTheme, session, shell, webContents } = require('electron');
-const { spawn } = require('node:child_process');
-const { randomBytes } = require('node:crypto');
-const { mkdirSync, copyFileSync, chmodSync, constants, existsSync, readFileSync } = require('node:fs');
+const { mkdirSync, copyFileSync, chmodSync, constants, existsSync, readFileSync, statSync } = require('node:fs');
 const path = require('node:path');
+const { createServerHost } = require('./server-host.cjs');
 
 app.setName('Marion Agent');
 
@@ -10,11 +9,12 @@ const host = '127.0.0.1';
 const port = '8789';
 const origin = `http://${host}:${port}`;
 const accessHeader = 'x-marion-desktop-session';
-const accessToken = randomBytes(32).toString('base64url');
-const instanceId = randomBytes(16).toString('hex');
+// The server outlives this app (see server-host.cjs), so its token is read from the running server's session file
+// on relaunch instead of being made fresh each time.
+let accessToken = '';
 const callbackPaths = new Set(['/api/apps/callback']);
 const popups = new Set();
-let server;
+let serverHost;
 let mainWindow;
 let appSession;
 let ready = false;
@@ -136,7 +136,17 @@ function applicationMenu(dataDir) {
       { label: 'Open App Data Folder', click: () => { void shell.openPath(dataDir); } },
       { type: 'separator' },
       { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
-      { type: 'separator' }, { role: 'quit' },
+      { type: 'separator' }, { role: 'quit', label: 'Quit Marion Agent (bots keep running)' },
+      { label: 'Quit and Stop Background Work', accelerator: 'Alt+CommandOrControl+Q', click: () => {
+        const busy = dialog.showMessageBoxSync({
+          type: 'warning', buttons: ['Stop Everything and Quit', 'Cancel'], defaultId: 1, cancelId: 1,
+          message: 'Stop running bots and assistants?',
+          detail: 'Anything a bot or a relayed Claude, Codex or Gemini is working on right now will be interrupted.',
+        }) === 0;
+        if (!busy) return;
+        quitting = true;
+        void (serverHost ? serverHost.stop() : Promise.resolve()).finally(() => app.quit());
+      } },
     ] },
     { role: 'editMenu' },
     { label: 'View', submenu: [
@@ -159,6 +169,15 @@ function pairingEnvironment(dataDir, kind) {
   return {};
 }
 
+/** Which build this app is, so a server left running by an older build is swapped out (only once it is idle). */
+function buildIdentity(resources) {
+  try { return readFileSync(path.join(resources, 'BUILD_ID'), 'utf8').trim() || 'unknown'; } catch { /* older packages have none */ }
+  try {
+    const version = JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version;
+    return `${version}-${Math.round(statSync(path.join(resources, 'marion', 'server', 'dist', 'index.js')).mtimeMs)}`;
+  } catch { return 'unknown'; }
+}
+
 async function start() {
   const dataDir = app.getPath('userData');
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -170,50 +189,32 @@ async function start() {
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
   }
-  const node = path.join(resources, 'runtime', 'node');
-  const backend = path.join(resources, 'marion', 'server');
   const transcriber = path.join(resources, 'speech', 'marion-transcribe');
   const nativeSpeech = process.platform === 'darwin' && Number(process.getSystemVersion().split('.')[0]) >= 26 && existsSync(transcriber);
-  let failed = false;
-  server = spawn(node, [`--env-file-if-exists=${config}`, path.join(__dirname, 'server.cjs')], {
-    cwd: backend,
-    env: {
-      ...pairingEnvironment(dataDir, 'mobile'),
-      ...pairingEnvironment(dataDir, 'browser'),
-      ...process.env,
+  serverHost = createServerHost({
+    dataDir, resources, appDir: __dirname, host, port, origin, accessHeader,
+    buildId: buildIdentity(resources),
+    ownerPid: process.pid,
+    baseEnvironment: () => ({ ...pairingEnvironment(dataDir, 'mobile'), ...pairingEnvironment(dataDir, 'browser') }),
+    environment: () => ({
       PATH: `${path.join(app.getPath('home'), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Applications/Docker.app/Contents/Resources/bin:${process.env.PATH || ''}`,
-      HOST: host, PORT: port, SERVER_URL: origin, APP_URL: origin,
       ...(nativeSpeech ? { MARION_NATIVE_TRANSCRIBER: transcriber } : {}),
-      MARION_DESKTOP_TOKEN: accessToken, MARION_DESKTOP_INSTANCE: instanceId, MARION_APP_DATA: dataDir,
-    },
-    stdio: 'ignore',
+    }),
   });
-  server.once('error', () => { failed = true; });
-  server.once('exit', () => {
-    failed = true;
-    if (ready && !quitting) {
-      dialog.showErrorBox('Marion Agent stopped', 'Open the app again to restart the local server.');
-      app.quit();
-    }
+  // Re-adopts the server that kept running (bots and relays never noticed the app was gone), or starts one.
+  const running = await serverHost.ensure();
+  if (quitting) return;
+  accessToken = running.token;
+  ready = true;
+  configureSession();
+  applicationMenu(dataDir);
+  createWindow();
+  // A new build's server is swapped in only while nothing is running; the window then reloads onto it and the
+  // web app restores the chat, view and draft you were on.
+  serverHost.watch(() => {
+    accessToken = serverHost.state.token;
+    if (mainWindow) mainWindow.webContents.reloadIgnoringCache();
   });
-
-  for (let attempt = 0; attempt < 60 && !failed && !quitting; attempt++) {
-    try {
-      const result = await fetch(origin + '/api/health', {
-        headers: { [accessHeader]: accessToken }, signal: AbortSignal.timeout(300),
-      });
-      const health = result.ok ? await result.json() : null;
-      if (health?.app === 'marion-agent' && health.desktopInstance === instanceId && !failed && !quitting) {
-        ready = true;
-        configureSession();
-        applicationMenu(dataDir);
-        createWindow();
-        return;
-      }
-    } catch { /* The server can take a moment to start. */ }
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
-  if (!quitting) throw new Error(`Check whether another app is using port ${port}. You can also check the data folder in Library → Application Support → Marion Agent.`);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -228,10 +229,9 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
-  app.on('before-quit', () => {
-    quitting = true;
-    server?.kill();
-  });
+  // Quitting (or crashing, or being replaced by an update) leaves the server running: bots and relays finish their
+  // work. It stops by itself a minute after the work is done. "Quit and Stop Background Work" ends it right away.
+  app.on('before-quit', () => { quitting = true; });
   app.whenReady().then(start).catch(error => {
     dialog.showErrorBox('Could not start Marion Agent', error.message);
     app.quit();

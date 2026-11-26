@@ -20,6 +20,23 @@ addColumn('skills', 'updated_at', 'INTEGER');
 addColumn('memories', 'source', "TEXT NOT NULL DEFAULT 'chat'");
 
 db.exec(`
+-- Universal skills belong to a user (the team) and apply to every one of their Bots, so there is one copy to edit.
+CREATE TABLE IF NOT EXISTS universal_skills (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS universal_skills_user_name ON universal_skills(user_id, lower(name));
+-- Which shipped universal skills were already seeded for a user, so deleting one keeps it deleted.
+CREATE TABLE IF NOT EXISTS universal_skill_seeds (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
 CREATE TABLE IF NOT EXISTS local_model_preferences (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   model TEXT NOT NULL

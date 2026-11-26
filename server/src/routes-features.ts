@@ -16,9 +16,12 @@ import { DEFAULT_STEM_COLOR } from './avatarShapes.js';
 import { notificationSettings, notify, pushToDevices, saveNotificationSettings } from './features/notify.js';
 import { vapidPublicKey } from './features/webpush.js';
 import { connectLife, disconnectLife, hasLifeKey, lifeLinkSettings, syncLife } from './features/life-link.js';
+import { drainLifeOutbox, outboxStatus } from './features/life-outbox.js';
 import { reflectBot } from './features/improve.js';
+import { chatSessionMessages, listSessions } from './features/agent-sessions.js';
+import { computeStats, parseStatsRange } from './features/stats.js';
 import { codingSessionMessages, listCodingSessions, type SessionProvider } from './features/sessions.js';
-import { startUpdate, updateStatus } from './features/app-update.js';
+import { setAutoUpdate, startUpdate, updateSettings, updateStatus } from './features/app-update.js';
 import { remoteAccessFor } from './lib/auth.js';
 import { clearRecordings, deleteRecording, listRecordings, recordingFrame, saveRecording } from './features/recordings.js';
 import { agentSettings, RECORDING_DAY_OPTIONS, saveAgentSettings } from './features/agent-settings.js';
@@ -29,7 +32,7 @@ import { addBotFolder, hasFullAccess, storedFolders, pickFolder, removeBotFolder
 /** Templates, bot profiles, context and compaction, computer sleep, teaching, notifications and the Marion Life link. */
 export const featuresApi = new Hono<AuthVars>();
 // Scope the auth check to these paths only: a '*' here would also run for sign-in routes mounted after it.
-for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/app/update', '/recordings', '/recordings/*', '/agent-settings', '/screenshots', '/screenshots/*']) featuresApi.use(path, requireUser);
+for (const path of ['/templates', '/templates/*', '/bots/*', '/notifications', '/notifications/*', '/life-link', '/life-link/*', '/sessions', '/sessions/*', '/stats', '/app/update', '/app/update/*', '/recordings', '/recordings/*', '/agent-settings', '/screenshots', '/screenshots/*']) featuresApi.use(path, requireUser);
 
 const ownBot = (userId: string, botId: string) =>
   db.prepare('SELECT * FROM bots WHERE id=? AND user_id=?').get(botId, userId) as any;
@@ -415,7 +418,7 @@ featuresApi.delete('/bots/:id/folders', async (c) => {
 
 featuresApi.get('/life-link', (c) => {
   const userId = c.get('user').id;
-  return c.json({ settings: lifeLinkSettings(userId), hasKey: hasLifeKey(userId) });
+  return c.json({ settings: lifeLinkSettings(userId), hasKey: hasLifeKey(userId), outbox: outboxStatus(userId) });
 });
 
 featuresApi.put('/life-link', async (c) => {
@@ -438,7 +441,9 @@ featuresApi.post('/life-link/sync', async (c) => {
   const userId = c.get('user').id;
   try {
     const result = await syncLife(userId, { force: true });
-    return c.json({ ...result, settings: lifeLinkSettings(userId) });
+    // Also send any waiting session summaries and deleted chats/bots.
+    const queued = await drainLifeOutbox(userId, { manual: true }).catch(() => ({ sent: 0 }));
+    return c.json({ ...result, queuedSent: queued.sent, outbox: outboxStatus(userId), settings: lifeLinkSettings(userId) });
   } catch (error) {
     return c.json({ error: (error as Error).message }, 502);
   }
@@ -453,6 +458,42 @@ featuresApi.get('/sessions', (c) => {
   return c.json({ sessions: listCodingSessions(valid) });
 });
 
+// ---------- Marion Agent's own sessions: bot chats and relayed Claude / Codex / Gemini runs ----------
+
+const sessionQuery = (c: { req: { query: (name: string) => string | undefined } }, botId?: string) => {
+  const type = c.req.query('type');
+  return {
+    botId: botId ?? c.req.query('botId') ?? undefined,
+    type: type === 'chat' || type === 'relay' ? type : undefined,
+    kind: c.req.query('kind') || undefined,
+    provider: c.req.query('provider') || undefined,
+    status: c.req.query('status') || undefined,
+    limit: Number(c.req.query('limit')) || undefined,
+  } as const;
+};
+
+/** GET /api/sessions/marion?botId=&type=chat|relay&kind=&provider=claude|codex|gemini&status=&limit= */
+featuresApi.get('/sessions/marion', (c) => {
+  const sessions = listSessions(c.get('user').id, sessionQuery(c));
+  return c.json({ sessions, running: sessions.filter(s => s.status === 'running').length });
+});
+
+/** GET /api/stats?range=7d|30d|all: streaks, totals, per-bot leaderboard, provider breakdown and highlights. */
+featuresApi.get('/stats', (c) => c.json(computeStats(c.get('user').id, { range: parseStatsRange(c.req.query('range')) })));
+
+/** One bot's conversations and the relayed agent runs it started. */
+featuresApi.get('/bots/:id/sessions', (c) => {
+  if (!ownBot(c.get('user').id, c.req.param('id'))) return c.json({ error: 'Not found' }, 404);
+  const sessions = listSessions(c.get('user').id, sessionQuery(c, c.req.param('id')));
+  return c.json({ sessions, running: sessions.filter(s => s.status === 'running').length });
+});
+
+/** Read-only look inside one conversation of a bot (any earlier one too). */
+featuresApi.get('/bots/:id/sessions/:generation/messages', (c) => {
+  const messages = chatSessionMessages(c.get('user').id, c.req.param('id'), Number(c.req.param('generation')) || 0);
+  return messages ? c.json({ messages }) : c.json({ error: 'Not found' }, 404);
+});
+
 featuresApi.get('/sessions/:id/messages', (c) => c.json({ messages: codingSessionMessages(c.req.param('id')) }));
 
 // ---------- app updates (Mac app only, never from a paired phone or browser) ----------
@@ -460,7 +501,15 @@ featuresApi.get('/sessions/:id/messages', (c) => c.json({ messages: codingSessio
 featuresApi.get('/app/update', async (c) => {
   if (remoteAccessFor(c)) return c.json({ supported: false, reason: 'Check for updates on the Mac.' });
   const current = c.req.query('current') ?? null;
-  return c.json(await updateStatus(current && /^[0-9a-f]{7,40}$|^dev$/.test(current) ? current : null));
+  return c.json({ ...await updateStatus(current && /^[0-9a-f]{7,40}$|^dev$/.test(current) ? current : null), autoUpdate: updateSettings(c.get('user').id).autoUpdate });
+});
+
+/** Settings → Updates → Auto-update (on by default). */
+featuresApi.put('/app/update/settings', async (c) => {
+  if (remoteAccessFor(c)) return c.json({ error: 'Change this on the Mac.' }, 403);
+  const body = await c.req.json().catch(() => ({})) as { autoUpdate?: unknown };
+  if (typeof body.autoUpdate !== 'boolean') return c.json({ error: 'Choose on or off.' }, 400);
+  return c.json({ autoUpdate: setAutoUpdate(c.get('user').id, body.autoUpdate).autoUpdate });
 });
 
 featuresApi.post('/app/update', async (c) => {

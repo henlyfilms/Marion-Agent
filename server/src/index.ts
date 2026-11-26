@@ -10,8 +10,13 @@ import { desktopAccessHeader, hasDesktopAccess } from './lib/desktop-access.js';
 import { remoteAccessFor, remoteWorkspaceUser } from './lib/auth.js';
 import { migrateStarterAgent } from './db.js';
 import './features/schema.js';
+import { migrateUniversalSkills } from './features/universal-skills.js';
 import { featuresApi } from './routes-features.js';
 import { startLifeSync } from './features/life-link.js';
+import { startLifeOutbox } from './features/life-outbox.js';
+import { recoverAgentSessions } from './features/agent-sessions.js';
+import { busyCount, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
+import { startAutoUpdate } from './features/app-update.js';
 import { appEnv, env } from './env.js';
 import { api } from './routes.js';
 import { attachVncRelay } from './vnc.js';
@@ -30,6 +35,7 @@ import { startMemoryConsolidation } from './agent/memory.js';
 initSubagents();
 initRooms();
 migrateStarterAgent();
+migrateUniversalSkills();
 
 const app = new Hono();
 app.use('*', async (c, next) => {
@@ -54,7 +60,16 @@ app.use('*', async (c, next) => {
 app.use('/api/*', csrf({ origin: env.trustedOrigins }));
 app.get('/api/health', (c) => c.json({
   ok: true, app: 'marion-agent', model: env.localModelName, provider: 'local', desktopInstance: appEnv('DESKTOP_INSTANCE'),
+  // The Mac app reads these to adopt a server that kept running, and to swap in a new build only when nothing is running.
+  build: appEnv('BUILD_ID') ?? null, busy: busyCount(), pid: process.pid,
 }));
+// The Mac app tells the server it is the owner now (after a relaunch or an update). Only the app's own token gets here.
+app.post('/api/desktop/attach', async (c) => {
+  if (!appEnv('DESKTOP_TOKEN') || !hasDesktopAccess(c.req.header(desktopAccessHeader))) return c.json({ error: 'Forbidden' }, 403);
+  const body = await c.req.json().catch(() => ({})) as { pid?: unknown };
+  setOwnerPid(Number(body.pid));
+  return c.json({ ok: true, busy: busyCount() });
+});
 app.route('/api/checkins', checkinsApi);
 app.route('/api/rooms', roomsApi);
 app.route('/api', featuresApi);
@@ -78,6 +93,9 @@ if (appEnv('NO_SCHEDULER') !== '1') {
   void initTriggers(enqueue);
   initProactive(enqueue);
 } else console.log('[marion-agent] scheduler disabled (MARION_NO_SCHEDULER=1)');
+try { recoverAgentSessions(); } catch (error) { console.warn('[marion-agent] could not tidy relayed sessions', (error as Error).message); }
 startIdleWatcher();
+startOrphanWatch();
+if (appEnv('NO_SCHEDULER') !== '1') startAutoUpdate();
 startMemoryConsolidation();
-if (appEnv('NO_SCHEDULER') !== '1') startLifeSync();
+if (appEnv('NO_SCHEDULER') !== '1') { startLifeSync(); startLifeOutbox(); }

@@ -4,7 +4,7 @@
 // every chat switch, so switching chats cut dictation off. They now live in <ComposerDictationHost/>, mounted once
 // for the whole workspace. Whichever Composer is on screen registers itself as the "sink" for dictated words, so
 // when you switch chats the recording keeps going and the words land in the chat you switched to.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { create } from 'zustand';
 import { useStore } from '../store';
 import { useConfigUI } from '../configStore';
@@ -16,20 +16,26 @@ import { supportsLiveDictation, useLiveDictation } from './liveDictation';
 import { playDictationSound } from './sounds';
 import { createDictationRouter } from './dictationRouting';
 
-export interface TextRange { start: number; end: number }
+import { shiftRange, type TextEdit, type TextRange } from './dictationText';
+export type { TextRange } from './dictationText';
 
 /** The chat box currently on screen: where dictated words go. */
 export interface DictationSink {
   botId: string;
   /** Finished transcription from the speech server, inserted at `range` (where the caret was when it started). */
   insert(text: string, range?: TextRange): void;
-  /** Final words from live (browser) dictation, appended at the end. */
-  words(words: string): void;
+  /**
+   * Final words from live (browser) dictation, inserted at `range` (the dictation anchor) or appended at the end
+   * when there is none. Returns the caret position right after the inserted words when `range` was given.
+   */
+  words(words: string, range?: TextRange): number | undefined;
   error(message: string): void;
 }
 
-interface DictationView { state: DictationState; interim: string }
-/** What every chat box shows: whether dictation is running and the words heard so far. */
+/** Where dictated words go in one chat's box: the committed-text offset the live words are drawn at. */
+interface DictationAnchor { botId: string; at: number }
+interface DictationView { state: DictationState; interim: string; anchor?: DictationAnchor }
+/** What every chat box shows: whether dictation is running, the words heard so far and where they belong. */
 export const useComposerDictation = create<DictationView>(() => ({ state: 'idle', interim: '' }));
 
 interface Controls {
@@ -39,6 +45,17 @@ interface Controls {
 }
 
 let controls: Controls | undefined;
+/** Where a recorded dictation began, so its caret position is only reused in that same chat. */
+let origin: { botId: string; range?: TextRange } | undefined;
+let touchLive: (() => void) | undefined;
+/** Moves the dictation anchor and publishes it, so the chat box draws live words right at the caret where dictation began. */
+function setOrigin(next: typeof origin) {
+  origin = next;
+  const at = next?.range?.end;
+  const anchor = next && at !== undefined ? { botId: next.botId, at } : undefined;
+  const current = useComposerDictation.getState().anchor;
+  if (current?.botId !== anchor?.botId || current?.at !== anchor?.at) useComposerDictation.setState({ anchor });
+}
 
 // Read navigation synchronously: React may not have committed the incoming Composer yet.
 function chatTarget() {
@@ -52,10 +69,17 @@ function chatTarget() {
 const routing = createDictationRouter<DictationSink>(chatTarget);
 export const registerDictationSink = routing.register;
 
-export const composerDictation: Controls = {
+export const composerDictation: Controls & {
+  /** The user typed or deleted text. Dictation keeps running; only its insertion point follows the edit. */
+  noteEdit(botId: string, edit: TextEdit): void;
+} = {
   start: (botId, range) => controls?.start(botId, range),
   stop: () => controls?.stop(),
   discard: () => controls?.discard(),
+  noteEdit: (botId, edit) => {
+    touchLive?.();
+    if (origin?.botId === botId && origin.range) setOrigin({ botId, range: shiftRange(origin.range, edit) });
+  },
 };
 
 const isElectron = () => /Electron\//.test(navigator.userAgent);
@@ -69,25 +93,30 @@ export function ComposerDictationHost() {
   const activeBot = useStore(s => s.bots.some(bot => bot.id === s.selectedBotId));
   const mobileChatOpen = useStore(s => s.mobileChatOpen);
   const compact = useCompactLayout();
-  /** Where a recorded dictation began, so its caret position is only reused in that same chat. */
-  const origin = useRef<{ botId: string; range?: TextRange }>();
   const refreshStatus = () => { voiceApi.status().then(setStatus).catch(() => {}); };
   useEffect(refreshStatus, []);
 
   const fail = (message: string) => routing.route(to => to.error(message));
   const insertRecorded = (text: string) => {
-    const began = origin.current;
-    origin.current = undefined;
+    const began = origin;
+    setOrigin(undefined);
     routing.route(to => to.insert(text, began?.botId === to.botId ? began.range : undefined));
   };
-  const deliverWords = (words: string) => routing.route(to => to.words(words));
+  // Live words land at the anchor, which then moves to just after them so the next words follow on.
+  const deliverWords = (words: string) => routing.route(to => {
+    const range = origin?.botId === to.botId ? origin.range : undefined;
+    const caret = to.words(words, range);
+    if (range && caret !== undefined) setOrigin({ botId: to.botId, range: { start: caret, end: caret } });
+  });
   const recorded = useDictation(insertRecorded, fail, language, 10 * 60_000, status?.nativeSpeech);
   const spoken = useLiveDictation(deliverWords, fail, language);
 
+  touchLive = spoken.touch;
   const state = spoken.state !== 'idle' ? spoken.state : recorded.state;
   const interim = spoken.interim || recorded.interim;
   useLayoutEffect(() => {
     useComposerDictation.setState(chatTarget() ? { state, interim } : { state: 'idle', interim: '' });
+    if (state === 'idle') setOrigin(undefined); // the anchor lives only as long as the dictation does
   }, [state, interim]);
 
   useLayoutEffect(() => {
@@ -98,13 +127,16 @@ export function ComposerDictationHost() {
         const audioInput = microphoneId();
         const server = status?.localSpeech || status?.realtime;
         const preferServer = status?.localSpeech || (server && (audioInput || isElectron()));
+        // Dictation only ever adds words: a selection becomes a caret after it, and the live words appear right there.
+        const anchor = range && { start: range.end, end: range.end };
         if (!preferServer && !isElectron() && supportsLiveDictation(audioInput)) {
+          setOrigin({ botId, range: anchor });
           playDictationSound(true);
           void spoken.start(audioInput);
           return;
         }
         if (server) {
-          origin.current = { botId, range };
+          setOrigin({ botId, range: anchor });
           void recorded.begin();
           return;
         }
@@ -118,7 +150,7 @@ export function ComposerDictationHost() {
         recorded.finish();
       },
       discard() {
-        origin.current = undefined;
+        setOrigin(undefined);
         routing.clear();
         spoken.stop(true);
         recorded.finish(true);
@@ -136,7 +168,7 @@ export function ComposerDictationHost() {
   }, [activeBot, view, appSettings, botSettings, compact, mobileChatOpen]);
 
   useEffect(() => useStore.subscribe((current, previous) => {
-    if (current.selectedBotId !== previous.selectedBotId) origin.current = undefined;
+    if (current.selectedBotId !== previous.selectedBotId) setOrigin(undefined);
   }), []);
 
   return null;

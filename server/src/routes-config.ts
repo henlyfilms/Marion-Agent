@@ -19,6 +19,7 @@ import { runInBotQueue } from './agent/loop.js';
 import { consolidateBot, historySize, maybeCompact, memoryConfig } from './agent/memory.js';
 import { idleConfig, viewerCount } from './idle.js';
 import { loadHistory } from './store.js';
+import { deleteUniversalSkill, listUniversalSkills, universalNames, updateUniversalSkill, upsertUniversalSkill } from './features/universal-skills.js';
 import { chatProviders, type ChatModel, type ChatModelSettings, type ChatProvider, type ChatModelSelection, type LibraryFile, type Memory, type Skill } from './types.js';
 
 /**
@@ -299,6 +300,7 @@ configApi.get('/bots/:id/settings', (c) => {
   return c.json({
     memories,
     skills: listSkills(b.id),
+    universalSkills: listUniversalSkills(b.user_id),
     routines: listRoutines(b.id),
     tasks: listTasks(b.id),
     memory: {
@@ -338,10 +340,32 @@ configApi.post('/bots/:id/skills', async (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   const s = cleanSkill(await c.req.json().catch(() => ({})));
   if (typeof s === 'string') return c.json({ error: s }, 400);
+  if (universalNames(b.user_id).has(String(s.name).replace(/\s+/g, ' ').toLowerCase())) return c.json({ error: `"${s.name}" is a universal skill. Edit it under Universal skills so every Bot gets the change.` }, 409);
   const id = newId('skl');
   db.prepare('INSERT INTO skills(id,bot_id,name,body,description,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run(id, b.id, s.name, s.body, s.description ?? '', now(), now());
   return c.json({ skill: toSkill(db.prepare('SELECT * FROM skills WHERE id=?').get(id)) });
 });
+
+// Universal skills: one shared copy per user, injected into every Bot's prompt.
+configApi.get('/skills/universal', (c) => c.json({ skills: listUniversalSkills(c.get('user').id) }));
+
+configApi.post('/skills/universal', async (c) => {
+  const s = cleanSkill(await c.req.json().catch(() => ({})));
+  if (typeof s === 'string') return c.json({ error: s }, 400);
+  const r = upsertUniversalSkill(c.get('user').id, s);
+  return r.ok ? c.json({ skill: r.skill }) : c.json({ error: r.message }, 400);
+});
+
+configApi.patch('/skills/universal/:id', async (c) => {
+  const s = cleanSkill(await c.req.json().catch(() => ({})), true);
+  if (typeof s === 'string') return c.json({ error: s }, 400);
+  const r = updateUniversalSkill(c.get('user').id, c.req.param('id'), s);
+  if (r.ok) return c.json({ skill: r.skill });
+  return c.json({ error: r.message }, r.message === 'not found' ? 404 : 400);
+});
+
+configApi.delete('/skills/universal/:id', (c) =>
+  deleteUniversalSkill(c.get('user').id, c.req.param('id')) ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404));
 
 const ownSkill = (userId: string, id: string) =>
   db.prepare('SELECT s.* FROM skills s JOIN bots b ON b.id=s.bot_id WHERE s.id=? AND b.user_id=?').get(id, userId) as any;
@@ -351,6 +375,7 @@ configApi.patch('/skills/:id', async (c) => {
   if (!cur) return c.json({ error: 'not found' }, 404);
   const s = cleanSkill(await c.req.json().catch(() => ({})), true);
   if (typeof s === 'string') return c.json({ error: s }, 400);
+  if (s.name !== undefined && universalNames(c.get('user').id).has(s.name.replace(/\s+/g, ' ').toLowerCase())) return c.json({ error: `"${s.name}" is a universal skill name. Pick another name.` }, 409);
   db.prepare('UPDATE skills SET name=?, body=?, description=?, updated_at=? WHERE id=?').run(s.name ?? cur.name, s.body ?? cur.body, s.description ?? cur.description ?? '', now(), cur.id);
   return c.json({ skill: toSkill(db.prepare('SELECT * FROM skills WHERE id=?').get(cur.id)) });
 });

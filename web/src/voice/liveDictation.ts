@@ -41,12 +41,7 @@ export function supportsLiveDictation(deviceId: string) {
   return !!recognition && (!deviceId || typeof recognition.available === 'function');
 }
 
-export function appendDictation(before: string, words: string) {
-  const trimmed = words.trim();
-  if (!trimmed) return before;
-  const head = before.trimEnd();
-  return head ? head + ' ' + trimmed : trimmed[0].toUpperCase() + trimmed.slice(1);
-}
+export { appendDictation } from './dictationText';
 
 export function useLiveDictation(onWords: (words: string) => void, onError: (error: string) => void, language?: string) {
   const [state, setState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
@@ -160,6 +155,9 @@ export function useLiveDictation(onWords: (words: string) => void, onError: (err
     } catch (error) { fail(micErrorMessage(error)); }
   }, [release, stop]);
 
+  /** Typing or editing counts as being active: the quiet timeout never ends dictation while the user is working in the box. */
+  const touch = useCallback(() => { if (active.current) active.current.lastWords = Date.now(); }, []);
+
   useEffect(() => () => release(true), [release]);
-  return { state, interim, start, stop };
+  return { state, interim, start, stop, touch };
 }

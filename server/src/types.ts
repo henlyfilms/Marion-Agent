@@ -236,7 +236,10 @@ export interface WorkPhase { title: string; status: 'pending' | 'running' | 'don
 export interface WorkCardBody {
   type: 'card';
   card: 'work';
+  /** A short mini title for what the relayed agent is doing (about 56 characters). */
   title: string;
+  /** The request it came from (first line), shown as a tooltip. */
+  detail?: string;
   /** The chat's own model, which only relays and reports. */
   reporter?: string;
   agents: WorkAgent[];
@@ -297,7 +300,10 @@ export interface Task { id: string; botId: string; title: string; state: 'workin
 
 export interface Memory { id: string; botId: string; text: string; createdAt: number; source?: 'chat' | 'learned' }
 
-export interface Skill { id: string; botId: string; name: string; description: string; body: string; createdAt: number; updatedAt: number }
+export interface Skill { id: string; botId: string; name: string; description: string; body: string; createdAt: number; updatedAt: number; universal?: false }
+
+/** A skill shared by every Bot on the user's team (one copy, injected into each prompt). */
+export interface UniversalSkill { id: string; name: string; description: string; body: string; createdAt: number; updatedAt: number; universal: true }
 
 export interface LibraryFile { name: string; size: number; modifiedAt: number; isDir: boolean }
 
@@ -310,6 +316,118 @@ export interface ComputerState {
 export interface Toolkit {
   slug: string; name: string; logo?: string; description?: string; categories: string[];
   managedAuth: boolean; noAuth: boolean; connected: boolean;
+}
+
+// ---------- sessions (bot chats and relayed agents) ----------
+
+export type RelayProvider = 'claude' | 'codex' | 'gemini';
+export type RelayKind = 'ask_subscription' | 'subscription_bot' | 'orchestration' | 'team';
+export type RelayStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+/**
+ * One row of the Sessions views. `type: 'chat'` is one conversation of a bot (a "generation": a new one starts when the
+ * chat is cleared); `type: 'relay'` is one run Marion relayed to Claude, Codex or Gemini.
+ */
+export interface MarionSession {
+  id: string;
+  type: 'chat' | 'relay';
+  kind: 'chat' | RelayKind;
+  provider: RelayProvider | null;
+  /** Chats: 'active' (the conversation on screen) or 'archived' (an earlier one). Relays: running, completed, failed, stopped. */
+  status: 'active' | 'archived' | RelayStatus;
+  title: string;
+  summary: string;
+  request: string | null;
+  error: string | null;
+  botId: string;
+  botName: string;
+  chatId: string;
+  generation: number | null;
+  folder: { name: string; path: string } | null;
+  model: string | null;
+  modelLabel: string | null;
+  effort: string | null;
+  tokens: { input: number; output: number } | null;
+  startedAt: number;
+  endedAt: number | null;
+  /** Last activity: the newest message of a chat, or when a relayed run last started or finished. */
+  updatedAt: number;
+  durationMs: number;
+  /** Relayed runs: model calls merged into this session (an orchestration makes several). */
+  calls: number;
+  /** Chats: messages in this conversation. */
+  messageCount: number | null;
+  role: string | null;
+  agent: string | null;
+  /** Relayed runs of one provider in one chat share this until Marion rotates to a fresh session. */
+  groupId: string | null;
+  /** Why this run started a fresh provider session instead of continuing the last one. */
+  rotated: string | null;
+}
+
+// ---------- statistics (GET /api/stats) ----------
+
+export type StatsRange = '7d' | '30d' | 'all';
+export interface StatsTokens { input: number; output: number; total: number }
+/** One calendar day of activity. `messages` are the ones the user sent; `runs` are relayed agent runs that started that day. */
+export interface StatsDay { date: string; messages: number; runs: number; tokens: number }
+export interface StatsBot {
+  id: string;
+  name: string;
+  label: string;
+  kind: 'agent' | 'room';
+  avatarShape: AvatarShape;
+  avatarColor: AvatarColor;
+  avatarStemColor: string | null;
+  /** Conversations (generations) with at least one message in the range. */
+  chats: number;
+  /** Messages the user sent to this bot. */
+  messages: number;
+  /** Every message in the chat (user + replies). */
+  totalMessages: number;
+  relayedRuns: number;
+  tokens: StatsTokens;
+  lastActiveAt: number | null;
+}
+export interface StatsProvider {
+  /** 'local' = the built-in chat models; the others are relayed to the Claude, Codex and Gemini CLIs. */
+  provider: ChatProvider;
+  runs: number;
+  completed: number;
+  failed: number;
+  stopped: number;
+  /** completed / finished runs (0–1); null when nothing has finished or the provider isn't relayed. */
+  completionRate: number | null;
+  tokens: StatsTokens;
+  durationMs: number;
+}
+export interface StatsModel { provider: ChatProvider; model: string; label: string; runs: number; tokens: StatsTokens }
+export interface StatsFolder { path: string; name: string; runs: number; tokens: number }
+export interface StatsSummary {
+  range: StatsRange;
+  generatedAt: number;
+  /** First and last day of `days` (YYYY-MM-DD, local). */
+  from: string;
+  to: string;
+  streak: { current: number; longest: number; activeDays: number; activeToday: boolean; lastActiveDate: string | null };
+  totals: {
+    userMessages: number; totalMessages: number; chats: number; relayedRuns: number; completedRuns: number;
+    tokens: StatsTokens; agentTimeMs: number; activeDays: number; activeBots: number;
+  };
+  days: StatsDay[];
+  bots: StatsBot[];
+  mostWorkedBot: StatsBot | null;
+  providers: StatsProvider[];
+  models: StatsModel[];
+  insights: {
+    busiestWeekday: { day: number; count: number } | null;
+    peakHour: { hour: number; count: number } | null;
+    weekdayCounts: number[];
+    hourCounts: number[];
+    avgMessagesPerActiveDay: number;
+    agentSuccessRate: number | null;
+    topFolders: StatsFolder[];
+  };
 }
 
 /** Server-sent events on GET /api/events */
@@ -328,6 +446,8 @@ export type ServerEvent =
   | { type: 'connections' }
   | { type: 'model-settings' }
   | { type: 'notify'; notification: AppNotification }
+  /** A relayed agent session started, finished or rotated (or a bot's chat session changed): Sessions views reload. */
+  | { type: 'sessions'; botId?: string }
   | { type: 'ping' };
 
 export type NotificationKind = 'finished' | 'approval' | 'question' | 'error' | 'bot-message' | 'routine' | 'learned';

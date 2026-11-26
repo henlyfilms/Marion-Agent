@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { prefGet, prefSet } from './lib/prefs';
+import { readResume } from './lib/resume';
 import type { Bot, ChatModelSelection, ChatSort, ComputerState, LiveState, Routine, Row, ServerEvent, User } from '@shared/types';
 import { api } from './lib/api';
 import { configApi } from './lib/configApi';
@@ -14,7 +15,7 @@ function viewingBotId() {
   return s.selectedBotId;
 }
 
-export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'group' | 'team' | 'screenshots' | null;
+export type ModalKind = 'create' | 'search' | 'apps' | 'usage' | 'stats' | 'group' | 'team' | 'screenshots' | null;
 
 interface Transcript { generation: number; bySeq: Record<number, Row>; loaded: boolean }
 
@@ -90,7 +91,7 @@ export const useStore = create<State>((set, get) => ({
   sseConnected: false,
   detailsOpen: lsGet(LS_DETAILS) !== '0',
   sidebarCollapsed: lsGet(LS_SIDEBAR) === '1',
-  mobileChatOpen: false,
+  mobileChatOpen: readResume()?.mobileChatOpen ?? false,
   mobileDetailsOpen: false,
   modal: null,
   viewerOpen: false,
@@ -193,6 +194,8 @@ export const useStore = create<State>((set, get) => ({
         return;
       case 'cleared':
         set((st) => ({ transcripts: { ...st.transcripts, [ev.botId]: { generation: ev.generation, bySeq: {}, loaded: true } } }));
+        // A new conversation is a new chat session: Sessions views reload (see configStore.ts).
+        window.dispatchEvent(new CustomEvent('marion-agent:event', { detail: ev }));
         return;
       case 'live':
         set((st) => ({ live: { ...st.live, [ev.state.botId]: ev.state } }));
@@ -229,6 +232,7 @@ export const useStore = create<State>((set, get) => ({
         if (s.routines[ev.botId] || ev.botId === s.selectedBotId) s.loadRoutines(ev.botId).catch(console.error);
         return;
       case 'tasks':
+      case 'sessions':
       case 'memories':
         // Picked up by configStore.ts (Tasks view, Library/Tasks tabs, bot settings).
         window.dispatchEvent(new CustomEvent('marion-agent:event', { detail: ev }));

@@ -174,7 +174,8 @@ const LABELS: Record<AppSection, string> = {
 const labelFor = (section: AppSection) => LABELS[section];
 
 function UpdatesSection() {
-  const { status, checking, error, check, install } = useAppUpdate();
+  const { status, checking, error, check, install, setAuto } = useAppUpdate();
+  const autoUpdate = status?.autoUpdate !== false; // on by default
   const busy = updateBusy(status);
   const available = updateAvailable(status);
   return (
@@ -205,6 +206,17 @@ function UpdatesSection() {
         )}
       </section>
       {error && <p role="alert" className="cfg-error">{error}</p>}
+      <section className="cfg-section">
+        <div className="cfg-card">
+          <div className="cfg-row">
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">Auto-update</div>
+              <div className="cfg-row__sub">Install new versions by itself when nothing is running and you haven’t been chatting for a few minutes. Running bots and assistants keep going, and Marion Agent puts you back where you were.</div>
+            </div>
+            <Switch on={autoUpdate} onChange={(on) => void setAuto(on)} label="Auto-update" disabled={!status} />
+          </div>
+        </div>
+      </section>
       {available && status!.changes.length > 0 && (
         <section className="cfg-section">
           <div className="cfg-section__label">What’s new</div>
@@ -212,7 +224,7 @@ function UpdatesSection() {
         </section>
       )}
       {available && status?.dirty && <p className="cfg-field__hint">Another chat has unsaved changes in the source folder. The update waits until that work is committed.</p>}
-      <p className="cfg-field__hint">Updating builds the new version on this Mac while you keep working, then Marion Agent restarts by itself in a few seconds. Your chats and settings stay as they are.</p>
+      <p className="cfg-field__hint">Updating builds the new version on this Mac while you keep working, then Marion Agent restarts by itself in a few seconds and reopens on the chat and view you were on. Bots and assistants that are working keep working through the restart; the new version takes over for them as soon as they finish. Your chats and settings stay as they are.</p>
     </>
   );
 }

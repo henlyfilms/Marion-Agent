@@ -205,6 +205,17 @@ export function LifeLinkSection() {
             {s?.enabled && <button type="button" className="cfg-btn cfg-btn--primary" disabled={!!busy} onClick={() => void run('sync', featuresApi.syncLife, 'All chats are copied.')}>{busy === 'sync' ? 'Copying…' : 'Sync now'}</button>}
           </div>
           {s?.lastError && <div className="cfg-error cfg-error--inset">{s.lastError}</div>}
+          {s?.enabled && link?.outbox && (
+            <div className="cfg-row cfg-row--divided">
+              <div className="cfg-row__text">
+                <div className="cfg-row__title">Claude sessions and deleted chats</div>
+                <div className="cfg-row__sub">
+                  {link.outbox.sentSessions} session summar{link.outbox.sentSessions === 1 ? 'y' : 'ies'} and {link.outbox.sentDeleted} deleted item{link.outbox.sentDeleted === 1 ? '' : 's'} sent
+                  {link.outbox.pendingSessions + link.outbox.pendingDeleted > 0 ? ` · ${link.outbox.pendingSessions + link.outbox.pendingDeleted} waiting${link.outbox.lastError ? ` (${link.outbox.lastError})` : ''}` : ''}
+                </div>
+              </div>
+            </div>
+          )}
           {s && (
             <div className="cfg-row cfg-row--divided">
               <div className="cfg-row__text">

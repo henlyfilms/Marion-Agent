@@ -1,7 +1,10 @@
 import { availableLocalModels } from './models.js';
 import { modelReply } from './orchestration.js';
 import { subscriptionModels, subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
-import { trailingQuestion, WorkCard } from './work-feed.js';
+import { miniTitle, trailingQuestion, WorkCard } from './work-feed.js';
+import { leanLine, relayMedia } from './relay.js';
+import type { SessionTrack } from '../features/life-outbox.js';
+import type { UploadedAttachment } from '../attachments.js';
 import { env } from '../env.js';
 import { getBotRow } from '../store.js';
 import type { ChatModel, ChatModelSelection, ChatProvider, WorkAgent } from '../types.js';
@@ -63,10 +66,10 @@ function jsonFrom(text: string): any {
   try { return JSON.parse(text.slice(start, end + 1)); } catch { return undefined; }
 }
 
-async function call(agent: Agent, prompt: string, signal: AbortSignal, card: WorkCard, folder?: Folder) {
+async function callAgent(agent: Agent, prompt: string, signal: AbortSignal, card: WorkCard, folder?: Folder, images: UploadedAttachment[] = [], session?: SessionTrack) {
   const stop = AbortSignal.any([signal, AbortSignal.timeout(CALL_MS)]);
   if (agent.provider === 'local') return modelReply(agent.selection, prompt, stop);
-  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, stop, [], { folder, onStep: card.feed(agent.label) })).trim();
+  return (await subscriptionReply(agent.selection as SubscriptionSelection, prompt, stop, images, { folder, onStep: card.feed(agent.label), session })).trim();
 }
 
 export async function orchestrate(ctx: { userId: string; botId: string; signal?: AbortSignal; allowSubscriptionTeam?: boolean }, args: any, folder?: Folder) {
@@ -89,8 +92,23 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
   }
   const signal = ctx.signal ?? AbortSignal.timeout(60 * 60_000);
   const bot = getBotRow(ctx.botId);
+  // Every call here is its own fresh session (the plan, each task and each review are self-contained), so the
+  // owner's screenshots / screen-recording frames travel with the planning and the work, and the Token optimizer
+  // line is added once per call. Reviews and the report get neither the images nor the long goal.
+  const media = await relayMedia(ctx.botId);
+  const lean = leanLine(ctx.botId, Boolean(folder));
+  // Each Claude agent in the run is one session in Marion Life (its plan, tasks and reviews are merged into it).
+  const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const trackFor = (agent: Agent): SessionTrack => ({
+    id: `orchestrate:${ctx.botId}:${runId}:${agent.id}`, kind: 'orchestration', userId: ctx.userId, botId: ctx.botId,
+    request: goal, title: miniTitle(goal, args?.title), folder: folder && { path: folder.path, label: folder.label },
+    role: agent.role, agent: agent.label, groupId: `orchestrate:${ctx.botId}:${runId}`,
+  });
+  const call = (agent: Agent, prompt: string, stopSignal: AbortSignal, workCard: WorkCard, where?: Folder, withMedia = false) =>
+    callAgent(agent, [prompt, withMedia ? media.note : '', lean].filter(Boolean).join('\n\n'), stopSignal, workCard, where, withMedia ? media.images : [], trackFor(agent));
+  const brief = goal.length > 2000 ? `${goal.slice(0, 2000)}…` : goal;
   const card = new WorkCard(ctx.botId, ctx.userId, {
-    title: String(args?.title ?? goal.split('\n')[0]).slice(0, 120), reporter: bot?.name,
+    title: miniTitle(goal, args?.title), detail: goal.split('\n')[0], reporter: bot?.name,
     agents: [lead, ...workers].map(({ selection: _selection, ...agent }) => agent),
   });
   const roster = workers.map(w => `- ${w.label} (${providerNames[w.provider]} ${w.model})`).join('\n');
@@ -105,7 +123,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
       `Split the goal into 1–${MAX_PHASES} phases, in order. Each phase has 1–${MAX_TASKS} tasks that can run at the same time; assign each to a subagent by its exact name, spreading the work. Each task must be self-contained: the subagent sees only its task.`,
       'If you truly cannot start without the owner answering something, set "question" instead of phases.',
       'Reply with JSON only: {"phases":[{"title":"short phase name","tasks":[{"worker":"subagent name","task":"full instructions"}]}],"question":null}',
-    ].join('\n\n'), signal, card, folder && { ...folder, write: false });
+    ].join('\n\n'), signal, card, folder && { ...folder, write: false }, true);
     const plan = jsonFrom(planText);
     if (plan?.question && !plan?.phases?.length) {
       card.step(lead.label, 'question', String(plan.question));
@@ -134,7 +152,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
             `The overall goal:\n${goal}`, results.length ? `Earlier phases produced:\n${results.join('\n\n').slice(-RESULT_CHARS)}` : '', extra,
             `Your task (phase "${phase.title}"):\n${task}`,
             'Do the task completely. Finish with a short summary of exactly what you did or produced (full code when you wrote code and there is no folder).',
-          ].filter(Boolean).join('\n\n'), signal, card, folder);
+          ].filter(Boolean).join('\n\n'), signal, card, folder, true);
           card.step(worker.label, 'note', 'Finished its task');
           return { worker, text };
         } catch (error) {
@@ -147,7 +165,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
       for (let round = 0; round < 2; round++) {
         card.step(lead.label, 'review', `Reviewing ${phase.title}`);
         const review = jsonFrom(await call(lead, [
-          `You are ${lead.label}, the orchestrator. Review the subagents' work for phase "${phase.title}".`, where, `The owner's goal:\n${goal}`,
+          `You are ${lead.label}, the orchestrator. Review the subagents' work for phase "${phase.title}".`, where, `The owner's goal:\n${brief}`,
           `Results:\n${outputs.map(o => `## ${o.worker.label}\n${o.text.slice(0, RESULT_CHARS)}`).join('\n\n')}`,
           round === 0 ? 'Approve if it is correct and complete. Otherwise list precise fixes, each for one subagent.' : 'This is the final check for this phase: approve unless something is badly wrong.',
           'Reply with JSON only: {"approved":true,"note":"one short sentence","fixes":[{"worker":"subagent name","task":"what to fix"}]}',
@@ -177,7 +195,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
     card.step(lead.label, 'note', 'Writing the report');
     const report = await call(lead, [
       `You are ${lead.label}, the orchestrator. The team finished. Write the final report for the owner: what was done, by whom, what to check, anything left. Short and concrete.`,
-      `Goal:\n${goal}`, `Results:\n${results.join('\n\n').slice(-RESULT_CHARS * 2)}`,
+      `Goal:\n${brief}`, `Results:\n${results.join('\n\n').slice(-RESULT_CHARS * 2)}`,
     ].join('\n\n'), signal, card, folder && { ...folder, write: false });
     card.finish('done');
     return {

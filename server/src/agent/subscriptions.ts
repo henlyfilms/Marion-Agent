@@ -7,6 +7,8 @@ import { delimiter, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import { db } from '../db.js';
+import { beginAgentSession, finishAgentSession } from '../features/agent-sessions.js';
+import { recordSessionEnd, type SessionFinish, type SessionTrack } from '../features/life-outbox.js';
 import type { UploadedAttachment } from '../attachments.js';
 import '../db-config.js';
 import { isDesktop } from '../lib/desktop-access.js';
@@ -112,7 +114,7 @@ const providerArgs = { codex: codexArgs, gemini: agyArgs, claude: claudeArgs };
  * Arguments for a task inside a folder the bot shares. The CLI still starts in Marion's empty temp folder
  * and gets the shared folder as its only extra directory. Writes are confined by each CLI's own sandbox.
  */
-function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write: boolean }) {
+function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write: boolean }, photosFolder?: string[]) {
   if (provider === 'claude') {
     const settings = folder.write
       ? { disableAllHooks: true, sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } }
@@ -128,7 +130,9 @@ function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write
   // File tools are allowed only under the shared folder (Antigravity's write_file otherwise reaches any path);
   // shell commands run in its sandbox, which blocks writes outside the workspace.
   const inFolder = (tool: string) => `${tool}(${folder.path}/**)`;
-  const allowed = folder.write ? [inFolder('read_file'), inFolder('write_file'), 'command(*)'] : [inFolder('read_file')];
+  // The user's screenshots and recording frames sit in Marion's own temp folder: reading there is allowed too.
+  const photos = (photosFolder ?? []).map(path => `read_file(${path}/**)`);
+  const allowed = folder.write ? [inFolder('read_file'), inFolder('write_file'), 'command(*)', ...photos] : [inFolder('read_file'), ...photos];
   const open = folder.write ? ['read_file(*)', 'write_file(*)', 'command(*)'] : ['read_file(*)'];
   const settings = JSON.stringify({ modelProvider: '', allowNonWorkspaceAccess: false, permissions: { allow: allowed, deny: googleDeny.filter(rule => !open.includes(rule)) } });
   return [
@@ -290,6 +294,8 @@ interface ReplyOptions {
   onModel?: (model: SubscriptionSelection) => void;
   /** Each step the CLI takes (a command, an edit, a file read…), for the live work feed. Costs nothing extra. */
   onStep?: (kind: StepKind, text: string) => void;
+  /** When set, this run is kept in Marion Agent's Sessions (any provider); for Claude a short summary also goes to Marion Life. */
+  session?: SessionTrack;
 }
 
 type StepKind = 'command' | 'edit' | 'read' | 'search' | 'note' | 'error';
@@ -330,6 +336,50 @@ function geminiSteps(line: string, onStep: NonNullable<ReplyOptions['onStep']>) 
 export async function subscriptionReply(
   selection: SubscriptionSelection, prompt: string, signal: AbortSignal, images: UploadedAttachment[] = [], options: ReplyOptions = {},
 ): Promise<string> {
+  const track = options.session;
+  if (!track) return runSubscriptionReply(selection, prompt, signal, images, options);
+  // Every relayed run (Claude, Codex or Gemini, any outcome) is kept for Marion Agent's Sessions views, and a finished
+  // Claude run is also summarised for Marion Life. This never changes what the caller gets back.
+  const startedAt = Date.now();
+  const provider = selection.provider;
+  const finished = (finish: SessionFinish) => {
+    finishAgentSession(track, provider, finish);
+    if (provider === 'claude') recordSessionEnd(track, finish);
+  };
+  beginAgentSession(track, provider, startedAt);
+  let actual: SubscriptionSelection = selection;
+  let tokens: { input?: number; output?: number } | undefined;
+  const watched: ReplyOptions = {
+    ...options,
+    onModel: value => { actual = value; options.onModel?.(value); },
+    onUsage: counts => { tokens = { input: counts.input, output: counts.output }; options.onUsage?.(counts); },
+  };
+  const model = () => ({ id: actual.model, label: actual.label, effort: actual.effort });
+  try {
+    const reply = await runSubscriptionReply(selection, prompt, signal, images, watched);
+    finished({ status: 'completed', reply, startedAt, endedAt: Date.now(), model: model(), tokens });
+    return reply;
+  } catch (error) {
+    finished({ status: signal.aborted ? 'stopped' : 'failed', error: String((error as Error)?.message ?? error), startedAt, endedAt: Date.now(), model: model(), tokens });
+    throw error;
+  }
+}
+
+/** Claude/Codex/Gemini runs in progress: they are children of this server, so it must not be replaced while any runs. */
+let activeRuns = 0;
+export const activeProviderRuns = () => activeRuns;
+
+async function runSubscriptionReply(
+  selection: SubscriptionSelection, prompt: string, signal: AbortSignal, images: UploadedAttachment[], options: ReplyOptions,
+): Promise<string> {
+  activeRuns++;
+  try { return await spawnSubscriptionReply(selection, prompt, signal, images, options); }
+  finally { activeRuns--; }
+}
+
+async function spawnSubscriptionReply(
+  selection: SubscriptionSelection, prompt: string, signal: AbortSignal, images: UploadedAttachment[], options: ReplyOptions,
+): Promise<string> {
   const { provider, model, effort } = selection;
   if (!isDesktop) throw new Error('Subscription chat is available in the Mac app.');
   const program = executable(provider);
@@ -340,7 +390,7 @@ export async function subscriptionReply(
   const stop = AbortSignal.any([signal, deadline]);
   try {
     if (provider === 'claude') await requireClaudeSubscription(program, cwd, stop);
-    const args = folder && provider !== 'codex' ? folderArgs(provider, folder)
+    const args = folder && provider !== 'codex' ? folderArgs(provider, folder, provider === 'gemini' && images.length ? [...new Set([cwd, await realpath(cwd).catch(() => cwd)])] : undefined)
       : provider === 'gemini' && images.length
         ? agyArgs.map(arg => arg === googleSettings ? googleSettingsWithPhotos : arg)
         : [...providerArgs[provider]];
@@ -367,7 +417,7 @@ export async function subscriptionReply(
         await writeFile(join(cwd, name), image.data, { mode: 0o600 });
         return name;
       }));
-      prompt += `\n\nThe user's images are saved in your working folder as: ${names.join(', ')}. Open and look at them before answering.`;
+      prompt += `\n\nThe user's images are saved as: ${names.map(name => join(cwd, name)).join(', ')}. Open and look at them before answering.`;
     }
     const child = spawn(program, provider === 'codex' && folder ? codexArgs.filter((arg, index) => arg !== 'features.shell_tool=false' && codexArgs[index + 1] !== 'features.shell_tool=false') : args, {
       cwd, env: cliEnvironment(), signal: stop, stdio: ['pipe', 'pipe', 'pipe'],

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
-import { Activity, BarChart3, Brain, Eraser, FileText, Images, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Brain, Eraser, FileText, Film, Images, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
 import { featuresApi, formatTokens, useFeatureUI } from '../lib/featuresApi';
 import { MicSolid, PhoneSolid, ScreenRecordGlyph } from './SolidGlyphs';
 import type { Bot, ChatModel } from '@shared/types';
@@ -10,9 +10,10 @@ import { displayName, useStore } from '../store';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
 import { ModelPicker } from './ModelPicker';
+import { VoiceWave } from './VoiceWave';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { voiceApi, type VoiceStatus } from '../voice/api';
-import { appendDictation } from '../voice/liveDictation';
+import { insertDictated, liveSpan, reconcileEdit, withSpan } from '../voice/dictationText';
 import { composerDictation, registerDictationSink, useComposerDictation, type TextRange } from '../voice/composerDictation';
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../voice/audio';
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
@@ -28,24 +29,57 @@ const photoTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const textFiles = '.txt,.md,.markdown,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.htm,.css,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.sh,.sql';
 const isPhoto = (file: File) => photoTypes.includes(file.type) || /\.(?:png|jpe?g|webp|gif)$/i.test(file.name);
 const isTextFile = (file: File) => file.type.startsWith('text/') || textFiles.split(',').some(ext => file.name.toLowerCase().endsWith(ext));
+const videoTypes = ['video/quicktime', 'video/mp4', 'video/webm'];
+/** Screen recordings (macOS saves .mov); the server turns them into frames for Claude, Codex and Gemini. */
+const isVideo = (file: File) => file.type.startsWith('video/') || /\.(?:mov|mp4|m4v|webm)$/i.test(file.name);
+/** Matches the server: a few minutes of retina screen recording is far over 64 MB. */
+const MAX_VIDEO = 256 * 1024 * 1024;
+/** One message carries at most two recordings (the server's request size limit is two of them). */
+const MAX_VIDEOS = 2;
 const MAX_PHOTO = 4 * 1024 * 1024;
 const MAX_TEXT = 256 * 1024;
 /** Pasted screenshots arrive as "image.png"; give them a readable, unique name. */
-const named = (file: File, index: number) => file.name && file.name !== 'image.png' ? file
-  : new File([file], `Pasted image ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }).replace(':', '.')}${index ? ` (${index + 1})` : ''}.${file.type.split('/')[1] || 'png'}`, { type: file.type });
+const named = (file: File, index: number) => {
+  if (file.name && file.name !== 'image.png') return file;
+  const recording = file.type.startsWith('video/');
+  const extension = recording ? (file.type === 'video/quicktime' ? 'mov' : file.type.split('/')[1] || 'mp4') : file.type.split('/')[1] || 'png';
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }).replace(':', '.');
+  return new File([file], `Pasted ${recording ? 'recording' : 'image'} ${time}${index ? ` (${index + 1})` : ''}.${extension}`, { type: file.type });
+};
+
+const formatSize = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+const formatDuration = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 
 function DraftAttachment({ file, remove, disabled }: { file: File; remove: () => void; disabled: boolean }) {
   const [preview, setPreview] = useState<string>();
+  const [seconds, setSeconds] = useState<number>();
+  /** The browser can't decode this recording (e.g. an HEVC .mov): keep the chip, just without a thumbnail. */
+  const [unplayable, setUnplayable] = useState(false);
+  const video = isVideo(file);
   useEffect(() => {
-    if (!isPhoto(file)) return;
+    if (!isPhoto(file) && !video) return;
     const url = URL.createObjectURL(file);
     setPreview(url);
+    setSeconds(undefined);
+    setUnplayable(false);
     return () => URL.revokeObjectURL(url);
-  }, [file]);
+  }, [file, video]);
+  const detail = [video && seconds ? formatDuration(seconds) : '', video ? formatSize(file.size) : ''].filter(Boolean).join(' · ');
   return (
-    <li className="composer-file">
-      {preview ? <img src={preview} alt="" /> : <FileText size={17} aria-hidden="true" />}
-      <span title={file.name}>{file.name}</span>
+    <li className={`composer-file${video ? ' is-video' : ''}`}>
+      {video
+        ? <span className="composer-file__thumb" aria-hidden="true">
+            {preview && !unplayable
+              ? <video src={`${preview}#t=0.1`} muted playsInline preload="metadata"
+                  onLoadedMetadata={event => setSeconds(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : undefined)}
+                  onError={() => setUnplayable(true)} />
+              : <Film size={16} />}
+          </span>
+        : preview ? <img src={preview} alt="" /> : <FileText size={17} aria-hidden="true" />}
+      <span className="composer-file__name" title={file.name}>
+        {file.name}
+        {detail && <small>{detail}</small>}
+      </span>
       <button type="button" onClick={remove} disabled={disabled} aria-label={`Remove ${file.name}`}><X size={15} /></button>
     </li>
   );
@@ -80,6 +114,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState(microphoneId);
   const ref = useRef<HTMLTextAreaElement>(null);
+  /** Where the live (still being heard) dictation words sit in the box right now. */
+  const liveSpanShown = useRef({ at: 0, len: 0 });
   const micPress = useRef<{ id: number; at: number; started: boolean }>();
   const setModal = useStore((s) => s.setModal);
   const localCall = useLocalCall(s => s.botId === bot.id && isLocalCallActive(s));
@@ -144,16 +180,18 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const addFiles = (added: File[]) => {
     const combined = [...files, ...added];
     if (combined.length > 4) { setError('Add up to four attachments per message.'); return false; }
-    const unsupported = added.find(file => !isPhoto(file) && !isTextFile(file));
+    if (combined.filter(isVideo).length > MAX_VIDEOS) { setError(`Add up to ${MAX_VIDEOS} screen recordings per message.`); return false; }
+    const unsupported = added.find(file => !isPhoto(file) && !isVideo(file) && !isTextFile(file));
     if (unsupported) {
       setError(/\.pdf$/i.test(unsupported.name)
         ? 'PDFs can’t be read yet. Copy the text into a .txt file, or take a screenshot of the page.'
-        : `${unsupported.name} isn’t supported. Add photos (PNG, JPEG, WebP, GIF) or text files.`);
+        : `${unsupported.name} isn’t supported. Add screenshots (PNG, JPEG, WebP, GIF), screen recordings (MOV, MP4, WebM) or text files.`);
       return false;
     }
-    const invalid = added.find(file => !file.size || file.size > (isPhoto(file) ? MAX_PHOTO : MAX_TEXT));
+    const limit = (file: File) => isVideo(file) ? MAX_VIDEO : isPhoto(file) ? MAX_PHOTO : MAX_TEXT;
+    const invalid = added.find(file => !file.size || file.size > limit(file));
     if (invalid) {
-      setError(!invalid.size ? 'Choose a file with content.' : isPhoto(invalid) ? 'Photos must be 4 MB or smaller.' : 'Text files must be 256 KB or smaller.');
+      setError(!invalid.size ? 'Choose a file with content.' : isVideo(invalid) ? 'Screen recordings must be 256 MB or smaller.' : isPhoto(invalid) ? 'Photos must be 4 MB or smaller.' : 'Text files must be 256 KB or smaller.');
       return false;
     }
     setFiles(combined);
@@ -176,34 +214,57 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     return () => window.removeEventListener(ATTACH_EVENT, onAttach);
   }, [bot.id, compact]);
 
-  // Server transcription preserves the selection the user had when recording started.
+  // Server transcription goes where the caret was when recording began (kept in step with the user's edits by
+  // composerDictation.noteEdit) and never replaces text that was edited since.
   const insertText = (t: string, range?: TextRange) => {
     const el = ref.current;
-    setText((cur) => {
-      const start = range?.start ?? cur.length;
-      const end = range?.end ?? cur.length;
-      const before = cur.slice(0, start);
-      const after = cur.slice(end);
-      const pre = before && !/\s$/.test(before) ? ' ' : '';
-      const post = after && !/^\s/.test(after) ? ' ' : '';
-      // Match the live preview: a dictation that starts the message starts with a capital letter.
-      if (!before.trim()) t = t.charAt(0).toUpperCase() + t.slice(1);
-      requestAnimationFrame(() => { if (el && document.activeElement === el) { const pos = before.length + pre.length + t.length; el.setSelectionRange(pos, pos); } });
-      return before + pre + t + post + after;
-    });
+    let caret = el && document.activeElement === el ? el.selectionStart : undefined;
+    // The box already shows the live words where they belong: a caret right after them (or inside) is "at the
+    // insertion point", and one further on is measured without them.
+    const live = liveSpanShown.current;
+    if (caret !== undefined && live.len) caret = caret >= live.at + live.len ? caret - live.len : caret > live.at ? undefined : caret;
+    const placed = insertDictated(getDraft(bot.id), t, range, caret);
+    setText(placed.value);
+    if (caret !== undefined) requestAnimationFrame(() => { if (el && document.activeElement === el) el.setSelectionRange(placed.caret, placed.caret); });
   };
   // Dictation runs in a host that outlives this chat box (see voice/composerDictation). This box registers as
   // the place its words go; switching chats hands that role to the next chat box without stopping the recording.
   useLayoutEffect(() => registerDictationSink({
     botId: bot.id,
     insert: insertText,
-    words: words => setText(current => appendDictation(current, words)),
+    words: (spoken, range) => {
+      const heard = spoken.trim();
+      if (!heard) return range?.end;
+      const placed = insertDictated(getDraft(bot.id), heard, range);
+      setText(placed.value);
+      return range ? placed.caret : undefined;
+    },
     error: setMicError,
   }), [bot.id]);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
   const state = useComposerDictation(s => s.state);
   const liveWords = useComposerDictation(s => s.interim);
-  const shown = liveWords ? appendDictation(text, liveWords) : text;
+  // Where dictation began: the words being heard are drawn right there (not at the end of the box).
+  const anchor = useComposerDictation(s => s.anchor?.botId === bot.id ? s.anchor.at : undefined);
+  const span = liveSpan(text, liveWords, anchor);
+  const shown = withSpan(text, span);
+  const tail = span.tail;
+  // Setting the box's value moves the browser caret to the end, so remember where it was and put it back: right after
+  // the live words when it was on them, otherwise where the user left it.
+  const domBefore = useRef<{ value: string; caret: number; focused: boolean }>();
+  const field = ref.current;
+  domBefore.current = field ? { value: field.value, caret: field.selectionStart, focused: document.activeElement === field } : undefined;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const before = domBefore.current;
+    const previous = liveSpanShown.current;
+    liveSpanShown.current = { at: span.at, len: span.tail.length };
+    if (!el || !before?.focused || before.value === shown || !(previous.len || span.tail)) return;
+    const caret = before.caret >= previous.at && before.caret <= previous.at + previous.len ? span.end
+      : before.caret > previous.at + previous.len ? before.caret + span.tail.length - previous.len : before.caret;
+    const place = Math.max(0, Math.min(caret, shown.length));
+    el.setSelectionRange(place, place);
+  }, [shown, span.at, span.end, span.tail]);
   const discardDictation = composerDictation.discard;
   const stopDictation = composerDictation.stop;
   const startDictation = () => {
@@ -211,7 +272,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     setMicError(null);
     setAudioMenu(false);
     const input = ref.current;
-    composerDictation.start(bot.id, input && document.activeElement === input ? { start: input.selectionStart, end: input.selectionEnd } : undefined);
+    // The live words appear at the caret (after a selection), not at the end of the box.
+    composerDictation.start(bot.id, input && document.activeElement === input ? { start: input.selectionEnd, end: input.selectionEnd } : undefined);
   };
   const toggleDictation = () => {
     if (state === 'recording') stopDictation();
@@ -386,7 +448,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
         addFiles(Array.from(event.dataTransfer.files));
         ref.current?.focus();
       }}>
-      {dropping && <div className="composer-drop" aria-hidden="true">Drop photos or files to attach</div>}
+      {dropping && <div className="composer-drop" aria-hidden="true">Drop screenshots, screen recordings or files to attach</div>}
       {notice && !error && <div className="composer__error composer__notice" role="status">{notice}</div>}
       {error && <div className="composer__error">{error} <button type="button" className="link-btn" onClick={() => setError(null)}>Dismiss</button></div>}
       <div className="composer__progress" role="status" data-visible={sending}>
@@ -418,7 +480,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           </button>
         )}
         <div className={`mic-note is-${lastMicTone.current}`} data-visible={!!micText} role={micTone === 'error' && micText ? 'alert' : 'status'} aria-hidden={!micText}>
-          {lastMicTone.current === 'live' ? <span className="mic-note__wave" aria-hidden="true"><i /><i /><i /></span> : <MicOff size={13} aria-hidden="true" />}
+          {lastMicTone.current === 'live' ? <VoiceWave active={state === 'recording'} /> : <MicOff size={13} aria-hidden="true" />}
           <span className="mic-note__text">{lastMicText.current}</span>
           {lastMicTone.current === 'error' && <button type="button" className="mic-note__close" tabIndex={micText ? 0 : -1} onClick={() => setMicError(null)} aria-label="Dismiss"><Icon name="close" size={9} /></button>}
         </div>
@@ -441,7 +503,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       <div className={`composer${multiline ? ' is-multiline' : ''}`}>
         <div className="composer__left">
           <span className="composer__plus-anchor">
-            <input ref={fileInput} type="file" multiple hidden accept={[...photoTypes, textFiles].join(',')} onChange={event => {
+            <input ref={fileInput} type="file" multiple hidden accept={[...photoTypes, ...videoTypes, '.mov,.mp4,.m4v,.webm', textFiles].join(',')} onChange={event => {
               addFiles(Array.from(event.currentTarget.files ?? []));
               event.currentTarget.value = '';
               ref.current?.focus();
@@ -472,7 +534,13 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             rows={1}
             value={shown}
             placeholder={`Message ${displayName(bot)}`}
-            onChange={(e) => { discardDictation(); setText(e.target.value); }}
+            onChange={(e) => {
+              // Typing, backspacing and deleting never stop dictation: the edit goes into the text you wrote, and the
+              // place dictated words will land follows it.
+              const edit = reconcileEdit(text, tail, e.target.value, span.at);
+              composerDictation.noteEdit(bot.id, edit);
+              setText(edit.text);
+            }}
             onPaste={(e) => {
               const pasted = Array.from(e.clipboardData.files);
               if (!pasted.length) return;

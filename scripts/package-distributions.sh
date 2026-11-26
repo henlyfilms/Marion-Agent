@@ -19,6 +19,9 @@ cp -p "$installer/Install Marion Agent.command" "$package/"
 cp -p "$installer/payload/Info.plist" "$package/payload/"
 cp -p "$installer/payload/Resources/MarionAgent.icns" "$resources/"
 cp -Rp "$installer/payload/Resources/app" "$resources/"
+# <commit>.<time>: lets a running app tell its own build from the server it left running, so an update swaps the
+# server only when nothing is running, and lets the server know which commit it was built from (auto-update).
+printf '%s.%s\n' "$(git rev-parse --short=7 HEAD 2>/dev/null || echo dev)" "$(date +%s)" > "$resources/BUILD_ID"
 
 cp -p .env.example .gitignore package.json package-lock.json README.md SECURITY.md THIRD_PARTY_NOTICES.md \
   'Launch Marion Agent.command' 'Launch Marion Agent.cmd' "$source/"

@@ -99,9 +99,9 @@ export function WorkCard({ body }: { body: WorkCardBody }) {
         <span className="work-card__logos" aria-hidden="true">
           {[...new Map(body.agents.map(agent => [agent.provider, agent])).values()].slice(0, 3).map(agent => <span key={agent.provider}><ProviderLogo provider={agent.provider} size={14} /></span>)}
         </span>
-        <span className="work-card__who">
-          <strong>{running ? `${names(body.agents).join(' and ')} ${body.agents.length > 1 ? 'are' : 'is'} working` : who}</strong>
-          <span>{body.title}</span>
+        <span className="work-card__who" title={body.detail || body.title}>
+          <strong className="work-card__title">{body.title}</strong>
+          <span>{running ? `${names(body.agents).join(' and ')} ${body.agents.length > 1 ? 'are' : 'is'} working` : `${who}${body.status === 'done' ? ' · done' : ''}`}</span>
         </span>
         <span className={`work-card__status is-${body.status}`}>
           {running && <span className="work-card__pulse" aria-hidden="true" />}

@@ -14,6 +14,7 @@ import { lifePromptLine } from '../features/life-link.js';
 import { foldersPromptLine } from '../features/folders.js';
 import { agentSkills } from './skills.js';
 import { repairHistory } from './history.js';
+import { freshStart } from './relay.js';
 import { estimateChars, maybeCompact, memoriesForPrompt, noteUsage } from './memory.js';
 import { notify } from '../features/notify.js';
 import { allowBotMessage } from '../features/coordination.js';
@@ -82,6 +83,8 @@ export function runInBotQueue<T>(botId: string, job: () => Promise<T>): Promise<
 }
 
 export const isBotBusy = (botId: string) => queues.has(botId);
+/** How many bots have a turn running or waiting (the desktop app waits for 0 before it swaps in a new server build). */
+export const busyBotCount = () => queues.size;
 
 function enqueueBotMessage(fromBotId: string, toBotId: string, text: string, depth: number, opts: { autoReply?: boolean } = {}) {
   const from = getBotRow(fromBotId);
@@ -190,6 +193,7 @@ async function runTurn(botId: string, trigger: Trigger) {
   const ctx: ToolCtx = { userId, botId, enqueueBotMessage, depth, signal: ctrl.signal, allowSubscriptionTeam: trigger.type === 'user' && trigger.allowSubscriptionTeam, messaged: new Set(), replyTo: trigger.type === 'bot' && !trigger.autoReply ? trigger.fromBotId : undefined };
   const startSeq = (db.prepare('SELECT COALESCE(MAX(seq),0) seq FROM rows WHERE bot_id=? AND generation=?').get(botId, bot.generation) as any).seq as number;
   let failure: string | null = null;
+  ctx.turn = { id: `${botId}:${bot.generation}:${startSeq}`, startedAt: now(), request: '' };
   setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() }, awaiting: null, startedAt: now() });
 
   try {
@@ -453,7 +457,13 @@ async function modelHistory(botId: string, voice?: VoiceTurn) {
 async function callSubscriptionModel(
   ctx: ToolCtx, selection: SubscriptionSelection, tools: any[], signal: AbortSignal, voice: VoiceTurn | undefined, record: RecordUsage,
 ) {
-  const history = pruneImages(repairHistory(recentHistory(await modelHistory(ctx.botId, voice), SUBSCRIPTION_WINDOW)));
+  const windowed = pruneImages(repairHistory(recentHistory(await modelHistory(ctx.botId, voice), SUBSCRIPTION_WINDOW)));
+  // Big or unrelated context: this CLI call starts a fresh session (summary + current request) instead of replaying it all.
+  const fresh = voice ? { history: windowed, reason: null } : freshStart(windowed);
+  const history = fresh.history;
+  if (fresh.reason && history.at(-1)?.role === 'user') {
+    appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Started a fresh ${selection.label || selection.provider} session: ${fresh.reason}. Your chat above is unchanged.` });
+  }
   const images: UploadedAttachment[] = [];
   // The current message (with any attached text files) gets a larger budget than older turns.
   const textContent = (content: any, budget = 20_000) => {
@@ -494,8 +504,10 @@ async function callSubscriptionModel(
   const estimatedInput = Math.ceil(prompt.length / 4 + images.length * 1500);
   let actual = selection;
   let counts: TokenCounts | undefined;
+  const asked = current ? textContent(current.content, 1500) : '';
   const reply = (await subscriptionReply(selection, prompt, signal, images, {
     fast: voice?.fast,
+    session: ctx.turn ? { id: `turn:${ctx.turn.id}`, kind: 'subscription_bot', userId: ctx.userId, botId: ctx.botId, request: asked || ctx.turn.request, rotated: fresh.reason } : undefined,
     onUsage: value => { counts = value; },
     onModel: value => { actual = value; setLive(ctx.botId, { activeModel: value }); },
   })).trim();

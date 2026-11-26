@@ -3,6 +3,7 @@ import { db, now } from '../db.js';
 import { hub } from '../lib/hub.js';
 import { createBotRecord } from './bots.js';
 import { agentSettings } from './agent-settings.js';
+import { archiveDeletedBot, noteRestoredBot } from './life-outbox.js';
 import { emitBot, getBot, toBot } from '../store.js';
 import { matchModel } from '../agent/orchestrate.js';
 import { subscriptionModels } from '../agent/subscriptions.js';
@@ -96,6 +97,7 @@ export async function runAppControl(ctx: { userId: string; botId: string; allowS
       const row = findBot(userId, ctx.botId, a.bot);
       if (!row || !a.bot || row.id === ctx.botId) return { output: row?.id === ctx.botId ? 'A bot can\'t delete itself. Ask the owner.' : `No bot matches "${a.bot}".` };
       db.prepare('UPDATE bots SET hidden=1, deleted_at=?, is_primary=0, pinned=0 WHERE id=?').run(now(), row.id);
+      archiveDeletedBot(userId, row.id, 'agent_tool');
       hub.emit(userId, { type: 'roster' });
       return { output: `Deleted ${row.name}. The owner can restore it for 30 days (Settings → General → Recently deleted).`, summary: `Deleted ${row.name}` };
     }
@@ -103,6 +105,7 @@ export async function runAppControl(ctx: { userId: string; botId: string; allowS
       const row = findBot(userId, ctx.botId, a.bot, true);
       if (!row) return { output: `No recently deleted bot matches "${a.bot}".` };
       db.prepare('UPDATE bots SET hidden=0, deleted_at=NULL, updated_at=? WHERE id=?').run(now(), row.id);
+      noteRestoredBot(userId, row.id, row.deleted_at);
       hub.emit(userId, { type: 'roster' });
       return { output: `Restored ${row.name}.`, summary: `Restored ${row.name}` };
     }

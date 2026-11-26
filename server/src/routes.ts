@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { attachmentBodyLimit, getAttachment, readAttachments, type UploadedAttachment } from './attachments.js';
+import { forModel } from './video-frames.js';
+import { attachmentBodyLimit, getAttachment, getAttachmentInfo, getAttachmentSlice, parseByteRange, readAttachments, type UploadedAttachment } from './attachments.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { streamSSE } from 'hono/streaming';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -9,6 +10,8 @@ import { env } from './env.js';
 import { isDesktop } from './lib/desktop-access.js';
 import { newId, token } from './lib/ids.js';
 import { hub } from './lib/hub.js';
+import { archiveExists } from './features/deleted-archive.js';
+import { archiveDeletedBot, noteRestoredBot } from './features/life-outbox.js';
 import { createSession, destroySession, remoteAccessFor, remoteWorkspaceUser, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, chatTranscript, clearConversation, emitBot, getBot, getBotRow, toBot, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
 import { enqueue, interrupt, resolveApproval, runInBotQueue } from './agent/loop.js';
@@ -340,6 +343,8 @@ api.delete('/bots/:id', async (c) => {
     for (const r of listRoutines(b.id)) unscheduleRoutine(r.id);
     // Deleted chats are kept (hidden) so they can be restored; purgeDeletedChats removes them for good later.
     db.prepare('UPDATE bots SET hidden=1, deleted_at=?, is_primary=0, pinned=0 WHERE id=?').run(now(), b.id);
+    // Keep a full copy in the local Deleted archive and queue it for Marion Life's Deleted folder (never blocks the delete).
+    archiveDeletedBot(userId, b.id, 'sidebar');
     hub.emit(userId, { type: 'roster' });
   });
   return c.json({ ok: true });
@@ -349,11 +354,17 @@ api.delete('/bots/:id', async (c) => {
 export const DELETED_KEEP_MS = 30 * 24 * 3600_000;
 
 export function purgeDeletedChats() {
-  const old = db.prepare('SELECT id FROM bots WHERE deleted_at IS NOT NULL AND deleted_at < ?').all(now() - DELETED_KEEP_MS) as { id: string }[];
-  for (const { id } of old) db.transaction(() => {
-    db.prepare('DELETE FROM screens WHERE bot_id=?').run(id);
-    db.prepare('DELETE FROM bots WHERE id=?').run(id);
-  })();
+  const old = db.prepare('SELECT id, user_id FROM bots WHERE deleted_at IS NOT NULL AND deleted_at < ?').all(now() - DELETED_KEEP_MS) as { id: string; user_id: string }[];
+  for (const { id, user_id } of old) {
+    // Never remove the last copy: make sure the Deleted archive has it before it goes for good.
+    archiveDeletedBot(user_id, id, 'startup_backfill');
+    const row = db.prepare('SELECT deleted_at FROM bots WHERE id=?').get(id) as { deleted_at: number } | undefined;
+    if (row && !archiveExists(`${id}:${row.deleted_at}`)) continue;
+    db.transaction(() => {
+      db.prepare('DELETE FROM screens WHERE bot_id=?').run(id);
+      db.prepare('DELETE FROM bots WHERE id=?').run(id);
+    })();
+  }
 }
 setTimeout(() => { try { purgeDeletedChats(); } catch (e) { console.warn('[bots] purge failed', (e as Error).message); } }, 5000).unref();
 
@@ -368,6 +379,7 @@ api.post('/bots/:id/restore', (c) => {
   const b = ownBot(userId, c.req.param('id'));
   if (!b || b.deleted_at == null) return c.json({ error: 'That chat can no longer be restored.' }, 404);
   db.prepare('UPDATE bots SET hidden=0, deleted_at=NULL, updated_at=? WHERE id=?').run(now(), b.id);
+  noteRestoredBot(userId, b.id, b.deleted_at);
   for (const r of listRoutines(b.id)) if (r.enabled) scheduleRoutine(r);
   hub.emit(userId, { type: 'roster' });
   return c.json({ bot: getBot(b.id) });
@@ -420,15 +432,31 @@ api.get('/bots/:id/rows', (c) => {
 api.get('/bots/:id/attachments/:fileId', (c) => {
   const bot = ownBot(c.get('user').id, c.req.param('id'));
   if (!bot) return c.notFound();
-  const file = getAttachment(bot.id, bot.generation, c.req.param('fileId'));
-  if (!file) return c.notFound();
+  const fileId = c.req.param('fileId');
+  const info = getAttachmentInfo(bot.id, bot.generation, fileId);
+  if (!info) return c.notFound();
   c.header('Cache-Control', 'private, no-store');
   c.header('X-Content-Type-Options', 'nosniff');
-  c.header('Content-Type', file.mime);
-  if (file.mime === 'text/plain') {
-    const filename = encodeURIComponent(Buffer.from(file.name).toString()).replace(/['()*]/g, ch => '%' + ch.charCodeAt(0).toString(16));
+  c.header('Content-Type', info.mime);
+  if (info.mime === 'text/plain') {
+    const filename = encodeURIComponent(Buffer.from(info.name).toString()).replace(/['()*]/g, ch => '%' + ch.charCodeAt(0).toString(16));
     c.header('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
   }
+  // Screen recordings play and seek in the chat: honour byte ranges and read only the slice asked for.
+  if (info.mime.startsWith('video/')) {
+    c.header('Accept-Ranges', 'bytes');
+    const range = parseByteRange(c.req.header('range'), info.size);
+    if (range === 'unsatisfiable') { c.header('Content-Range', `bytes */${info.size}`); return c.body(null, 416); }
+    if (range) {
+      const part = getAttachmentSlice(bot.id, bot.generation, fileId, range.start, range.end - range.start + 1);
+      if (!part) return c.notFound();
+      c.header('Content-Range', `bytes ${range.start}-${range.end}/${info.size}`);
+      c.header('Content-Length', String(part.length));
+      return c.body(part, 206);
+    }
+  }
+  const file = getAttachment(bot.id, bot.generation, fileId);
+  if (!file) return c.notFound();
   return c.body(file.data);
 });
 
@@ -486,11 +514,14 @@ api.post('/bots/:id/messages', bodyLimit({
     ...(call ? { from: { kind: 'voice' as const, id: call, name: 'Voice call' } } : {}),
     ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),
   }, attachments);
+  // Screen recordings reach the models as frames (the chat keeps the original file).
+  const media = await forModel(attachments);
+  const mediaNote = media.note ? `[${media.note}]\n` : '';
   // Group chats dispatch to their member Bots instead of running their own loop.
-  if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, attachments, notes);
+  if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, media.attachments, notes + mediaNote);
   else {
     const voice = call ? { call, seq: row.seq, fast: !override } : undefined;
-    const turn = { type: 'user' as const, text: notes + text, attachments, generation: row.generation, voice,
+    const turn = { type: 'user' as const, text: notes + mediaNote + text, attachments: media.attachments, generation: row.generation, voice,
       allowSubscriptionTeam: isDesktop && !remoteAccessFor(c) };
     enqueue(b.id, provider === 'local'
       ? { ...turn, local: { model, label: selection.label, effort: voice?.fast ? 'low' : effort ?? 'medium' } }

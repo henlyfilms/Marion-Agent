@@ -3,6 +3,7 @@ import { prefGet, prefSet } from './lib/prefs';
 import { readCustomTheme, readTheme, saveCustomTheme, THEME_PREF, themeColors, themeStyle, type CustomTheme, type Theme } from './lib/themes';
 import type { ServerEvent } from '@shared/types';
 import { useStore } from './store';
+import { readResume, trackResume } from './lib/resume';
 
 /** UI state for bot settings, app settings, the Tasks view and the theme. Kept apart from store.ts on purpose. */
 
@@ -49,10 +50,13 @@ export function applyTheme(t: Theme) {
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', background);
 }
 
+// After an update restart or reload, reopen on the view and settings page that were open.
+const resumed = readResume();
+
 export const useConfigUI = create<ConfigUI>((set, get) => ({
-  botSettings: null,
-  appSettings: null,
-  view: 'chat',
+  botSettings: resumed?.botSettings ? { botId: resumed.botSettings.botId, tab: resumed.botSettings.tab as BotSettingsTab } : null,
+  appSettings: (resumed?.appSettings as AppSettingsPage | null | undefined) ?? null,
+  view: resumed?.view ?? 'chat',
   theme: readTheme(),
   customTheme: readCustomTheme(),
   setCustomTheme: (customTheme) => {
@@ -88,6 +92,8 @@ window.addEventListener('marion-agent:event', (e) => {
   const { bump } = useConfigUI.getState();
   if (ev.type === 'tasks') { bump('tasks'); bump(`tasks:${ev.botId}`); }
   if (ev.type === 'memories') bump(`memories:${ev.botId}`);
+  // A relayed agent started, finished or rotated, or a bot began a new conversation: Sessions views reload.
+  if (ev.type === 'sessions' || ev.type === 'cleared') bump('sessions');
 });
 
 // Picking a bot anywhere (sidebar, search) goes back to its chat.
@@ -95,4 +101,12 @@ useStore.subscribe((s, prev) => {
   if (s.selectedBotId !== prev.selectedBotId && useConfigUI.getState().view !== 'chat') useConfigUI.getState().setView('chat');
 });
 
-export const useVersion = (key: string) => useConfigUI((s) => s.versions[key] ?? 0);
+trackResume(
+  () => {
+    const ui = useConfigUI.getState();
+    return { view: ui.view, appSettings: ui.appSettings, botSettings: ui.botSettings, mobileChatOpen: useStore.getState().mobileChatOpen };
+  },
+  listener => { useConfigUI.subscribe(listener); useStore.subscribe((s, prev) => { if (s.mobileChatOpen !== prev.mobileChatOpen) listener(); }); },
+);
+
+export const useVersion =(key: string) => useConfigUI((s) => s.versions[key] ?? 0);

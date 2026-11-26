@@ -1,13 +1,14 @@
-import type { Bot, NotificationSettings } from '@shared/types';
+import type { Bot, MarionSession, NotificationSettings, StatsRange, StatsSummary } from '@shared/types';
 import { create } from 'zustand';
 import { ApiError } from './api';
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const isForm = body instanceof FormData;
   const res = await fetch(`/api${path}`, {
     method, credentials: 'include',
     headers: body !== undefined && !isForm ? { 'Content-Type': 'application/json' } : undefined,
     body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     let msg = res.statusText;
@@ -58,21 +59,39 @@ export interface PushDevice { id: string; endpoint: string; label: string; creat
 export interface LifeLink {
   settings: { enabled: boolean; autoSync: boolean; endpoint: string; lifeEmail: string; lastSyncAt: number | null; lastError: string | null; syncedChats: number; blockedBots?: string[] };
   hasKey: boolean;
+  /** Claude session summaries and deleted chats/bots waiting to be sent to Marion Life (they are never lost). */
+  outbox?: { pendingSessions: number; sentSessions: number; pendingDeleted: number; sentDeleted: number; lastError: string | null };
 }
 
 export type SessionProvider = 'claude' | 'codex' | 'gemini';
 export interface CodingSession { id: string; provider: SessionProvider; title: string; project: string; path: string; updatedAt: number; active: boolean; steps?: number }
 export interface SessionMessage { role: 'user' | 'assistant'; text: string; at?: number }
+export type { MarionSession };
+/** Filters for Marion Agent's own sessions (bot chats and relayed Claude / Codex / Gemini runs). */
+export interface MarionSessionFilter { botId?: string; type?: 'chat' | 'relay'; kind?: string; provider?: SessionProvider; status?: string; limit?: number }
+const sessionParams = (filter: MarionSessionFilter) => {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filter)) if (value !== undefined && value !== '') params.set(key, String(value));
+  const text = params.toString();
+  return text ? `?${text}` : '';
+};
 export interface UpdateStatus {
   supported: boolean; current: string | null; latest: string | null; behind: number; changes: string[]; dirty: boolean; reason?: string;
   install: { state: 'idle' | 'building' | 'installing' | 'failed'; message: string; at: number };
+  /** Settings → Updates → Auto-update. On unless the owner turned it off. */
+  autoUpdate?: boolean;
 }
 
 export const featuresApi = {
   sessions: (provider?: SessionProvider) => req<{ sessions: CodingSession[] }>('GET', `/sessions${provider ? `?provider=${provider}` : ''}`),
+  stats: (range: StatsRange, signal?: AbortSignal) => req<StatsSummary>('GET', `/stats?range=${range}`, undefined, signal),
+  marionSessions: (filter: MarionSessionFilter = {}) => req<{ sessions: MarionSession[]; running: number }>('GET', `/sessions/marion${sessionParams(filter)}`),
+  botSessions: (botId: string, filter: Omit<MarionSessionFilter, 'botId'> = {}) => req<{ sessions: MarionSession[]; running: number }>('GET', `/bots/${encodeURIComponent(botId)}/sessions${sessionParams(filter)}`),
+  chatSessionMessages: (botId: string, generation: number) => req<{ messages: SessionMessage[] }>('GET', `/bots/${encodeURIComponent(botId)}/sessions/${generation}/messages`),
   sessionMessages: (id: string) => req<{ messages: SessionMessage[] }>('GET', `/sessions/${encodeURIComponent(id)}/messages`),
   updateStatus: (current: string) => req<UpdateStatus>('GET', `/app/update?current=${encodeURIComponent(current)}`),
   installUpdate: () => req<{ ok: true }>('POST', '/app/update', {}),
+  setAutoUpdate: (autoUpdate: boolean) => req<{ autoUpdate: boolean }>('PUT', '/app/update/settings', { autoUpdate }),
   templates: () => req<{ templates: BotProfileData[] }>('GET', '/templates'),
   saveTemplate: (botId: string) => req<{ id: string; name: string }>('POST', `/bots/${botId}/template`),
   removeTemplate: (id: string) => req<{ ok: true }>('DELETE', `/templates/${encodeURIComponent(id)}`),

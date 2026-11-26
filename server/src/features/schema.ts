@@ -57,6 +57,55 @@ CREATE TABLE IF NOT EXISTS bot_messages_log (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bot_messages_log_pair ON bot_messages_log(from_bot_id, to_bot_id, created_at);
+-- Everything Marion Agent still has to tell Marion Life (or already told it): Claude session summaries and
+-- deleted chats/bots. Rows wait here while Life is off, unreachable, or hasn't added the matching tool yet.
+CREATE TABLE IF NOT EXISTS life_outbox (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  sent_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS life_outbox_pending ON life_outbox(user_id, sent_at, next_attempt_at);
+-- Every run Marion relayed to Claude, Codex or Gemini (ask_subscription, subscription-backed bots, orchestrate, team):
+-- running, finished, failed or stopped, kept locally so Marion Agent can show them (Sessions view, a bot's Sessions panel).
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  request TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  error TEXT,
+  chat_generation INTEGER,
+  folder_path TEXT,
+  folder_label TEXT,
+  model TEXT,
+  model_label TEXT,
+  effort TEXT,
+  tokens_in INTEGER,
+  tokens_out INTEGER,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 0,
+  active_calls INTEGER NOT NULL DEFAULT 0,
+  role TEXT,
+  agent TEXT,
+  group_id TEXT,
+  rotated TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_sessions_user ON agent_sessions(user_id, started_at);
+CREATE INDEX IF NOT EXISTS agent_sessions_bot ON agent_sessions(bot_id, started_at);
 CREATE TABLE IF NOT EXISTS life_sync (
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,

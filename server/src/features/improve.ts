@@ -3,6 +3,7 @@ import { hub } from '../lib/hub.js';
 import { newId } from '../lib/ids.js';
 import { getBotRow } from '../store.js';
 import { agentSkills } from '../agent/skills.js';
+import { listUniversalSkills, universalSkillByName, upsertUniversalSkill } from './universal-skills.js';
 import { backgroundText, parseJsonObject } from '../agent/background-model.js';
 import { similar } from '../agent/memory.js';
 import { notify } from './notify.js';
@@ -10,13 +11,25 @@ import { notify } from './notify.js';
 export const LESSONS_SKILL = 'Lessons learned';
 const MAX_LESSONS = 30;
 
-/** Create or update (same name, case-insensitive) one of a bot's skills. */
-export function saveLearnedSkill(botId: string, name: string, description: string, body: string) {
+/**
+ * Create or update (same name, case-insensitive) a skill.
+ * A name that matches a universal skill, or `universal: true`, saves the shared skill so every Bot gets the change.
+ * `universal: false` forces a skill private to this Bot.
+ */
+export function saveLearnedSkill(botId: string, name: string, description: string, body: string, opts: { universal?: boolean } = {}) {
   const cleanName = name.replace(/\s+/g, ' ').trim().slice(0, 80);
   const cleanBody = body.trim().slice(0, 12_000);
   if (!cleanName || !cleanBody) return { ok: false, message: 'A skill needs a name and steps.' };
   const bot = getBotRow(botId);
   if (!bot) return { ok: false, message: 'Bot not found.' };
+  listUniversalSkills(bot.user_id);
+  const shared = opts.universal === false ? undefined : universalSkillByName(bot.user_id, cleanName);
+  if (opts.universal === true || shared) {
+    const result = upsertUniversalSkill(bot.user_id, { name: cleanName, description: shared && !description.trim() ? undefined : description, body: cleanBody });
+    if (!result.ok) return result;
+    hub.emit(bot.user_id, { type: 'memories', botId });
+    return { ok: true, message: `${result.created ? 'Saved' : 'Updated'} universal skill "${result.skill.name}". Every Bot on the team now uses it.` };
+  }
   const existing = db.prepare('SELECT id FROM skills WHERE bot_id=? AND lower(name)=lower(?)').get(botId, cleanName) as { id: string } | undefined;
   if (existing) {
     db.prepare('UPDATE skills SET body=?, description=?, updated_at=? WHERE id=?').run(cleanBody, description.trim().slice(0, 300), now(), existing.id);
@@ -42,7 +55,7 @@ export function addLessons(botId: string, lessons: string[]) {
   }
   if (!added.length) return 0;
   const merged = [...current, ...added].slice(-MAX_LESSONS);
-  saveLearnedSkill(botId, LESSONS_SKILL, 'What this Bot learned from past chats. It follows these automatically.', merged.map(line => `- ${line}`).join('\n'));
+  saveLearnedSkill(botId, LESSONS_SKILL, 'What this Bot learned from past chats. It follows these automatically.', merged.map(line => `- ${line}`).join('\n'), { universal: false });
   return added.length;
 }
 

@@ -16,10 +16,10 @@ export class WorkCard {
   private timer: NodeJS.Timeout | null = null;
   private readonly live: boolean;
 
-  constructor(private readonly botId: string, userId: string, init: { title: string; agents: WorkAgent[]; phases?: string[]; reporter?: string }) {
+  constructor(private readonly botId: string, userId: string, init: { title: string; detail?: string; agents: WorkAgent[]; phases?: string[]; reporter?: string }) {
     this.live = agentSettings(userId).liveFeed;
     this.body = {
-      type: 'card', card: 'work', title: init.title.slice(0, 160), reporter: init.reporter, agents: init.agents,
+      type: 'card', card: 'work', title: init.title.slice(0, 160), ...(init.detail ? { detail: init.detail.replace(/\s+/g, ' ').trim().slice(0, 240) } : {}), reporter: init.reporter, agents: init.agents,
       phases: (init.phases ?? []).map(title => ({ title: title.slice(0, 80), status: 'pending' })), steps: [], live: this.live, status: 'running', startedAt: now(),
     };
     this.seq = appendRow(botId, 'card', this.body).seq;
@@ -82,6 +82,33 @@ export class WorkCard {
     if (!row || row.generation !== getBotRow(this.botId)?.generation) return;
     updateRow(this.botId, this.seq, { ...this.body, steps: [...this.body.steps], phases: this.body.phases.map(p => ({ ...p })) });
   }
+}
+
+const MINI_TITLE_MAX = 56;
+const POLITE = /^(?:please|pls|kindly|hey|hi|ok(?:ay)?|so|now|then|and|go ahead and|can you|could you|would you|will you|can we|could we|i need you to|i want you to|i'd like you to|i would like you to|you should|you need to|let's|lets|help me)\s+/i;
+
+/**
+ * A short label for what a relayed agent is working on, for the work card. A given title wins; otherwise it is
+ * the request's first sentence with the polite lead-in, markdown and links removed, cut at a word boundary.
+ */
+export function miniTitle(prompt: unknown, given?: unknown): string {
+  const tidy = (value: string) => value.replace(/https?:\/\/\S+/g, ' ').replace(/[`*_#>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const fit = (value: string) => {
+    const text = value.replace(/[\s.,;:!?-]+$/, '');
+    if (text.length <= MINI_TITLE_MAX) return text;
+    const head = text.slice(0, MINI_TITLE_MAX + 1);
+    const space = head.lastIndexOf(' ');
+    return `${head.slice(0, space > 24 ? space : MINI_TITLE_MAX).replace(/[\s.,;:!?-]+$/, '')}…`;
+  };
+  const upper = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+  const explicit = tidy(String(given ?? ''));
+  if (explicit) return upper(fit(explicit));
+  const lines = String(prompt ?? '').split('\n').map(line => tidy(line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, ''))).filter(line => line.length > 2);
+  let first = lines[0] ?? '';
+  // First sentence only (a colon ends it too: "Fix the login: it fails when…").
+  first = first.split(/(?<=[.!?])\s|:\s|,\s+(?:and\s+)?then\s|\s+and then\s/i)[0];
+  for (let guard = 0; guard < 4 && POLITE.test(first); guard++) first = first.replace(POLITE, '');
+  return upper(fit(first)) || 'Working on a request';
 }
 
 /** A CLI's final reply that ends by asking the owner something: relay it as a question. */

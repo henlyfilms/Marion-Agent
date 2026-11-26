@@ -1,5 +1,5 @@
 import type { OrchestrationSettings, TeamMember } from '@shared/types';
-import type { Bot, ChatModel, ChatModelSelection, ChatModelSettings, ChatProvider, ComputerState, LibraryFile, Memory, Routine, Skill, Task, Toolkit } from '@shared/types';
+import type { Bot, ChatModel, ChatModelSelection, ChatModelSettings, ChatProvider, ComputerState, LibraryFile, Memory, Routine, Skill, Task, Toolkit, UniversalSkill } from '@shared/types';
 import { ApiError } from './api';
 
 async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -21,6 +21,7 @@ async function req<T>(method: string, path: string, body?: unknown, signal?: Abo
 export interface BotSettingsBundle {
   memories: Memory[];
   skills: Skill[];
+  universalSkills: UniversalSkill[];
   routines: Routine[];
   tasks: Task[];
   memory: { lastConsolidatedAt: number | null; historyChars: number; compactAtChars: number; lastCompaction: { method: string; created_at: number } | null };
@@ -73,6 +74,9 @@ export const configApi = {
   createSkill: (botId: string, s: Pick<Skill, 'name' | 'description' | 'body'>) => req<{ skill: Skill }>('POST', `/bots/${botId}/skills`, s),
   updateSkill: (id: string, s: Partial<Pick<Skill, 'name' | 'description' | 'body'>>) => req<{ skill: Skill }>('PATCH', `/skills/${id}`, s),
   deleteSkill: (id: string) => req<{ ok: true }>('DELETE', `/skills/${id}`),
+  createUniversalSkill: (s: Pick<Skill, 'name' | 'description' | 'body'>) => req<{ skill: UniversalSkill }>('POST', '/skills/universal', s),
+  updateUniversalSkill: (id: string, s: Partial<Pick<Skill, 'name' | 'description' | 'body'>>) => req<{ skill: UniversalSkill }>('PATCH', `/skills/universal/${id}`, s),
+  deleteUniversalSkill: (id: string) => req<{ ok: true }>('DELETE', `/skills/universal/${id}`),
 
   setRoutine: (id: string, enabled: boolean) => req<{ routine: Routine }>('PATCH', `/routines/${id}`, { enabled }),
   runRoutine: (id: string) => req<{ ok: true }>('POST', `/routines/${id}/run`),

@@ -9,6 +9,8 @@ interface UpdateUI {
   error: string;
   check(): Promise<void>;
   install(): Promise<void>;
+  /** Turn Auto-update on or off (saved on the server; on by default). */
+  setAuto(on: boolean): Promise<void>;
 }
 
 export const BUILD = typeof __MARION_BUILD__ === 'string' ? __MARION_BUILD__ : 'dev';
@@ -30,6 +32,12 @@ export const useAppUpdate = create<UpdateUI>((set, get) => ({
     try { set({ status: await featuresApi.updateStatus(BUILD) }); }
     catch (cause) { set({ error: (cause as Error).message }); }
     finally { set({ checking: false }); }
+  },
+  setAuto: async (on) => {
+    const before = get().status;
+    set({ error: '', status: before ? { ...before, autoUpdate: on } : before });
+    try { await featuresApi.setAutoUpdate(on); }
+    catch (cause) { set({ error: (cause as Error).message, status: before }); }
   },
   install: async () => {
     set({ error: '' });
