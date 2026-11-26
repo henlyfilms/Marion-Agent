@@ -113,7 +113,7 @@ function SwipeChat({ bot, openSide, setSwipe, onDelete, onError, children }: {
   );
 }
 
-function ChatAvatar({ bot, running, awaiting, size }: { bot: Bot; running: boolean; awaiting: string | null; size: number }) {
+function ChatAvatar({ bot, running, awaiting, size, ring, star }: { bot: Bot; running: boolean; awaiting: string | null; size: number; ring: boolean; star: boolean }) {
   const [celebrate, setCelebrate] = useState(false);
   useEffect(() => {
     const remaining = 3200 - (Date.now() - (bot.completedAt ?? 0));
@@ -124,10 +124,10 @@ function ChatAvatar({ bot, running, awaiting, size }: { bot: Bot; running: boole
   }, [bot.completedAt]);
   const showCelebration = celebrate && !running && !awaiting;
   return (
-    <span className={`bot-row__avatar${showCelebration ? ' is-complete' : ''}`}>
-      <BotAvatarFor bot={bot} size={size} />
+    <span className={`bot-row__avatar${showCelebration ? ' is-complete' : ''}${ring && running && !awaiting ? ' is-working' : ''}`}>
+      <BotAvatarFor bot={bot} size={size} star={star} />
       {showCelebration && <span key={bot.completedAt} className="completion-mark" role="img" aria-label="Task completed"><Icon name="check" size={11} /></span>}
-      {!showCelebration && (running || awaiting || bot.unread > 0) && (
+      {!showCelebration && !(running && !awaiting) && (awaiting || bot.unread > 0) && (
         <span className={`status-dot ${awaiting ? 'is-attention' : running ? 'is-working' : 'is-unread'}`} aria-label={awaiting ? 'Needs attention' : running ? 'Working' : 'Unread activity'} />
       )}
     </span>
@@ -144,14 +144,17 @@ const BotButton = memo(function BotButton({ bot, selected, running, awaiting, va
   return (
     <button type="button" className={`bot-row bot-row--${variant}${selected ? ' is-selected' : ''}`} onClick={open}
       aria-label={displayName(bot)} aria-current={selected || undefined} title={variant === 'rail' ? displayName(bot) : undefined}
-      {...contextMenu(displayName(bot), () => [...botMenuItems(bot, true), ...moveItems(), { label: 'Delete chat…', danger: true, separator: true, onSelect: remove }])}>
-      <ChatAvatar bot={bot} running={running} awaiting={awaiting} size={variant === 'featured' ? 62 : 40} />
+      {...contextMenu(displayName(bot), () => [...botMenuItems(bot, true), ...moveItems(), { label: 'Delete chat…', danger: true, separator: true, onSelect: remove }])}
+      data-running={running || undefined}>
+      <ChatAvatar bot={bot} running={running} awaiting={awaiting} size={variant === 'featured' ? 62 : 40} ring={variant !== 'row'} star={bot.pinned && variant !== 'row'} />
       <span className="bot-row__text">
-        <span className="bot-row__name">{displayName(bot)}{bot.pinned && variant !== 'featured' && <Icon name="star" size={11} className="bot-row__star" />}</span>
+        <span className="bot-row__name">{displayName(bot)}{bot.pinned && variant === 'row' && <Icon name="star" size={12} className="bot-row__star" aria-label="Starred" />}</span>
         {variant !== 'featured' && <span className="bot-row__preview">{previewFor(bot, running, awaiting)}</span>}
       </span>
-      {variant !== 'featured' && (!!bot.lastPreview || !!bot.contextTokens) && <span className="bot-row__meta">
-        {bot.lastPreview && <time className="bot-row__time" dateTime={new Date(bot.lastActivityAt).toISOString()}>{activityTime(bot.lastActivityAt)}</time>}
+      {variant !== 'featured' && (!!bot.lastPreview || !!bot.contextTokens || running) && <span className="bot-row__meta">
+        {running && !awaiting
+          ? <span className="bot-row__spinner" role="img" aria-label="Working" />
+          : bot.lastPreview && <time className="bot-row__time" dateTime={new Date(bot.lastActivityAt).toISOString()}>{activityTime(bot.lastActivityAt)}</time>}
         {bot.kind !== 'room' && bot.contextTokens ? <span className={`bot-row__context ${contextTone(bot.contextTokens)}`} title={`Context: ${bot.contextTokens.toLocaleString()} of 1,000,000 tokens`}
           aria-label={`Context ${formatTokens(bot.contextTokens)} tokens`}><span className="bot-row__context-bar"><span style={{ width: `${contextFraction(bot.contextTokens) * 100}%` }} /></span>{formatTokens(bot.contextTokens)}</span> : null}
       </span>}
@@ -285,16 +288,38 @@ export function Sidebar() {
 
   const pendingDelete = bots.find(bot => bot.id === deleting);
   const closeDelete = useCallback(() => { if (!busy) setDeleting(null); }, [busy]);
+  const [undo, setUndo] = useState<{ id: string; name: string } | null>(null);
+  const [undoLeaving, setUndoLeaving] = useState(false);
+  const undoTimer = useRef(0);
+  const dismissUndo = useCallback(() => {
+    clearTimeout(undoTimer.current);
+    setUndoLeaving(true);
+    undoTimer.current = window.setTimeout(() => { setUndo(null); setUndoLeaving(false); }, 260);
+  }, []);
+  useEffect(() => () => clearTimeout(undoTimer.current), []);
   const remove = async () => {
     if (!pendingDelete || busy) return;
     setBusy(true);
     setError('');
     try {
-      await configApi.deleteBot(pendingDelete.id);
+      const gone = { id: pendingDelete.id, name: displayName(pendingDelete) };
+      await configApi.deleteBot(gone.id);
       setDeleting(null);
       await useStore.getState().loadBots();
+      clearTimeout(undoTimer.current);
+      setUndoLeaving(false);
+      setUndo(gone);
+      undoTimer.current = window.setTimeout(dismissUndo, 8000);
     } catch (cause) { report(cause); }
     finally { setBusy(false); }
+  };
+  const restore = async (id: string) => {
+    dismissUndo();
+    try {
+      await configApi.restoreBot(id);
+      await useStore.getState().loadBots();
+      openBotChat(id);
+    } catch (cause) { report(cause); }
   };
   const askDelete = (id: string) => { setError(''); setDeleting(id); };
 
@@ -374,13 +399,17 @@ export function Sidebar() {
       </div>
       {pendingDelete && <Modal onClose={closeDelete} className="delete-chat" label="Delete chat">
         <h2>Delete {displayName(pendingDelete)}?</h2>
-        <p>This permanently deletes this agent’s conversation and settings.</p>
+        <p>This removes the chat, its conversation and settings. You can restore it from Settings → General for 30 days.</p>
         {error && <p role="alert">{error}</p>}
         <div className="delete-chat__actions">
           <button type="button" className="btn btn--secondary" onClick={closeDelete} disabled={busy}>Cancel</button>
           <button type="button" className="btn delete-chat__confirm" onClick={() => void remove()} disabled={busy}>{busy ? 'Deleting…' : 'Delete chat'}</button>
         </div>
       </Modal>}
+      {undo && <div className={`toast undo-toast${undoLeaving ? ' is-leaving' : ''}`} role="status">
+        <span>Deleted {undo.name}</span>
+        <button type="button" className="undo-toast__btn" onClick={() => void restore(undo.id)}>Undo</button>
+      </div>}
       {error && !pendingDelete && <div className="toast context-menu-error" role="alert">{error} <button type="button" className="link-btn" onClick={() => setError('')}>Dismiss</button></div>}
     </aside>
   );

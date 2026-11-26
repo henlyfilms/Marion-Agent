@@ -2,10 +2,11 @@ import { BERRY_SHAPES, BERRY_SHAPE_IDS, type BerryShape } from '@shared/avatarSh
 import type { AvatarColor, AvatarShape } from '@shared/types';
 import { BotAvatar } from './BotAvatar';
 
-export function BotShapePicker({ shape, color, stemColor, onShape }: {
+export function BotShapePicker({ shape, color, stemColor, glow, onShape }: {
   shape: AvatarShape;
   color: AvatarColor;
   stemColor: string | null;
+  glow?: boolean;
   onShape: (shape: BerryShape) => void;
 }) {
   return (
@@ -15,7 +16,7 @@ export function BotShapePicker({ shape, color, stemColor, onShape }: {
         return (
           <button key={id} type="button" aria-pressed={id === shape} aria-label={label} title={label}
             className="shape-cell" onClick={() => onShape(id)}>
-            <BotAvatar shape={id} color={color} stemColor={stemColor} size={33} />
+            <BotAvatar shape={id} color={color} stemColor={stemColor} glow={glow} size={33} />
           </button>
         );
       })}

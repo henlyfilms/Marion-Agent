@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { prefGet, prefSet } from './lib/prefs';
-import { readTheme, THEME_PREF, THEME_PRESETS, themeStyle, type Theme } from './lib/themes';
+import { readCustomTheme, readTheme, saveCustomTheme, THEME_PREF, themeColors, themeStyle, type CustomTheme, type Theme } from './lib/themes';
 import type { ServerEvent } from '@shared/types';
 import { useStore } from './store';
 
@@ -16,6 +16,8 @@ interface ConfigUI {
   appSettings: AppSettingsPage | null;
   view: 'chat' | 'tasks' | 'sessions';
   theme: Theme;
+  customTheme: CustomTheme;
+  setCustomTheme(theme: CustomTheme): void;
   /** Show "in · out tokens" under each reply. */
   showTokenStats: boolean;
   setShowTokenStats(on: boolean): void;
@@ -38,7 +40,7 @@ const darkQuery = typeof window !== 'undefined' && window.matchMedia ? window.ma
 export function applyTheme(t: Theme) {
   const resolved = t === 'system' ? (darkQuery?.matches ? 'dark' : 'light') : t;
   const root = document.documentElement;
-  const { scheme, background } = THEME_PRESETS[resolved];
+  const { scheme, background } = themeColors(resolved);
   root.dataset.theme = resolved;
   root.dataset.colorScheme = scheme;
   for (const [name, value] of Object.entries(themeStyle(resolved))) root.style.setProperty(name, value);
@@ -50,6 +52,12 @@ export const useConfigUI = create<ConfigUI>((set, get) => ({
   appSettings: null,
   view: 'chat',
   theme: readTheme(),
+  customTheme: readCustomTheme(),
+  setCustomTheme: (customTheme) => {
+    saveCustomTheme(customTheme);
+    set({ customTheme });
+    if (get().theme === 'custom') applyTheme('custom');
+  },
   showTokenStats: prefGet('showTokenStats') !== '0',
   setShowTokenStats: (on) => { prefSet('showTokenStats', on ? '1' : '0'); set({ showTokenStats: on }); },
   fileAccess: prefGet('fileAccess') !== '0',

@@ -91,7 +91,14 @@ export function BotProfile({ target }: { target: ProfileTarget }) {
 
   const avatar = target.kind === 'bot' && bot
     ? <BotAvatarFor bot={bot} size={92} />
-    : <BotAvatar shape={data?.avatarShape ?? 'marionberry'} color={(data?.avatarColor ?? 'violet') as never} stemColor={DEFAULT_STEM_COLOR} size={92} />;
+    : <BotAvatar shape={data?.avatarShape ?? 'marionberry'} color={(data?.avatarColor ?? 'violet') as never} stemColor={data?.avatarStemColor === undefined ? DEFAULT_STEM_COLOR : data.avatarStemColor} glow={data?.avatarGlow} size={92} />;
+
+  const removeTemplate = async () => {
+    if (target.kind !== 'template' || busy) return;
+    setBusy(true);
+    try { await featuresApi.removeTemplate(target.id); set({ profile: null, gallery: true }); }
+    catch (e) { setError((e as Error).message); setBusy(false); }
+  };
 
   return (
     <Modal onClose={close} className="bot-profile" label={data ? `${data.name} profile` : 'Bot profile'}>
@@ -113,7 +120,10 @@ export function BotProfile({ target }: { target: ProfileTarget }) {
               <p className="bot-profile__by">By {data?.author ?? '…'}{data?.role === 'executive' ? ' · Executive' : ''}</p>
             </div>
             {target.kind === 'template'
-              ? <button type="button" className="bot-profile__cta" onClick={() => void importTemplate()} disabled={!data || busy}>{busy ? 'Importing…' : 'Import Bot'}</button>
+              ? <div className="bot-profile__cta-group">
+                {data?.custom && <button type="button" className="bot-profile__cta bot-profile__cta--quiet" onClick={() => void removeTemplate()} disabled={busy}>Remove template</button>}
+                <button type="button" className="bot-profile__cta" onClick={() => void importTemplate()} disabled={!data || busy}>{busy ? 'Importing…' : 'Import Bot'}</button>
+              </div>
               : <div className="bot-profile__cta-group">
                 <button type="button" className="bot-profile__cta bot-profile__cta--quiet" onClick={edit}>Edit</button>
                 <button type="button" className="bot-profile__cta" onClick={() => { close(); openBotChat(target.id); }}>Open chat</button>
@@ -222,10 +232,10 @@ export function TemplateGallery() {
       <div className="template-gallery__grid">
         {(templates ?? []).map(t => (
           <button key={t.id} type="button" className="template-card" onClick={() => set({ gallery: false, profile: { kind: 'template', id: t.id, back: true } })}>
-            <BotAvatar shape={t.avatarShape ?? 'marionberry'} color={(t.avatarColor ?? 'violet') as never} stemColor={DEFAULT_STEM_COLOR} size={48} />
+            <BotAvatar shape={t.avatarShape ?? 'marionberry'} color={(t.avatarColor ?? 'violet') as never} stemColor={t.avatarStemColor === undefined ? DEFAULT_STEM_COLOR : t.avatarStemColor} glow={t.avatarGlow} size={48} />
             <span className="template-card__name">{t.name}</span>
             <span className="template-card__tagline">{t.tagline}</span>
-            <span className="template-card__meta">{[t.skills.length && `${t.skills.length} skill${t.skills.length === 1 ? '' : 's'}`, t.routines.length && `${t.routines.length} routine${t.routines.length === 1 ? '' : 's'}`, t.role === 'executive' && 'Executive'].filter(Boolean).join(' · ') || 'Ready to use'}</span>
+            <span className="template-card__meta">{[t.skills.length && `${t.skills.length} skill${t.skills.length === 1 ? '' : 's'}`, t.routines.length && `${t.routines.length} routine${t.routines.length === 1 ? '' : 's'}`, t.role === 'executive' && 'Executive', t.custom && 'Saved by you'].filter(Boolean).join(' · ') || 'Ready to use'}</span>
           </button>
         ))}
         {!templates && !error && <p className="bot-profile__empty">Loading…</p>}

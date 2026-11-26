@@ -34,7 +34,7 @@ export interface ComputerDetails {
   hibernation: { idleMinutes: number; viewers: number; dryRun: boolean };
 }
 
-export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'effort' | 'mode' | 'pinned'>>;
+export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'avatarGlow' | 'effort' | 'mode' | 'pinned'>>;
 
 export interface LocalModels { selected: string; defaultModel: string; models: string[]; reachable: boolean }
 export interface LocalMemory { available: number; total: number }
@@ -64,6 +64,8 @@ export const configApi = {
   settings: (botId: string) => req<BotSettingsBundle>('GET', `/bots/${botId}/settings`),
   updateBot: (botId: string, p: BotPatch) => req<{ bot: Bot }>('PATCH', `/bots/${botId}`, p),
   deleteBot: (botId: string) => req<{ ok: true }>('DELETE', `/bots/${botId}`),
+  deletedBots: () => req<{ bots: (Bot & { deletedAt: number; purgeAt: number })[] }>('GET', '/bots/deleted'),
+  restoreBot: (botId: string) => req<{ bot: Bot }>('POST', `/bots/${botId}/restore`),
   makePrimary: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/primary`),
   fresh: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/fresh`),
 

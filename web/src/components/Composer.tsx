@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
-import { Activity, BarChart3, Brain, Clapperboard, Eraser, FileText, Mic, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Brain, Clapperboard, Eraser, FileText, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
 import { featuresApi, formatTokens, useFeatureUI } from '../lib/featuresApi';
 import { MicSolid, PhoneSolid } from './SolidGlyphs';
 import type { Bot, ChatModel } from '@shared/types';
@@ -58,6 +58,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /** Dictation problems show in a small pill above the mic instead of a full-width bar. */
+  const [micError, setMicError] = useState<string | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState('');
   const [menu, setMenu] = useState<'attachments' | 'commands' | null>(null);
@@ -166,8 +168,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       return before + pre + t + post + after;
     });
   };
-  const recorded = useDictation(insertText, setError, bot.voiceLanguage, 10 * 60_000, voiceStatus?.nativeSpeech);
-  const spoken = useLiveDictation(words => setText(current => appendDictation(current, words)), setError, bot.voiceLanguage);
+  const recorded = useDictation(insertText, setMicError, bot.voiceLanguage, 10 * 60_000, voiceStatus?.nativeSpeech);
+  const spoken = useLiveDictation(words => setText(current => appendDictation(current, words)), setMicError, bot.voiceLanguage);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
   const state = spoken.state !== 'idle' ? spoken.state : recorded.state;
   const liveWords = spoken.interim || recorded.interim;
@@ -178,8 +180,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     spoken.stop(); recorded.finish();
   };
   const startDictation = () => {
-    if (inCall || localCall) { setError('End the voice call before starting dictation.'); return; }
-    setError(null);
+    if (inCall || localCall) { setMicError('End the voice call before starting dictation.'); return; }
+    setMicError(null);
     setAudioMenu(false);
     const audioInput = microphoneId();
     const server = voiceStatus?.localSpeech || voiceStatus?.realtime;
@@ -195,7 +197,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       void recorded.begin();
       return;
     }
-    setError(audioInput
+    setMicError(audioInput
       ? 'This browser needs a speech server for the selected input. Choose System default or set up speech in Settings → Audio.'
       : 'Set up a speech provider in Settings → Audio.');
   };
@@ -258,7 +260,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       }
       setInputs(await listMicrophones());
     };
-    void list().catch(cause => setError(micErrorMessage(cause)));
+    void list().catch(cause => setMicError(micErrorMessage(cause)));
   };
   const selectMic = (id: string) => {
     if (id !== microphoneId()) discardDictation();
@@ -333,6 +335,18 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     const timer = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+  useEffect(() => {
+    if (!micError) return;
+    const timer = window.setTimeout(() => setMicError(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [micError]);
+  // The mic pill keeps its last words while it fades out, so closing is as smooth as opening.
+  const micText = state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…' : micError;
+  const lastMicText = useRef(micText);
+  if (micText) lastMicText.current = micText;
+  const micTone = state !== 'idle' ? 'live' : 'error';
+  const lastMicTone = useRef(micTone);
+  if (micText) lastMicTone.current = micTone;
   const hasMessage = shown.trim().length > 0 || files.length > 0;
   const multiline = shown.includes('\n') || lines > 1;
 
@@ -357,8 +371,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       {dropping && <div className="composer-drop" aria-hidden="true">Drop photos or files to attach</div>}
       {notice && !error && <div className="composer__error composer__notice" role="status">{notice}</div>}
       {error && <div className="composer__error">{error} <button type="button" className="link-btn" onClick={() => setError(null)}>Dismiss</button></div>}
-      <div className="composer__progress" role="status" data-visible={sending || state !== 'idle'}>
-        <span className="loading-dot" aria-hidden="true" />{sending ? 'Sending…' : state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…' : ''}
+      <div className="composer__progress" role="status" data-visible={sending}>
+        <span className="loading-dot" aria-hidden="true" />Sending…
       </div>
       <div className="composer__models">
         <ModelPicker bot={bot} inputId={inputId} />
@@ -370,6 +384,11 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             <span>{bot.orchestration?.enabled ? `Team · ${bot.orchestration.members.length}` : 'Team'}</span>
           </button>
         )}
+        <div className={`mic-note is-${lastMicTone.current}`} data-visible={!!micText} role={micTone === 'error' && micText ? 'alert' : 'status'} aria-hidden={!micText}>
+          {lastMicTone.current === 'live' ? <span className="mic-note__wave" aria-hidden="true"><i /><i /><i /></span> : <MicOff size={13} aria-hidden="true" />}
+          <span className="mic-note__text">{lastMicText.current}</span>
+          {lastMicTone.current === 'error' && <button type="button" className="mic-note__close" tabIndex={micText ? 0 : -1} onClick={() => setMicError(null)} aria-label="Dismiss"><Icon name="close" size={9} /></button>}
+        </div>
       </div>
       {files.length > 0 && <ul className="composer-files" aria-label="Draft attachments">
         {files.map((file, index) => <DraftAttachment key={`${file.name}:${file.lastModified}:${index}`} file={file} disabled={sending}

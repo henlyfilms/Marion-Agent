@@ -9,7 +9,10 @@ import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { configApi, type ComputerDetails } from '../../lib/configApi';
 import { relativeShort } from '../../lib/time';
 import { useConfigUI, type AppSection } from '../../configStore';
-import { THEME_OPTIONS, THEME_PRESETS, themeStyle, type Theme } from '../../lib/themes';
+import { DEFAULT_CUSTOM_THEME, THEME_OPTIONS, themeColors, themeStyle, type CustomTheme, type ResolvedTheme, type Theme } from '../../lib/themes';
+import { ColorPicker } from '../ColorPicker';
+import { Reveal, useOnlyOneOpen } from '../Reveal';
+import { openBotChat } from '../botMenuItems';
 import { useStore } from '../../store';
 import { computerStatusText } from '../DetailsPanel';
 import { ToolkitLogo } from '../ToolkitLogo';
@@ -224,9 +227,10 @@ function PageHead({ title, sub }: { title: string; sub?: string }) {
 
 // ---------------------------------------------------------------------------
 
-function ThemeSample({ preset }: { preset: Exclude<Theme, 'system'> }) {
+function ThemeSample({ preset }: { preset: ResolvedTheme }) {
+  const custom = useConfigUI((s) => s.customTheme);
   return (
-    <span className={`theme-sample theme-sample--${preset}`} style={themeStyle(preset) as CSSProperties}>
+    <span className={`theme-sample theme-sample--${preset}`} style={themeStyle(preset, custom) as CSSProperties}>
       <span className="theme-sample__side"><i /><i /></span>
       <span className="theme-sample__pane"><i /><i /><b /></span>
     </span>
@@ -240,8 +244,88 @@ function ThemeTile({ value, current, onPick }: { value: Theme; current: Theme; o
       <span className={`theme-tile__art${value === 'system' ? ' is-system' : ''}`} aria-hidden="true">
         {value === 'system' ? <><ThemeSample preset="light" /><ThemeSample preset="dark" /></> : <ThemeSample preset={value} />}
       </span>
-      <span className="theme-tile__label">{value === 'system' ? 'System' : THEME_PRESETS[value].label}</span>
+      <span className="theme-tile__label">{value === 'system' ? 'System' : themeColors(value).label}</span>
     </label>
+  );
+}
+
+const CUSTOM_ROWS: { key: keyof CustomTheme; label: string; sub: string }[] = [
+  { key: 'background', label: 'Background', sub: 'Windows, sidebar and panels' },
+  { key: 'foreground', label: 'Text', sub: 'Words and icons' },
+  { key: 'accent', label: 'Accent', sub: 'Buttons, switches and highlights' },
+];
+
+/** Three colors make a whole theme; every change shows straight away. */
+function CustomThemeEditor() {
+  const custom = useConfigUI((s) => s.customTheme);
+  const setCustom = useConfigUI((s) => s.setCustomTheme);
+  const [editing, setEditing] = useState<keyof CustomTheme | null>(null);
+  useOnlyOneOpen(editing !== null, () => setEditing(null));
+  const changed = (Object.keys(DEFAULT_CUSTOM_THEME) as (keyof CustomTheme)[]).some(k => custom[k] !== DEFAULT_CUSTOM_THEME[k]);
+  return (
+    <div className="custom-theme" onKeyDown={event => { if (editing && event.key === 'Escape') { event.stopPropagation(); setEditing(null); } }}>
+      {CUSTOM_ROWS.map(row => (
+        <div key={row.key} className="custom-theme__item">
+          <button type="button" className={`custom-theme__row${editing === row.key ? ' is-open' : ''}`} aria-expanded={editing === row.key}
+            onClick={() => setEditing(current => current === row.key ? null : row.key)}>
+            <span className="custom-theme__swatch" style={{ background: custom[row.key] }} aria-hidden="true" />
+            <span className="custom-theme__text"><b>{row.label}</b><small>{row.sub}</small></span>
+            <code>{custom[row.key].toUpperCase()}</code>
+            <ChevronRight size={15} className="custom-theme__chevron" aria-hidden="true" />
+          </button>
+          <Reveal open={editing === row.key}>
+            <div className="custom-theme__picker">
+              <ColorPicker label={row.label} value={custom[row.key]} onChange={hex => setCustom({ ...useConfigUI.getState().customTheme, [row.key]: hex })} />
+            </div>
+          </Reveal>
+        </div>
+      ))}
+      <div className="custom-theme__foot">
+        <button type="button" className="cfg-btn cfg-btn--secondary" disabled={!changed} onClick={() => { setEditing(null); setCustom(DEFAULT_CUSTOM_THEME); }}>Reset colors</button>
+      </div>
+    </div>
+  );
+}
+
+/** Deleted chats wait here for 30 days before they are removed for good. */
+function RecentlyDeleted() {
+  const [list, setList] = useState<Awaited<ReturnType<typeof configApi.deletedBots>>['bots'] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const bots = useStore(s => s.bots.length);
+  useEffect(() => { configApi.deletedBots().then(r => setList(r.bots)).catch(e => setError((e as Error).message)); }, [bots]);
+  if (!list?.length && !error) return null;
+  const restore = async (id: string) => {
+    setBusy(id); setError('');
+    try {
+      await configApi.restoreBot(id);
+      await useStore.getState().loadBots();
+      setList(current => current?.filter(b => b.id !== id) ?? null);
+      useConfigUI.getState().closeAppSettings();
+      openBotChat(id);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(null); }
+  };
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Recently deleted</div>
+      <div className="cfg-card">
+        {(list ?? []).map(bot => {
+          const days = Math.max(1, Math.ceil((bot.purgeAt - Date.now()) / 86_400_000));
+          return (
+            <div key={bot.id} className="cfg-row">
+              <BotAvatarFor bot={bot} size={30} />
+              <div className="cfg-row__text">
+                <div className="cfg-row__title">{bot.name}</div>
+                <div className="cfg-row__sub">Deleted {((r) => r === 'now' ? 'just now' : r === 'Yesterday' ? 'yesterday' : `${r} ago`)(relativeShort(bot.deletedAt))} · removed for good in {days} day{days === 1 ? '' : 's'}</div>
+              </div>
+              <button type="button" className="cfg-btn cfg-btn--secondary" disabled={busy === bot.id} onClick={() => void restore(bot.id)}>{busy === bot.id ? 'Restoring…' : 'Restore'}</button>
+            </div>
+          );
+        })}
+        {error && <div className="cfg-row"><div className="cfg-row__sub" role="alert">{error}</div></div>}
+      </div>
+    </section>
   );
 }
 
@@ -262,8 +346,10 @@ function GeneralSection() {
         <div className="theme-tiles" role="radiogroup" aria-label="Theme">
           {THEME_OPTIONS.map((value) => <ThemeTile key={value} value={value} current={theme} onPick={setTheme} />)}
         </div>
-        <div className="cfg-field__hint">System follows your device’s light or dark setting.</div>
+        <Reveal open={theme === 'custom'}><CustomThemeEditor /></Reveal>
+        <div className="cfg-field__hint">System follows your device’s light or dark setting. Custom uses the colors you pick.</div>
       </section>
+      <RecentlyDeleted />
       <section className="cfg-section">
         <div className="cfg-section__label">Chat</div>
         <div className="cfg-card">

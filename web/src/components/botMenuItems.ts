@@ -4,6 +4,7 @@ import { configApi } from '../lib/configApi';
 import { setDetailsOpen } from '../lib/layout';
 import { useStore } from '../store';
 import type { MenuItem } from './Menu';
+import { featuresApi } from '../lib/featuresApi';
 
 export function openBotChat(id: string) {
   useConfigUI.getState().setView('chat');
@@ -16,6 +17,19 @@ export async function toggleChatStar(botId: string) {
   if (!bot) return;
   const result = await configApi.updateBot(bot.id, { pinned: !bot.pinned });
   useStore.setState(s => ({ bots: s.bots.map(entry => entry.id === bot.id ? { ...entry, pinned: result.bot.pinned } : entry) }));
+}
+
+/** Saves the bot as a template the user can start new bots from (Start from a template). */
+export async function saveAsTemplate(bot: Bot) {
+  const banner = (status: string, body: string, error = false) => window.dispatchEvent(new CustomEvent('marion-agent:toast', { detail: {
+    id: `template-${bot.id}-${Date.now()}`, kind: error ? 'error' : 'learned', botId: bot.id, botName: bot.name, status, title: status, body, at: Date.now(),
+  } }));
+  try {
+    await featuresApi.saveTemplate(bot.id);
+    banner('Saved as a template', 'Find it under New Bot → Start from a template.');
+  } catch (cause) {
+    banner('Couldn’t save the template', (cause as Error).message, true);
+  }
 }
 
 export function botMenuItems(bot: Bot, includeOpen = false): MenuItem[] {
@@ -32,7 +46,8 @@ export function botMenuItems(bot: Bot, includeOpen = false): MenuItem[] {
       if (selectedBotId !== bot.id || view !== 'chat') openBotChat(bot.id);
       set({ viewerOpen: true });
     } }]),
-    { label: bot.pinned ? 'Unstar chat' : 'Star chat', separator: true, onSelect: () => toggleChatStar(bot.id) },
-    { label: bot.kind === 'room' ? 'Group settings…' : 'Bot settings…', onSelect: () => openBotSettings(bot.id) },
+    { label: bot.kind === 'room' ? 'Group settings…' : 'Bot settings…', separator: true, onSelect: () => openBotSettings(bot.id) },
+    { label: bot.pinned ? 'Unstar chat' : 'Star chat', onSelect: () => toggleChatStar(bot.id) },
+    ...(bot.kind === 'room' ? [] : [{ label: 'Save as template', onSelect: () => void saveAsTemplate(bot) }]),
   ];
 }

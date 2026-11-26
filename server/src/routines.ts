@@ -9,7 +9,7 @@ let enqueueFn: ((botId: string, t: any) => void) | null = null;
 
 export function initRoutines(enqueue: (botId: string, t: any) => void) {
   enqueueFn = enqueue;
-  const all = db.prepare("SELECT * FROM routines WHERE enabled=1 AND schedule NOT LIKE 'event:%'").all() as any[];
+  const all = db.prepare("SELECT * FROM routines WHERE enabled=1 AND schedule NOT LIKE 'event:%' AND bot_id NOT IN (SELECT id FROM bots WHERE deleted_at IS NOT NULL)").all() as any[];
   for (const r of all) scheduleRoutine({ id: r.id, botId: r.bot_id, name: r.name, prompt: r.prompt, schedule: r.schedule, timezone: r.timezone } as Routine);
   console.log(`[routines] scheduled ${jobs.size}`);
 }

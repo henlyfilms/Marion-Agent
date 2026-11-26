@@ -1,5 +1,5 @@
 import { Cron } from 'croner';
-import { DEFAULT_BERRY, DEFAULT_STEM_COLOR, isBerryShape, isStemColor } from '../avatarShapes.js';
+import { DEFAULT_BERRY, DEFAULT_STEM_COLOR, isAvatarColor, isBerryShape, isStemColor } from '../avatarShapes.js';
 import { db, now } from '../db.js';
 import { hub } from '../lib/hub.js';
 import { newId } from '../lib/ids.js';
@@ -17,6 +17,7 @@ export interface BotSpec {
   avatarShape?: string;
   avatarColor?: string;
   avatarStemColor?: string | null;
+  avatarGlow?: boolean;
   mode?: string;
   isPrimary?: boolean;
   role?: 'executive' | null;
@@ -40,14 +41,14 @@ export function createBotRecord(userId: string, spec: BotSpec): Bot {
   const id = newId('bot');
   const shape = isBerryShape(spec.avatarShape) ? spec.avatarShape : DEFAULT_BERRY;
   const stem = spec.avatarStemColor === null || isStemColor(spec.avatarStemColor) ? spec.avatarStemColor : DEFAULT_STEM_COLOR;
-  const color = BOT_COLORS.includes(spec.avatarColor as AvatarColor) ? spec.avatarColor : pick(id, BOT_COLORS.filter(c => c !== 'black'));
+  const color = isAvatarColor(spec.avatarColor) ? spec.avatarColor.toLowerCase() : pick(id, BOT_COLORS.filter(c => c !== 'black'));
   const integrations = [...new Set((spec.integrations ?? []).map(slug => clean(slug, 40).toLowerCase()).filter(slug => /^[a-z0-9_-]+$/.test(slug)))].slice(0, 20);
   const routines: string[] = [];
   db.transaction(() => {
-    db.prepare(`INSERT INTO bots(id,user_id,name,label,description,instructions,avatar_shape,avatar_color,avatar_stem_color,mode,is_primary,role,template_id,integrations,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    db.prepare(`INSERT INTO bots(id,user_id,name,label,description,instructions,avatar_shape,avatar_color,avatar_stem_color,avatar_glow,mode,is_primary,role,template_id,integrations,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, userId, clean(spec.name, 60) || 'New Bot', clean(spec.label, 80), clean(spec.description, 600), clean(spec.instructions, 20_000),
-      shape, color, stem, spec.mode === 'teammate' ? 'teammate' : 'personal', spec.isPrimary ? 1 : 0,
+      shape, color, stem, spec.avatarGlow ? 1 : 0, spec.mode === 'teammate' ? 'teammate' : 'personal', spec.isPrimary ? 1 : 0,
       spec.role === 'executive' ? 'executive' : null, spec.templateId ?? null, integrations.length ? JSON.stringify(integrations) : null, now(), now(),
     );
     const memory = db.prepare("INSERT INTO memories(id,bot_id,text,created_at,source) VALUES (?,?,?,?,'chat')");

@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { LayoutTemplate, Users } from 'lucide-react';
 import type { AvatarColor, Bot } from '@shared/types';
 import { BotAvatar } from '../../avatar/BotAvatar';
 import { DEFAULT_BERRY, DEFAULT_STEM_COLOR, type BerryShape } from '@shared/avatarShapes';
@@ -18,6 +19,7 @@ export function CreateBotModal() {
   const [shape, setShape] = useState<BerryShape>(DEFAULT_BERRY);
   const [color, setColor] = useState<AvatarColor>('violet');
   const [stemColor, setStemColor] = useState<string | null>(DEFAULT_STEM_COLOR);
+  const [glow, setGlow] = useState(false);
   const [mode, setMode] = useState<Bot['mode']>('personal');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export function CreateBotModal() {
     if (!canCreate) return;
     setBusy(true); setError(null);
     try {
-      const { bot } = await api.createBot({ name: name.trim(), avatarShape: shape, avatarColor: color, avatarStemColor: stemColor, mode });
+      const { bot } = await api.createBot({ name: name.trim(), avatarShape: shape, avatarColor: color, avatarStemColor: stemColor, avatarGlow: glow, mode });
       const st = useStore.getState();
       st.set({ bots: st.bots.some((b) => b.id === bot.id) ? st.bots : [...st.bots, bot] });
       openBotChat(bot.id);
@@ -47,7 +49,7 @@ export function CreateBotModal() {
           <button type="button" className="modal__close" onClick={close} aria-label="Close"><Icon name="close" size={14} opacity={0.68} /></button>
         </div>
         <div className="create-modal__body">
-          <BotAvatar shape={shape} color={color} stemColor={stemColor} size={96} className="create-modal__preview" />
+          <BotAvatar shape={shape} color={color} stemColor={stemColor} glow={glow} size={96} className="create-modal__preview" />
           <input
             className="text-input create-modal__name"
             placeholder="Give your Bot a name"
@@ -57,9 +59,9 @@ export function CreateBotModal() {
             autoFocus
             aria-label="Bot name"
           />
-          <BotShapePicker shape={shape} color={color} stemColor={stemColor} onShape={setShape} />
+          <BotShapePicker shape={shape} color={color} stemColor={stemColor} glow={glow} onShape={setShape} />
           <BotColorPicker color={color} onChange={setColor} />
-          <BotStemPicker color={stemColor} onChange={setStemColor} />
+          <BotStemPicker color={stemColor} onChange={setStemColor} glow={glow} onGlow={setGlow} />
           <div className="mode-pick" role="radiogroup" aria-label="Bot type">
             <button type="button" role="radio" aria-checked={mode === 'personal'} className={`mode-pick__opt${mode === 'personal' ? ' is-active' : ''}`} onClick={() => setMode('personal')}>
               <span className="mode-pick__title">Personal assistant</span>
@@ -70,13 +72,17 @@ export function CreateBotModal() {
               <span className="mode-pick__sub">Works with your whole team</span>
             </button>
           </div>
+          <div className="create-modal__alts">
+            <button type="button" className="btn btn--secondary btn--sm" onClick={() => { close(); useFeatureUI.getState().set({ gallery: true }); }}>
+              <LayoutTemplate size={15} aria-hidden="true" />Start from a template
+            </button>
+            <button type="button" className="btn btn--secondary btn--sm" onClick={() => setModal('group')}>
+              <Users size={15} aria-hidden="true" />New group chat
+            </button>
+          </div>
           {error && <div className="card__error">{error}</div>}
         </div>
         <div className="modal__footer">
-          <span className="create-modal__alts">
-            <button type="button" className="link-btn link-btn--small" onClick={() => { close(); useFeatureUI.getState().set({ gallery: true }); }}>Start from a template</button>
-            <button type="button" className="link-btn link-btn--small" onClick={() => setModal('group')}>New group chat</button>
-          </span>
           <button type="button" className="btn btn--secondary btn--sm" onClick={close}>Cancel</button>
           <button type="submit" className="btn btn--primary btn--sm" disabled={!canCreate}>{busy ? 'Creating…' : 'Create'}</button>
         </div>

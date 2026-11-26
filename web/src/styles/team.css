@@ -56,3 +56,28 @@
   .team-row { flex-wrap: wrap; }
   .team-select { flex-basis: 100%; }
 }
+
+/* Dictation status ("Listening…", "No speech heard…") sits at the right end of the model row, right above the mic. */
+.mic-note {
+  display: inline-flex; align-items: center; gap: 7px; margin-left: auto; max-width: min(360px, 60%); min-height: 28px;
+  padding: 4px 10px; border-radius: var(--radius-full); font-size: 12px; line-height: 16px;
+  background: var(--color-bg-pane); color: var(--color-text-secondary);
+  box-shadow: var(--shadow-pill), inset 0 0 0 0.5px var(--color-border-tertiary);
+  opacity: 0; transform: translateY(5px) scale(0.94); transform-origin: right center; pointer-events: none;
+  transition: opacity 200ms var(--ease-dismiss), transform 240ms var(--ease-dismiss);
+}
+.mic-note[data-visible="true"] {
+  opacity: 1; transform: none; pointer-events: auto;
+  transition: opacity 220ms var(--ease-out), transform 420ms var(--ease-spring);
+}
+.mic-note.is-error { background: color-mix(in srgb, var(--color-danger) 10%, var(--color-bg-pane)); color: var(--color-danger-text); padding-right: 5px; }
+.mic-note__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mic-note__close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; flex: none; color: inherit; opacity: 0.75; transition: background-color 150ms var(--ease-out), opacity 150ms; }
+.mic-note__close:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
+.mic-note__wave { display: inline-flex; align-items: center; gap: 2px; height: 12px; color: var(--bot-action, var(--color-primary)); }
+.mic-note__wave i { width: 2.5px; height: 100%; border-radius: 2px; background: currentColor; animation: mic-wave 900ms var(--ease-out) infinite alternate; }
+.mic-note__wave i:nth-child(2) { animation-delay: 150ms; }
+.mic-note__wave i:nth-child(3) { animation-delay: 300ms; }
+@keyframes mic-wave { from { transform: scaleY(0.3); } to { transform: scaleY(1); } }
+@media (max-width: 630px) { .mic-note { max-width: 100%; } }
+.mic-note:not([data-visible="true"]) .mic-note__wave i { animation-play-state: paused; }

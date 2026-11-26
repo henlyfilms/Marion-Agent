@@ -11,7 +11,8 @@ import { screenFor, stopDesktop } from './computer.js';
 import { connectedToolkits } from './composio.js';
 import type { UploadedAttachment } from './attachments.js';
 import { createBotRecord } from './features/bots.js';
-import { TEMPLATES, templateById } from './features/templates.js';
+import { TEMPLATES, templateById, type BotTemplate } from './features/templates.js';
+import { DEFAULT_STEM_COLOR } from './avatarShapes.js';
 import { notificationSettings, notify, pushToDevices, saveNotificationSettings } from './features/notify.js';
 import { vapidPublicKey } from './features/webpush.js';
 import { connectLife, disconnectLife, hasLifeKey, lifeLinkSettings, syncLife } from './features/life-link.js';
@@ -32,25 +33,68 @@ const parseList = (value: string | null) => { try { return value ? JSON.parse(va
 
 // ---------- templates and profiles ----------
 
-featuresApi.get('/templates', (c) => c.json({
-  templates: TEMPLATES.map(t => ({
-    id: t.id, name: t.name, author: t.author, label: t.label ?? '', tagline: t.tagline, description: t.description ?? '',
-    instructions: t.instructions ?? '', avatarShape: t.avatarShape, avatarColor: t.avatarColor, role: t.role ?? null,
-    memories: t.memories ?? [], skills: (t.skills ?? []).map(s => ({ name: s.name, description: s.description ?? '', body: s.body })),
-    routines: (t.routines ?? []).map(r => ({ name: r.name, prompt: r.prompt, schedule: r.schedule, enabled: r.enabled !== false })),
-    integrations: t.integrations ?? [],
-  })),
-}));
+/** Templates the user saved from their own bots. Ids start with "user:" so they never clash with built-ins. */
+function userTemplates(userId: string, author: string): BotTemplate[] {
+  const rows = db.prepare('SELECT id, spec FROM user_templates WHERE user_id=? ORDER BY created_at DESC').all(userId) as { id: string; spec: string }[];
+  return rows.flatMap(row => {
+    try { return [{ ...JSON.parse(row.spec), id: `user:${row.id}`, author, custom: true } as BotTemplate]; } catch { return []; }
+  });
+}
+
+featuresApi.get('/templates', (c) => {
+  const user = c.get('user');
+  return c.json({
+    templates: [...userTemplates(user.id, user.name), ...TEMPLATES].map(t => ({
+      id: t.id, name: t.name, author: t.author, label: t.label ?? '', tagline: t.tagline, description: t.description ?? '',
+      instructions: t.instructions ?? '', avatarShape: t.avatarShape, avatarColor: t.avatarColor,
+      avatarStemColor: t.avatarStemColor === undefined ? DEFAULT_STEM_COLOR : t.avatarStemColor, avatarGlow: !!t.avatarGlow, role: t.role ?? null,
+      memories: t.memories ?? [], skills: (t.skills ?? []).map(s => ({ name: s.name, description: s.description ?? '', body: s.body })),
+      routines: (t.routines ?? []).map(r => ({ name: r.name, prompt: r.prompt, schedule: r.schedule, enabled: r.enabled !== false })),
+      integrations: t.integrations ?? [], custom: !!(t as { custom?: boolean }).custom,
+    })),
+  });
+});
+
+/** Save a bot (look, instructions, memories, skills, routines, apps) as a reusable template. */
+featuresApi.post('/bots/:id/template', (c) => {
+  const user = c.get('user');
+  const b = ownBot(user.id, c.req.param('id'));
+  if (!b || b.kind === 'room') return c.json({ error: 'not found' }, 404);
+  const count = (db.prepare('SELECT COUNT(*) n FROM user_templates WHERE user_id=?').get(user.id) as { n: number }).n;
+  if (count >= 100) return c.json({ error: 'You have 100 saved templates. Remove one first.' }, 400);
+  const spec = {
+    name: b.name, label: b.label, description: b.description, instructions: b.instructions,
+    tagline: (b.description || b.label || `Starts like ${b.name}.`).split(/(?<=[.!?])\s/)[0].slice(0, 140),
+    avatarShape: b.avatar_shape, avatarColor: b.avatar_color, avatarStemColor: b.avatar_stem_color, avatarGlow: !!b.avatar_glow,
+    role: b.role, integrations: parseList(b.integrations),
+    memories: (db.prepare('SELECT text FROM memories WHERE bot_id=? ORDER BY created_at').all(b.id) as any[]).map(m => m.text),
+    skills: db.prepare('SELECT name, description, body FROM skills WHERE bot_id=? ORDER BY created_at').all(b.id),
+    routines: (db.prepare('SELECT name, prompt, schedule, timezone FROM routines WHERE bot_id=? ORDER BY created_at').all(b.id) as any[])
+      .filter(r => !String(r.schedule).startsWith('event:')).map(r => ({ ...r, enabled: false })),
+  };
+  const id = newId('tpl');
+  db.prepare('INSERT INTO user_templates(id,user_id,spec,created_at) VALUES (?,?,?,?)').run(id, user.id, JSON.stringify(spec), Date.now());
+  return c.json({ id: `user:${id}`, name: b.name });
+});
+
+featuresApi.delete('/templates/:id', (c) => {
+  const id = c.req.param('id');
+  if (!id.startsWith('user:')) return c.json({ error: 'Built-in templates can’t be removed.' }, 400);
+  db.prepare('DELETE FROM user_templates WHERE id=? AND user_id=?').run(id.slice(5), c.get('user').id);
+  return c.json({ ok: true });
+});
 
 featuresApi.post('/templates/:id/import', async (c) => {
-  const template = templateById(c.req.param('id'));
+  const user = c.get('user');
+  const id = c.req.param('id');
+  const template = id.startsWith('user:') ? userTemplates(user.id, user.name).find(t => t.id === id) : templateById(id);
   if (!template) return c.json({ error: 'Template not found' }, 404);
   const userId = c.get('user').id;
   const body = await c.req.json<{ name?: string }>().catch(() => ({} as { name?: string }));
   let name = String(body.name ?? template.name).trim().slice(0, 60) || template.name;
   const taken = (n: string) => db.prepare('SELECT 1 FROM bots WHERE user_id=? AND lower(name)=lower(?)').get(userId, n);
   for (let i = 2; taken(name) && i < 50; i++) name = `${template.name} ${i}`;
-  const bot = createBotRecord(userId, { ...template, name, templateId: template.id });
+  const bot = createBotRecord(userId, { ...template, name, templateId: template.id.startsWith('user:') ? null : template.id });
   return c.json({ bot });
 });
 
@@ -80,7 +124,7 @@ featuresApi.get('/bots/:id/export', (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   const spec = {
     format: 'marion-agent-bot@1', name: b.name, label: b.label, description: b.description, instructions: b.instructions,
-    avatarShape: b.avatar_shape, avatarColor: b.avatar_color, avatarStemColor: b.avatar_stem_color, role: b.role,
+    avatarShape: b.avatar_shape, avatarColor: b.avatar_color, avatarStemColor: b.avatar_stem_color, avatarGlow: !!b.avatar_glow, role: b.role,
     integrations: parseList(b.integrations),
     memories: (db.prepare('SELECT text FROM memories WHERE bot_id=? ORDER BY created_at').all(b.id) as any[]).map(m => m.text),
     skills: db.prepare('SELECT name, description, body FROM skills WHERE bot_id=? ORDER BY created_at').all(b.id),

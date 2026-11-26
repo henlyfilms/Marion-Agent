@@ -13,6 +13,9 @@ addColumn('bots', 'context_tokens', 'INTEGER');
 addColumn('bots', 'compact_at_tokens', 'INTEGER');
 addColumn('bots', 'integrations', 'TEXT');
 addColumn('bots', 'last_reflected_at', 'INTEGER');
+addColumn('bots', 'avatar_glow', 'INTEGER NOT NULL DEFAULT 0');
+/** Set when a chat is deleted; it can be restored for DELETED_KEEP_MS before it is removed for good. */
+addColumn('bots', 'deleted_at', 'INTEGER');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS user_settings (
@@ -20,6 +23,12 @@ CREATE TABLE IF NOT EXISTS user_settings (
   key TEXT NOT NULL,
   value TEXT NOT NULL,
   PRIMARY KEY (user_id, key)
+);
+CREATE TABLE IF NOT EXISTS user_templates (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  spec TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS app_secrets (
   key TEXT PRIMARY KEY,

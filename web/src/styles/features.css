@@ -89,7 +89,12 @@
 .template-card__name { margin-top: 6px; font-size: 15px; font-weight: 650; color: var(--color-ink); }
 .template-card__tagline { font-size: 13px; line-height: 19px; color: var(--color-text-secondary); }
 .template-card__meta { margin-top: auto; font-size: 12px; color: var(--color-text-tertiary); }
-.create-modal__alts { display: flex; gap: 14px; margin-right: auto; }
+.create-modal__alts { display: flex; gap: 8px; width: 407px; max-width: 100%; }
+.create-modal__alts .btn { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; white-space: nowrap; color: var(--color-text-secondary); }
+.create-modal__alts .btn { box-shadow: inset 0 0 0 0.5px var(--color-border-secondary), inset 0 0.5px 0 #ffffff12, 0 1px 2px #00000014; transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out), transform 110ms var(--ease-out); }
+.create-modal__alts .btn:hover:not(:disabled) { color: var(--color-ink); }
+.create-modal__alts .btn:active:not(:disabled) { transform: scale(0.97); }
+.create-modal__alts .btn svg { flex: none; opacity: 0.8; }
 
 /* ---------- context card (details panel) ---------- */
 .context-card { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -169,7 +174,10 @@
 .cfg-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .model-usage .context-card__label { flex-shrink: 0; }
-.model-usage .context-card__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-usage .context-card__value { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.model-usage .context-card__value > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--color-ink); }
+.model-usage .context-card__value .provider-icon, .model-usage .context-card__value > svg { flex: none; align-self: center; }
+.model-usage .context-card__top { align-items: center; }
 
 /* Model usage: one bar per plan window, tinted by provider, warming up near the limit. */
 .model-usage { --usage-tint: var(--bot-action, var(--color-primary)); }

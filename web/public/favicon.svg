@@ -4,7 +4,7 @@
       <stop offset="0" stop-color="#1a1520"/><stop offset="1" stop-color="#09070b"/>
     </linearGradient>
     <radialGradient id="berry" gradientUnits="userSpaceOnUse" cx="38" cy="30" r="71" fx="33" fy="24">
-      <stop offset="0" stop-color="#b38efb"/><stop offset="0.72" stop-color="#8f59f9"/><stop offset="1" stop-color="#7245c2"/>
+      <stop offset="0" stop-color="#8f66ee"/><stop offset="0.72" stop-color="#6233d9"/><stop offset="1" stop-color="#43209f"/>
     </radialGradient>
   </defs>
   <rect width="100" height="100" rx="23" fill="url(#obsidian)"/>

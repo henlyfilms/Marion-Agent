@@ -89,7 +89,7 @@ async function onScreen<T>(ctx: ToolCtx, fn: (desktopId: string) => Promise<T>) 
 
 function botByName(userId: string, name: string) {
   // Visible bots first, so a helper named like a teammate never shadows the teammate.
-  return db.prepare('SELECT * FROM bots WHERE user_id=? AND lower(name)=lower(?) ORDER BY COALESCE(hidden,0), created_at').get(userId, String(name ?? '').trim().replace(/^@/, '')) as any;
+  return db.prepare('SELECT * FROM bots WHERE user_id=? AND lower(name)=lower(?) AND deleted_at IS NULL ORDER BY COALESCE(hidden,0), created_at').get(userId, String(name ?? '').trim().replace(/^@/, '')) as any;
 }
 
 export const TOOLS: ToolDef[] = [
@@ -509,7 +509,7 @@ export const TOOLS: ToolDef[] = [
     label: 'Messaging a Bot',
     impl: async (a, ctx) => {
       const target = botByName(ctx.userId, a.bot_name);
-      if (!target) return { output: `No bot named "${a.bot_name}". Team: ${(db.prepare('SELECT name FROM bots WHERE user_id=?').all(ctx.userId) as any[]).map((b) => b.name).join(', ')}` };
+      if (!target) return { output: `No bot named "${a.bot_name}". Team: ${(db.prepare('SELECT name FROM bots WHERE user_id=? AND COALESCE(hidden,0)=0').all(ctx.userId) as any[]).map((b) => b.name).join(', ')}` };
       if (target.id === ctx.botId) return { output: 'That is you.' };
       if (target.kind === 'room') return { output: `"${target.name}" is a group chat; use post_to_group instead.` };
       if (target.hidden && target.parent_bot_id !== ctx.botId && target.id !== ctx.replyTo) return { output: `"${target.name}" is another Bot's helper. Message its parent instead.` };

@@ -11,6 +11,8 @@ interface Props {
   stemColor?: string | null;
   size: number;
   star?: boolean;
+  /** Soft bloom in the bot's own color. */
+  glow?: boolean;
   className?: string;
   title?: string;
 }
@@ -60,7 +62,7 @@ function Stem({ color, point: [x, y] }: { color: string; point: readonly [number
   );
 }
 
-export function BotAvatar({ shape, color, stemColor, size, star, className, title }: Props) {
+export function BotAvatar({ shape, color, stemColor, size, star, glow, className, title }: Props) {
   const gradientId = useId();
   const berry = isBerryShape(shape) ? BERRY_SHAPES[shape][1] : null;
   const lobes = typeof berry === 'string' ? null : berry;
@@ -69,7 +71,8 @@ export function BotAvatar({ shape, color, stemColor, size, star, className, titl
   const stem = lobes ? berryStem(lobes) : berry ? [50, 14] as const : CLASSIC_STEMS[classicShape];
   const fill = palette(color).fill;
   return (
-    <span className={className ? `bot-avatar ${className}` : 'bot-avatar'} style={{ width: size, height: size }}
+    <span className={`bot-avatar${glow ? ' is-glowing' : ''}${className ? ` ${className}` : ''}`}
+      style={glow ? { width: size, height: size, '--avatar-glow': fill, '--avatar-glow-r': `${Math.max(2, size * 0.09)}px` } as React.CSSProperties : { width: size, height: size }}
       title={title} role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true}
       data-avatar-shape={berry || Object.hasOwn(SHAPES, shape) ? shape : 'blob'}>
       <svg width={size} height={size} viewBox={berry ? BERRY_VIEW : LEGACY_VIEW} aria-hidden>
@@ -96,6 +99,6 @@ export function BotAvatar({ shape, color, stemColor, size, star, className, titl
   );
 }
 
-export function BotAvatarFor({ bot, size, star, className }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'name'>; size: number; star?: boolean; className?: string }) {
-  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} stemColor={bot.avatarStemColor} size={size} star={star} className={className} title={bot.name} />;
+export function BotAvatarFor({ bot, size, star, className }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'avatarStemColor' | 'name'> & { avatarGlow?: boolean }; size: number; star?: boolean; className?: string }) {
+  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} stemColor={bot.avatarStemColor} glow={bot.avatarGlow} size={size} star={star} className={className} title={bot.name} />;
 }
