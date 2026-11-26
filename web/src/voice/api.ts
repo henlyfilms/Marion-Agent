@@ -83,11 +83,17 @@ export const voiceApi = {
     const buf = await res.arrayBuffer();
     return new Int16Array(buf, 0, buf.byteLength >> 1);
   },
-  async transcribe(blob: Blob, language?: string, signal?: AbortSignal, native = false): Promise<string> {
-    if (native) blob = await toMonoWav(blob);
+  /**
+   * `final` marks the pass after the user stopped (the server may use its slower, more accurate engine for it; live previews
+   * stay on the instant one). `context` is the text around the cursor, used as vocabulary hints.
+   */
+  async transcribe(blob: Blob, language?: string, signal?: AbortSignal, native = false, hints: { final?: boolean; context?: string } = {}): Promise<string> {
+    if (native && blob.type !== 'audio/wav') blob = await toMonoWav(blob);
     signal?.throwIfAborted();
     const fd = new FormData();
     if (language) fd.append('language', language);
+    if (hints.final) fd.append('final', '1');
+    if (hints.context?.trim()) fd.append('context', hints.context.trim().slice(-600));
     const ext = native ? 'wav' : blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm';
     fd.append('file', blob, `dictation.${ext}`);
     const res = await fetch('/api/voice/stt', { method: 'POST', credentials: 'include', body: fd, signal });

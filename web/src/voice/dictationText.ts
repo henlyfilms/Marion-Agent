@@ -5,6 +5,9 @@
 //  - Dictated words are only ever added. They never replace or remove text the user typed or kept.
 //  - The grey "still being heard" words (the tail of the box) belong to the speech engine: an edit that touches only
 //    them is applied to the committed text and the tail stays put until the engine finishes it.
+//  - Typing INSIDE, right after, or past the heard words freezes them: they become ordinary text exactly as shown (so
+//    nothing the user sees moves or is duplicated), dictation continues right after what the user typed, and the
+//    engine's continuation of that same utterance only adds the words it hears after the frozen ones (planEdit, applyCut).
 
 export interface TextRange { start: number; end: number }
 /** One manual edit, in committed-text coordinates: `removed` characters at `at` became `added` characters. */
@@ -142,16 +145,97 @@ export function deletedHeard(shown: string, value: string, span: LiveSpan, heard
   return first < last ? { start: first - from, end: last - from } : undefined;
 }
 
-/** Words the user deleted from an unfinished utterance: the engine's text `original` is shown as `kept` instead. */
-export interface HeardCut { original: string; kept: string }
+/**
+ * Words the user changed in an unfinished utterance. The engine's text `original` is shown as `kept` instead (words
+ * the user deleted stay gone), and the first `skip` words of the engine's text were frozen into the box as typed text
+ * and must not be shown or delivered a second time.
+ */
+export interface HeardCut { original: string; kept: string; skip?: number }
+
+/** The words of `text` after dropping the first `count` (whitespace-separated), re-joined with single spaces. */
+export function skipWords(text: string, count: number) {
+  const trimmed = text.trim();
+  if (count <= 0) return trimmed;
+  return trimmed.split(/\s+/).filter(Boolean).slice(count).join(' ');
+}
+
+/** How many words (whitespace-separated) the heard text holds. */
+export const countWords = (heard: string) => heard.trim().split(/\s+/).filter(Boolean).length;
 
 /**
  * What to show or deliver for `text` from the engine. While the engine keeps extending the utterance the user cut
  * words from, the cut stays applied (the deleted words do not come back); a different utterance clears the cut.
+ * Frozen words (`skip`) are dropped from the start of the engine's text the same way, so they are never added twice.
  */
 export function applyCut(cut: HeardCut | undefined, text: string): { text: string; cut?: HeardCut } {
   if (!cut) return { text };
-  const raw = text.trim();
-  if (!raw.startsWith(cut.original)) return { text };
+  const raw = skipWords(text, cut.skip ?? 0);
+  if (!raw.startsWith(cut.original)) return cut.skip ? { text: raw, cut: { original: '', kept: '', skip: cut.skip } } : { text };
   return { text: (cut.kept + raw.slice(cut.original.length)).trim(), cut };
+}
+
+/** Freeze the heard words (shown as `shown`): the cut that keeps them from being added a second time. */
+export function freezeCut(cut: HeardCut | undefined, shown: string): HeardCut {
+  return { original: cut?.original ?? '', kept: cut?.kept ?? '', skip: (cut?.skip ?? 0) + countWords(shown) };
+}
+
+/** The edit as the textarea reports it, aligned to where the caret says it happened (a space typed next to a space is ambiguous otherwise). */
+function alignedEdit(before: string, after: string, caret?: number): TextEdit {
+  const found = diff(before, after);
+  if (caret === undefined) return found;
+  const at = caret - found.added;
+  if (at < 0 || at + found.removed > before.length) return found;
+  const same = before.slice(0, at) + after.slice(at, at + found.added) + before.slice(at + found.removed) === after;
+  return same ? { at, removed: found.removed, added: found.added } : found;
+}
+
+/** What a manual edit does to the box while words are being heard. */
+export interface EditPlan {
+  /** The committed text after the edit. */
+  text: string;
+  /** The edit in committed-text coordinates (moves the dictation anchor when nothing was frozen). */
+  edit: TextEdit;
+  /** Set when the heard words were frozen into `text`: dictation continues at `anchor` (after the typing, or after the frozen words) and skips `words` heard words. */
+  freeze?: { anchor: number; words: number };
+}
+
+/**
+ * Turn what the user did to the textarea (`value`, with the caret after the edit) into a new committed text.
+ *  - Before the heard words, or any deletion: the edit goes into the committed text and the heard words stay (reconcileEdit).
+ *  - Typing or pasting inside, directly after, or past the heard words: the box is kept exactly as the user sees it,
+ *    the heard words become real text, and dictation carries on right after what was typed.
+ */
+export function planEdit(text: string, span: LiveSpan, heard: string, value: string, caret?: number): EditPlan {
+  const tail = span.tail;
+  const reconciled = (): EditPlan => { const { text: next, ...edit } = reconcileEdit(text, tail, value, span.at); return { text: next, edit }; };
+  if (!tail) return reconciled();
+  const made = alignedEdit(withSpan(text, span), value, caret);
+  if (made.at + made.removed <= span.at || made.added === 0) return reconciled();
+  // Typed after the words: dictation follows the typing. Typed inside them: it carries on after the frozen words, so the
+  // sentence stays in the order it was spoken.
+  const tailEnd = span.at + tail.length;
+  const anchor = Math.max(0, Math.min(made.at >= tailEnd ? caret ?? made.at + made.added : tailEnd + made.added - made.removed, value.length));
+  return { text: value, edit: made, freeze: { anchor, words: countWords(heard) } };
+}
+
+/** The caret is inside the heard words (not at either end): the user moved into them, so they should be frozen where they are. */
+export function caretInsideHeard(span: LiveSpan, heard: string, caret: number) {
+  const words = heard.trim();
+  if (!words || !span.tail) return false;
+  const from = span.at + (span.tail.length - span.tail.trimStart().length);
+  return caret > from && caret < from + words.length;
+}
+
+/**
+ * Where the caret goes when the words being heard change under it. A caret at the end of the words (or at the point
+ * where dictation began, when nothing was heard yet) follows them; one before them stays put (the user is typing at
+ * the insertion point); one after them moves with the text; one in the middle keeps its place.
+ */
+export function placeCaret(caret: number, previous: { at: number; len: number }, span: LiveSpan) {
+  const end = previous.at + previous.len;
+  if (caret > end) return caret + span.tail.length - previous.len;
+  if (caret === previous.at && previous.len > 0) return caret;
+  if (caret >= previous.at && caret < end) return Math.min(caret, span.end);
+  if (caret === end) return span.end;
+  return caret;
 }

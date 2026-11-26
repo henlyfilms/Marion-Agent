@@ -90,24 +90,33 @@ export const desktop = {
         if (!/not found/i.test(String(error))) throw error;
         await docker(['network', 'create', network]);
       }
-      await docker([
-        'run', '-d', '--init', '--name', name(id), '--pull=never',
-        '--network', network, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=384',
-        '--memory=2g', '--cpus=2', '--shm-size=256m',
-        '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
-        '--mount', `type=volume,source=${name(id)},target=/workspace`,
-        env.desktopImage,
-      ], 60_000);
+      try {
+        await docker([
+          'run', '-d', '--init', '--name', name(id), '--pull=never',
+          '--network', network, '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=384',
+          '--memory=2g', '--cpus=2', '--shm-size=256m',
+          '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
+          '--mount', `type=volume,source=${name(id)},target=/workspace`,
+          env.desktopImage,
+        ], 60_000);
+      } catch (error) {
+        // Another start created it a moment ago: just make sure it is running.
+        if (!/already in use/i.test(String(error))) throw error;
+        await docker(['start', name(id)]);
+      }
     } else if (!state) {
       await docker(['start', name(id)]);
     }
-    for (let attempt = 0; attempt < 30; attempt++) {
+    // A fresh container needs a few seconds for Xvfb and the desktop; wait up to ~45s (a loaded machine running several
+    // bot desktops in parallel can be slow) before giving up. A container that exited stops the wait at once.
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline) {
       try {
         await command(id, ['xdotool', 'getdisplaygeometry'], 3000);
         return;
       } catch {
         if (!await running(id)) break;
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 400));
       }
     }
     throw new Error('Desktop display failed to start');

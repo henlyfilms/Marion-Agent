@@ -14,7 +14,7 @@ import { archiveExists } from './features/deleted-archive.js';
 import { archiveDeletedBot, noteRestoredBot } from './features/life-outbox.js';
 import { createSession, destroySession, remoteAccessFor, remoteWorkspaceUser, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, chatTranscript, clearConversation, emitBot, getBot, getBotRow, toBot, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
-import { acknowledgeIfBusy, cancelWaiting, enqueue, interrupt, isBotBusy, preemptWith, resolveApproval, runInBotQueue, stopBot } from './agent/loop.js';
+import { enqueue, interrupt, isBotBusy, preemptWith, resolveApproval, runInBotQueue, stopBot } from './agent/loop.js';
 import { classifyIntent } from './agent/chat-intent.js';
 import { planLabels, planOptions, readProvider, savePlanLabels, subscriptionUsage, usageProviders, withPlanLabel } from './agent/subscription-usage.js';
 import { chatModelForBot } from './agent/chat-model.js';
@@ -30,7 +30,7 @@ import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
 import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type MessageBody, type Toolkit } from './types.js';
 import { orderChats, tier } from './chat-order.js';
-import { isAvatarColor, isBerryShape, isStemColor, isWorkFxChoice } from './avatarShapes.js';
+import { AVATAR_SHAPE_IDS, isAvatarColor, isStemColor, isWorkFxChoice, normalizeAvatarShape } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
 
 export const api = new Hono<AuthVars>();
@@ -299,8 +299,11 @@ api.patch('/bots/:id', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   const p = await c.req.json();
-  if (p.avatarShape !== undefined && p.avatarShape !== b.avatar_shape && !isBerryShape(p.avatarShape)) {
-    return c.json({ error: 'Choose a berry shape.' }, 400);
+  if (p.avatarShape !== undefined) {
+    // Current ids and ids saved by older versions are accepted; either way the row stores the current id.
+    const shape = normalizeAvatarShape(p.avatarShape);
+    if (!shape) return c.json({ error: `Choose a bot icon: ${AVATAR_SHAPE_IDS.join(', ')}.` }, 400);
+    p.avatarShape = shape;
   }
   if (p.avatarColor !== undefined && !isAvatarColor(p.avatarColor)) return c.json({ error: 'Choose a bot color.' }, 400);
   if (p.avatarGlow !== undefined && typeof p.avatarGlow !== 'boolean') return c.json({ error: 'Choose whether the avatar glows.' }, 400);
@@ -515,22 +518,21 @@ api.post('/bots/:id/messages', bodyLimit({
     ...(call ? { from: { kind: 'voice' as const, id: call, name: 'Voice call' } } : {}),
     ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),
   }, attachments);
-  // A bot that is busy (a turn or a relayed session is running) says right away that it read this; the message itself
-  // waits in the bot's queue and is answered right after. Groups and voice calls don't get the line.
+  // A busy bot (a turn, a relayed session or an orchestration is running) still answers every new message right away, in
+  // parallel with the running work (see runsConcurrently in the loop); nothing running is ever aborted by a normal message,
+  // including "work on this first" (it only jumps the queue). Only an explicit stop / cancel / abort aborts running work.
+  // Voice calls and groups keep their own flow.
   const busy = current.kind !== 'room' && !call && isBotBusy(b.id);
-  // While busy: "stop" cancels the run and clears the queue, "work on this first" preempts it, anything else queues.
   const intent = busy ? classifyIntent(text) : 'additive';
   if (intent === 'stop') { stopBot(b.id); return c.json({ row }); }
-  const waited = busy && intent === 'additive';
-  if (waited) acknowledgeIfBusy(b.id, text, { alreadyBusy: true });
   // Screen recordings reach the models as frames (the chat keeps the original file).
-  const media = await forModel(attachments).catch((error) => { if (waited) cancelWaiting(b.id); throw error; });
+  const media = await forModel(attachments);
   const mediaNote = media.note ? `[${media.note}]\n` : '';
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, media.attachments, notes + mediaNote);
   else {
     const voice = call ? { call, seq: row.seq, fast: !override } : undefined;
-    const turn = { type: 'user' as const, text: notes + mediaNote + text, attachments: media.attachments, generation: row.generation, voice, queued: waited || undefined,
+    const turn = { type: 'user' as const, text: notes + mediaNote + text, attachments: media.attachments, generation: row.generation, voice,
       allowSubscriptionTeam: isDesktop && !remoteAccessFor(c) };
     const full = provider === 'local'
       ? { ...turn, local: { model, label: selection.label, effort: voice?.fast ? 'low' : effort ?? 'medium' } }

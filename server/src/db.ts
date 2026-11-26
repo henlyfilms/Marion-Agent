@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_BERRY, DEFAULT_STEM_COLOR } from './avatarShapes.js';
+import { DEFAULT_AVATAR_SHAPE, DEFAULT_STEM_COLOR } from './avatarShapes.js';
 import { env } from './env.js';
 
 fs.mkdirSync(path.dirname(env.dbPath), { recursive: true });
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS bots (
   label TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   instructions TEXT NOT NULL DEFAULT '',
-  avatar_shape TEXT NOT NULL DEFAULT '${DEFAULT_BERRY}',
+  avatar_shape TEXT NOT NULL DEFAULT '${DEFAULT_AVATAR_SHAPE}',
   avatar_color TEXT NOT NULL DEFAULT 'blue',
   avatar_stem_color TEXT DEFAULT '${DEFAULT_STEM_COLOR}',
   mode TEXT NOT NULL DEFAULT 'personal',
@@ -107,6 +107,13 @@ CREATE TABLE IF NOT EXISTS llm_items (
 CREATE TABLE IF NOT EXISTS pending_turns (
   bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
   state TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inflight_turns (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  generation INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  started_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY,
@@ -186,7 +193,7 @@ export const now = () => Date.now();
 export const STARTER_AGENT = {
   name: 'Barry',
   description: 'Your default Marion Agent. Start a chat or give Barry a task.',
-  avatarShape: DEFAULT_BERRY,
+  avatarShape: DEFAULT_AVATAR_SHAPE,
   avatarColor: 'violet',
   avatarStemColor: DEFAULT_STEM_COLOR,
   isPrimary: true,

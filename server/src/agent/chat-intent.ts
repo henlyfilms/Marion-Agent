@@ -10,25 +10,33 @@ export function userWords(text: string) {
   return t.trim();
 }
 
-const STOP = /^(?:(?:ok(?:ay)?|hey|please|pls|just|wait|no|actually|and)[\s,.!:-]+)*(?:stop(?:\s+(?:that|it|this|now|everything|all|please|pls|working|right\s+now|what\s+you(?:'|’)re\s+doing))*|cancel(?:\s+(?:that|it|this|all|everything|please|pls|now))*|abort(?:\s+(?:that|it|this|all|everything|please|pls|now))*|halt(?:\s+(?:that|it|this|now|please|pls))*|never\s*mind(?:\s+that)?|nevermind(?:\s+that)?|forget\s+(?:it|that)|quit|kill\s+(?:it|that))(?:\s+(?:please|pls|now))?[\s.!]*$/i;
+/** Lower-case, drop punctuation (dictation adds it freely: "Stop.", "Work on this, first!") and collapse spaces. */
+export function normalizeWords(text: string) {
+  return userWords(text).toLowerCase().replace(/[’‘`]/g, "'").replace(/[^a-z0-9'\s]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const STOP_LEAD = '(?:(?:ok|okay|hey|please|pls|just|wait|hold on|no|oh|um|uh|sorry|actually|and|so)\\s)*';
+const STOP_CORE = "(?:stop(?:\\s(?:that|it|this|now|everything|all|all of that|all of it|working|right now|what you're doing|what you are doing|doing that))*|cancel(?:\\s(?:that|it|this|all|all of that|everything))*|abort(?:\\s(?:that|it|this|all|everything|mission))*|halt(?:\\s(?:that|it|this|now))*|never ?mind(?:\\s(?:that|it|all of that))*|forget (?:it|that|about it)|quit|kill (?:it|that))";
+const STOP = new RegExp(`^${STOP_LEAD}${STOP_CORE}(?:\\s(?:${STOP_CORE}|please|pls|now|thanks|thank you))*$`);
 
 const OVERRIDE = [
-  /\b(?:work(?:ing)?\s+on|do|handle|take\s+care\s+of|fix|address|start|run|answer|look\s+at|focus\s+on)\s+(?:this|that|these|those|it)\s+first\b/i,
-  /\bfirst\s+(?:work\s+on|do|handle|fix|focus\s+on)\s+(?:this|that|these|those|it)\b/i,
-  /\b(?:prioriti[sz]e|prioriti[sz]ing)\s+(?:this|that|these|those|it)\b/i,
-  /\b(?:this|that|it)\s+(?:is|takes?)\s+(?:a\s+)?(?:priority|precedence)\b/i,
-  /\bactually[,\s]+(?:do|work\s+on|handle|fix|run|try)\s+(?:this|that)\s+instead\b/i,
-  /\b(?:do|work\s+on|handle)\s+(?:this|that)\s+instead\b/i,
-  /\boverride\b/i,
-  /\bdrop\s+(?:everything|what\s+you(?:'|’)re\s+doing)\b/i,
-  /\bbefore\s+(?:anything|everything)\s+else\b/i,
+  /\b(?:work(?:ing)?\s+on|do|handle|take\s+care\s+of|fix|address|start|run|answer|look\s+at|focus\s+on)\s+(?:this|that|these|those|it)\s+first\b/,
+  /\bfirst\s+(?:work\s+on|do|handle|fix|focus\s+on)\s+(?:this|that|these|those|it)\b/,
+  /\b(?:prioriti[sz]e|prioriti[sz]ing)\s+(?:this|that|these|those|it)\b/,
+  /\b(?:this|that|it)\s+(?:is|takes?)\s+(?:a\s+)?(?:priority|precedence)\b/,
+  /\bactually\s+(?:do|work\s+on|handle|fix|run|try)\s+(?:this|that)\s+(?:first|instead)\b/,
+  /\b(?:do|work\s+on|handle)\s+(?:this|that)\s+instead\b/,
+  /^(?:actually\s+)?instead(?:\s+(?:do|work|handle|run|try|check|use|let's|please)\b|$)/,
+  /\boverride\b/,
+  /\bdrop\s+(?:everything|what\s+you(?:'re|\s+are)\s+doing)\b/,
+  /\bbefore\s+(?:anything|everything)\s+else\b/,
 ];
 
 export function classifyIntent(text: string): MessageIntent {
-  const words = userWords(text).replace(/\s+/g, ' ');
+  const words = normalizeWords(text);
   if (!words) return 'additive';
   // A stop is a short message of its own; a long message that merely mentions "stop" is normal work.
-  if (words.length <= 60 && STOP.test(words)) return 'stop';
+  if (words.length <= 80 && STOP.test(words)) return 'stop';
   if (OVERRIDE.some(re => re.test(words))) return 'override';
   return 'additive';
 }
@@ -59,5 +67,5 @@ export function mergeQueuedUser<T extends QueuedUser>(items: T[]): T {
   };
 }
 
-/** Told to the bot in front of a message the user wants handled first. */
-export const OVERRIDE_NOTE = '[The user asked you to work on this FIRST, so your earlier work was interrupted. Do this now. Anything they sent before it is still queued and arrives right after; your chat history shows what you were doing, so pick that up again afterwards if it still makes sense.]';
+/** Told to the bot in front of a message the user wants handled first. Nothing is interrupted: the other work keeps running. */
+export const PRIORITY_NOTE = '[The user asked you to handle this FIRST. Your other work is NOT stopped; it keeps running in parallel. Answer this right away.]';

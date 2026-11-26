@@ -9,6 +9,7 @@ import { BOX_ROOT, screenFor } from '../computer.js';
 import { appendRow, emitBot, getBotRow, getLive, listRoutines, toRoutine, describeCron } from '../store.js';
 import { teamRoster } from '../features/coordination.js';
 import { createBotRecord } from '../features/bots.js';
+import { AVATAR_SHAPE_IDS, normalizeAvatarShape } from '../avatarShapes.js';
 import { saveLearnedSkill } from '../features/improve.js';
 import { notify } from '../features/notify.js';
 import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
@@ -579,7 +580,7 @@ export const TOOLS: ToolDef[] = [
       description: { type: 'string', description: '2-4 sentences shown on its profile' },
       instructions: { type: 'string' },
       avatar_color: { type: 'string', enum: ['brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray', 'black'] },
-      avatar_shape: { type: 'string', description: 'A berry: marionberry, blackberry, raspberry, blueberry, cloudberry, strawberry, cranberry, tayberry, mulberry, gooseberry' },
+      avatar_shape: { type: 'string', enum: [...AVATAR_SHAPE_IDS], description: `The Bot's icon, pick one that suits its job: ${AVATAR_SHAPE_IDS.join(', ')}` },
       executive: { type: 'boolean', description: 'True only for a Bot whose job is coordinating other Bots' },
       integrations: { type: 'array', items: { type: 'string' }, description: 'Composio toolkit slugs, e.g. gmail, slack, notion' },
       memories: { type: 'array', items: { type: 'string' } },
@@ -591,12 +592,13 @@ export const TOOLS: ToolDef[] = [
     impl: async (a, ctx) => {
       const name = String(a.name ?? '').trim();
       if (!name) return { output: 'Give the Bot a name.' };
+      if (a.avatar_shape && !normalizeAvatarShape(a.avatar_shape)) return { output: `Pick a Bot icon: ${AVATAR_SHAPE_IDS.join(', ')}.` };
       if (botByName(ctx.userId, name)) return { output: `A Bot named "${name}" already exists. Pick another name.` };
       const recent = (db.prepare('SELECT COUNT(*) n FROM bots WHERE user_id=? AND created_at>?').get(ctx.userId, now() - 3600_000) as any).n;
       if (recent >= 10) return { output: 'Too many Bots were created in the last hour. Ask the user before creating more.' };
       const bot = createBotRecord(ctx.userId, {
         name, label: a.job, description: a.description, instructions: a.instructions,
-        avatarColor: a.avatar_color, avatarShape: a.avatar_shape, role: a.executive ? 'executive' : null,
+        avatarColor: a.avatar_color, avatarShape: normalizeAvatarShape(a.avatar_shape) ?? undefined, role: a.executive ? 'executive' : null,
         integrations: Array.isArray(a.integrations) ? a.integrations : [], memories: Array.isArray(a.memories) ? a.memories : [],
         // Routines start paused: the user turns them on, so nothing runs (or spends usage) unapproved.
         skills: Array.isArray(a.skills) ? a.skills : [], routines: Array.isArray(a.routines) ? a.routines.map((r: any) => ({ ...r, enabled: false })) : [], templateId: 'bot-builder',

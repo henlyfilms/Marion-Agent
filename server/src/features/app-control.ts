@@ -1,4 +1,4 @@
-import { isAvatarColor, isBerryShape, isStemColor, BERRY_SHAPE_IDS, NAMED_AVATAR_COLORS } from '../avatarShapes.js';
+import { isAvatarColor, isStemColor, AVATAR_SHAPE_IDS, NAMED_AVATAR_COLORS, normalizeAvatarShape } from '../avatarShapes.js';
 import { db, now } from '../db.js';
 import { hub } from '../lib/hub.js';
 import { createBotRecord } from './bots.js';
@@ -19,7 +19,7 @@ import type { ChatModel } from '../types.js';
 
 export const appControlTool = {
   name: 'marion_app',
-  description: 'Change the Marion Agent app itself when the owner asks: list_bots, create_bot, update_bot (name, job, description, instructions, color as a name or #hex, berry shape, glow, stem color, starred), delete_bot (recoverable 30 days), restore_bot, set_model (a bot\'s chat model, e.g. "Claude Opus", "Gemini 4 Neon"). "bot" is a bot\'s name; use "me" for yourself.',
+  description: 'Change the Marion Agent app itself when the owner asks: list_bots, create_bot, update_bot (name, job, description, instructions, color as a name or #hex, icon shape, glow, stem color, starred), delete_bot (recoverable 30 days), restore_bot, set_model (a bot\'s chat model, e.g. "Claude Opus", "Gemini 4 Neon"). "bot" is a bot\'s name; use "me" for yourself.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['action'],
     properties: {
@@ -27,7 +27,7 @@ export const appControlTool = {
       bot: { type: 'string', description: 'Which bot (name, or "me")' },
       name: { type: 'string' }, job: { type: 'string' }, description: { type: 'string' }, instructions: { type: 'string' },
       color: { type: 'string', description: `${NAMED_AVATAR_COLORS.join(', ')} or #rrggbb` },
-      shape: { type: 'string', description: BERRY_SHAPE_IDS.slice(0, 12).join(', ') },
+      shape: { type: 'string', enum: [...AVATAR_SHAPE_IDS], description: `Bot icon: ${AVATAR_SHAPE_IDS.join(', ')}` },
       glow: { type: 'boolean' }, stem_color: { type: 'string', description: '#rrggbb' }, starred: { type: 'boolean' },
       model: { type: 'string', description: 'For set_model: the model name' },
     },
@@ -71,7 +71,9 @@ export async function runAppControl(ctx: { userId: string; botId: string; allowS
       if (!name) return { output: 'Give the new bot a name.' };
       const recent = (db.prepare('SELECT COUNT(*) n FROM bots WHERE user_id=? AND created_at>?').get(userId, now() - 3600_000) as any).n;
       if (recent >= 10) return { output: 'Too many bots were created in the last hour. Ask the owner first.' };
-      const bot = createBotRecord(userId, { name, label: a.job, description: a.description, instructions: a.instructions, avatarColor: color(a.color), avatarShape: isBerryShape(a.shape) ? a.shape : undefined, avatarGlow: a.glow === true });
+      const shape = a.shape === undefined ? undefined : normalizeAvatarShape(a.shape);
+      if (a.shape !== undefined && !shape) return { output: `Pick a bot icon: ${AVATAR_SHAPE_IDS.join(', ')}.` };
+      const bot = createBotRecord(userId, { name, label: a.job, description: a.description, instructions: a.instructions, avatarColor: color(a.color), avatarShape: shape ?? undefined, avatarGlow: a.glow === true });
       hub.emit(userId, { type: 'roster' });
       return { output: `Created "${bot.name}". It's in the chat list now.`, summary: `Created ${bot.name}` };
     }
@@ -84,7 +86,7 @@ export async function runAppControl(ctx: { userId: string; botId: string; allowS
       if (a.description !== undefined) sets.push(['description', String(a.description).trim().slice(0, 600)]);
       if (a.instructions !== undefined) sets.push(['instructions', String(a.instructions).trim().slice(0, 20_000)]);
       if (a.color !== undefined) sets.push(['avatar_color', color(a.color)]);
-      if (a.shape !== undefined) { if (!isBerryShape(a.shape)) return { output: `Pick a berry shape: ${BERRY_SHAPE_IDS.join(', ')}.` }; sets.push(['avatar_shape', a.shape]); }
+      if (a.shape !== undefined) { const shape = normalizeAvatarShape(a.shape); if (!shape) return { output: `Pick a bot icon: ${AVATAR_SHAPE_IDS.join(', ')}.` }; sets.push(['avatar_shape', shape]); }
       if (a.glow !== undefined) sets.push(['avatar_glow', a.glow ? 1 : 0]);
       if (a.stem_color !== undefined) { if (!isStemColor(a.stem_color)) return { output: 'Stem color must be #rrggbb.' }; sets.push(['avatar_stem_color', a.stem_color]); }
       if (a.starred !== undefined) sets.push(['pinned', a.starred ? 1 : 0]);

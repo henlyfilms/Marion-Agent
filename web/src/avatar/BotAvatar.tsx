@@ -1,10 +1,9 @@
 import { useId } from 'react';
-import { BERRY_SHAPES, isBerryShape, type ClassicShape } from '@shared/avatarShapes';
-import type { WorkFxChoice } from '@shared/avatarShapes';
+import { resolveAvatarShape, type WorkFxChoice } from '@shared/avatarShapes';
+import { AVATAR_GEOMETRY, type ShapeGeometry } from '@shared/avatarGeometry';
 import type { AvatarColor, AvatarShape, Bot } from '@shared/types';
 import { palette } from '../lib/colors';
 import { Icon } from '../components/Icon';
-import { SHAPES, type ShapeDef } from './shapes';
 import { useWorkFx, WorkFxLayer } from './WorkFx';
 
 interface Props {
@@ -26,19 +25,9 @@ interface Props {
   title?: string;
 }
 
-const LEGACY_VIEW = '8 8 84 84';
-const BERRY_VIEW = '0 0 100 100';
-const BERRY_EYES = { y: 53, dx: 12.5, s: 0.9 };
-const FUNKY_EYES = { y: 52, dx: 8.5, s: 0.76 };
-const CLASSIC_STEMS: Record<ClassicShape, readonly [x: number, y: number]> = {
-  blob: [50, 10], pebble: [50, 19], egg: [50, 11], bean: [47, 26], squircle: [50, 10],
-  square: [50, 12], tablet: [50, 11], capsule: [50, 26], cylinder: [50, 10], hex: [50, 10],
-  gem: [50, 17], crystal: [50, 12], wedge: [50, 17], shield: [50, 13], dome: [50, 16],
-  arch: [50, 17], cloud: [50, 20], teardrop: [50, 10], leaf: [65, 25], sparkle: [50, 6],
-  clover: [50, 12], flower: [50, 18], heart: [50, 32], house: [50, 15], star: [50, 14],
-};
+const VIEW = '0 0 100 100';
 
-function Eyes({ eyes }: { eyes: ShapeDef['eyes'] }) {
+function Eyes({ eyes }: { eyes: ShapeGeometry['eyes'] }) {
   const { y, dx, s } = eyes;
   return (
     <g data-avatar-eyes="" fill="#fff9fc">
@@ -52,16 +41,6 @@ function Eyes({ eyes }: { eyes: ShapeDef['eyes'] }) {
   );
 }
 
-type Lobe = readonly [x: number, y: number, radius: number];
-
-function berryStem(lobes: readonly Lobe[]): readonly [number, number] {
-  const x = 49;
-  // Meet the first point on the silhouette directly above the berry's center.
-  const y = Math.min(...lobes.filter(([cx, , r]) => Math.abs(x - cx) < r)
-    .map(([cx, cy, r]) => cy - Math.sqrt(r * r - (x - cx) ** 2)));
-  return [x, y];
-}
-
 function Stem({ color, point: [x, y] }: { color: string; point: readonly [number, number] }) {
   return (
     <g transform={`translate(${x} ${y + 3}) rotate(-18)`} data-stem-color={color}>
@@ -73,11 +52,9 @@ function Stem({ color, point: [x, y] }: { color: string; point: readonly [number
 
 export function BotAvatar({ shape, color, stemColor, size, star, glow, image, working, fxSeed, workFx, className, title }: Props) {
   const gradientId = useId();
-  const berry = isBerryShape(shape) ? BERRY_SHAPES[shape][1] : null;
-  const lobes = typeof berry === 'string' ? null : berry;
-  const classicShape = Object.hasOwn(SHAPES, shape) ? shape as ClassicShape : 'blob';
-  const classic = SHAPES[classicShape];
-  const stem = lobes ? berryStem(lobes) : berry ? [50, 14] as const : CLASSIC_STEMS[classicShape];
+  // Saved ids from older versions resolve to their replacement icon; unknown ids show the default.
+  const id = resolveAvatarShape(shape);
+  const geometry = AVATAR_GEOMETRY[id];
   const fill = palette(color).fill;
   // `fx` outlives `working` by a moment so the aura can fade out; it is null for idle avatars.
   const fx = useWorkFx(!!working, fxSeed ?? String(shape) + color, fill, size, workFx);
@@ -85,9 +62,9 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, image, wo
     <span className={`bot-avatar${glow ? ' is-glowing' : ''}${fx ? ' is-working' : ''}${className ? ` ${className}` : ''}`}
       style={glow ? { width: size, height: size, '--avatar-glow': fill, '--avatar-glow-r': `${Math.max(2, size * 0.09)}px` } as React.CSSProperties : { width: size, height: size }}
       title={title} role={title ? 'img' : undefined} aria-label={title} aria-hidden={title ? undefined : true}
-      data-avatar-shape={image ? 'photo' : berry || Object.hasOwn(SHAPES, shape) ? shape : 'blob'}>
+      data-avatar-shape={image ? 'photo' : id}>
       {fx && <WorkFxLayer fx={fx} layer="back" />}
-      {image ? <img className="bot-avatar__photo" src={image} alt="" draggable={false} width={size} height={size} /> : <svg width={size} height={size} viewBox={berry ? BERRY_VIEW : LEGACY_VIEW} aria-hidden>
+      {image ? <img className="bot-avatar__photo" src={image} alt="" draggable={false} width={size} height={size} /> : <svg width={size} height={size} viewBox={VIEW} aria-hidden>
         <defs>
           <radialGradient id={gradientId} gradientUnits="userSpaceOnUse" cx="38" cy="30" r="71" fx="33" fy="24">
             <stop offset="0" stopColor={`color-mix(in srgb, ${fill}, white 32%)`} />
@@ -95,12 +72,9 @@ export function BotAvatar({ shape, color, stemColor, size, star, glow, image, wo
             <stop offset="1" stopColor={`color-mix(in srgb, ${fill}, #271034 28%)`} />
           </radialGradient>
         </defs>
-        {stemColor && <Stem color={stemColor} point={stem} />}
-        <g fill={`url(#${gradientId})`}>
-          {lobes ? lobes.map(([x, y, r]) => <circle key={`${x},${y}`} cx={x} cy={y} r={r} />)
-            : <path d={typeof berry === 'string' ? berry : classic.d} />}
-        </g>
-        <Eyes eyes={shape === 'funkyberry' ? FUNKY_EYES : berry ? BERRY_EYES : classic.eyes} />
+        {stemColor && <Stem color={stemColor} point={geometry.stem} />}
+        <path fill={`url(#${gradientId})`} d={geometry.d} />
+        <Eyes eyes={geometry.eyes} />
       </svg>}
       {fx && <WorkFxLayer fx={fx} layer="front" />}
       {star && (

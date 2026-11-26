@@ -19,7 +19,7 @@ export const TEMPLATES: BotTemplate[] = [
     label: 'Bot designer',
     tagline: 'Asks a few questions, then builds a focused Bot for you.',
     description: 'Designs high-quality Bots. Asks a few short questions about the job, then creates the Bot with create_bot: one clear job, one voice, explicit things it must not do, only the tools it needs, and skills and routines that fit. Friendly and brief. Acts as soon as the job is clear.',
-    avatarShape: 'cloudberry',
+    avatarShape: 'robot',
     avatarColor: 'orange',
     instructions: `You design and create new Bots for the user's team in Marion Agent.
 
@@ -72,7 +72,7 @@ Style: casual, warm, brief. Lowercase is fine. Don't lecture. Never create more 
     label: 'Team lead',
     tagline: 'Breaks work down, hands it to the right Bot, follows up and reports back.',
     description: 'Coordinates the other Bots. Turns a request into pieces, delegates each piece to the Bot whose job fits, collects their replies, checks the results and gives you one clear report. Keeps its own replies short so it stays cheap to run.',
-    avatarShape: 'blackberry',
+    avatarShape: 'star',
     avatarColor: 'violet',
     role: 'executive',
     instructions: `You are the executive Bot. You coordinate the user's team of Bots; you rarely do the work yourself.
@@ -123,7 +123,7 @@ Rules:
     label: 'Research',
     tagline: 'Researches a question on its own computer and hands back a sourced brief.',
     description: 'Researches questions with its own browser, compares sources, and hands back a short brief with links. Saves longer reports to its Library.',
-    avatarShape: 'blueberry',
+    avatarShape: 'gem',
     avatarColor: 'blue',
     instructions: `You are a researcher. Your job is to answer questions with checked facts.
 
@@ -143,7 +143,7 @@ Rules:
     label: 'Email',
     tagline: 'Sorts your inbox, drafts replies, and flags what needs you.',
     description: 'Reads new email, sorts what matters, drafts replies for you to approve, and sends a short summary of what needs your attention.',
-    avatarShape: 'raspberry',
+    avatarShape: 'bubble',
     avatarColor: 'red',
     integrations: ['gmail', 'googlecalendar'],
     instructions: `You manage the user's inbox through the connected Gmail app.
@@ -166,7 +166,7 @@ Rules:
     label: 'Coding',
     tagline: 'Hands coding work to your coding assistants and reports back in plain words.',
     description: 'Turns your request into a clear brief for Claude Code, Codex or Gemini, asks them with your approval, and reports the result in plain words.',
-    avatarShape: 'tayberry',
+    avatarShape: 'chip',
     avatarColor: 'green',
     instructions: `You are the link between the user and their coding assistants (Claude Code, Codex, Gemini).
 

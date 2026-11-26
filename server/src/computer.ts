@@ -6,11 +6,15 @@ import type { ComputerState } from './types.js';
 export const BOX_ROOT = '/workspace';
 const operations = new Map<string, Promise<unknown>>();
 
-function serialize<T>(userId: string, operation: () => Promise<T>): Promise<T> {
-  const pending = operations.get(userId);
+/**
+ * Operations are serialized per desktop (key), not per user: each bot has its own computer, so one bot's slow start (a Docker
+ * image build, Colima booting) must never hold up another bot's computer that background tasks are using in parallel.
+ */
+function serialize<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const pending = operations.get(key);
   const result = (pending ? pending.catch(() => undefined) : Promise.resolve()).then(operation);
-  operations.set(userId, result);
-  const forget = () => { if (operations.get(userId) === result) operations.delete(userId); };
+  operations.set(key, result);
+  const forget = () => { if (operations.get(key) === result) operations.delete(key); };
   void result.then(forget, forget);
   return result;
 }
@@ -36,7 +40,7 @@ export function computerState(userId: string): ComputerState {
 }
 
 export function screenFor(userId: string, botId: string): Promise<string> {
-  return serialize(userId, async () => {
+  return serialize(botId, async () => {
     if (!db.prepare("SELECT 1 FROM bots WHERE id=? AND user_id=? AND kind!='room'").get(botId, userId)) {
       throw new Error('Bot desktop not found');
     }
@@ -53,7 +57,9 @@ export function screenFor(userId: string, botId: string): Promise<string> {
       setStatus(userId, 'running');
       return botId;
     } catch (error) {
-      setStatus(userId, 'error', (error as Error).message.slice(0, 300));
+      // One bot's computer failing must not mark the others (still running in parallel) as broken.
+      if (assigned(userId).some(screen => screen.running && screen.botId !== botId)) setStatus(userId, 'running');
+      else setStatus(userId, 'error', (error as Error).message.slice(0, 300));
       throw error;
     }
   });
@@ -66,7 +72,7 @@ export function ensureComputer(userId: string) {
 }
 
 export function stopDesktop(userId: string, botId: string) {
-  return serialize(userId, async () => {
+  return serialize(botId, async () => {
     if (!assigned(userId).some(screen => screen.botId === botId)) return;
     await desktop.stop(botId);
     db.prepare('UPDATE screens SET running=0 WHERE bot_id=?').run(botId);
@@ -74,44 +80,43 @@ export function stopDesktop(userId: string, botId: string) {
   });
 }
 
-export function suspendComputer(userId: string) {
-  return serialize(userId, async () => {
-    const screens = assigned(userId);
-    if (!screens.length) return;
-    setStatus(userId, 'suspending');
-    try {
-      for (const { botId } of screens) {
-        await desktop.stop(botId);
-        db.prepare('UPDATE screens SET running=0 WHERE bot_id=?').run(botId);
-      }
-      setStatus(userId, 'suspended');
-    } catch (error) {
-      setStatus(userId, 'error', (error as Error).message.slice(0, 300));
-      throw error;
-    }
-  });
+export async function suspendComputer(userId: string) {
+  const screens = assigned(userId);
+  if (!screens.length) return;
+  setStatus(userId, 'suspending');
+  const results = await Promise.allSettled(screens.map(({ botId }) => serialize(botId, async () => {
+    await desktop.stop(botId);
+    db.prepare('UPDATE screens SET running=0 WHERE bot_id=?').run(botId);
+  })));
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) {
+    setStatus(userId, 'error', (failed.reason as Error).message.slice(0, 300));
+    throw failed.reason;
+  }
+  setStatus(userId, 'suspended');
 }
 
-export function refreshComputer(userId: string) {
-  return serialize(userId, async () => {
-    const current = computerState(userId);
-    if (!current.screens.length && current.status === 'error') return current;
-    try {
-      let running = false;
-      let changed = false;
-      for (const screen of current.screens) {
-        const awake = Boolean(await desktop.running(screen.botId));
-        if (awake !== screen.running) {
-          db.prepare('UPDATE screens SET running=? WHERE bot_id=?').run(Number(awake), screen.botId);
-          changed = true;
-        }
-        running ||= awake;
+export async function refreshComputer(userId: string) {
+  const current = computerState(userId);
+  if (!current.screens.length && current.status === 'error') return current;
+  try {
+    let running = false;
+    let changed = false;
+    for (const screen of current.screens) {
+      // Wait for this bot's own start/stop to settle, but never for another bot's.
+      const awake = await serialize(botKey(screen.botId), async () => Boolean(await desktop.running(screen.botId)));
+      if (awake !== screen.running) {
+        db.prepare('UPDATE screens SET running=? WHERE bot_id=?').run(Number(awake), screen.botId);
+        changed = true;
       }
-      const status = running ? 'running' : current.screens.length ? 'suspended' : 'absent';
-      if (changed || status !== current.status) setStatus(userId, status);
-    } catch (error) {
-      setStatus(userId, 'error', (error as Error).message.slice(0, 300));
+      running ||= awake;
     }
-    return computerState(userId);
-  });
+    const status = running ? 'running' : current.screens.length ? 'suspended' : 'absent';
+    if (changed || status !== current.status) setStatus(userId, status);
+  } catch (error) {
+    setStatus(userId, 'error', (error as Error).message.slice(0, 300));
+  }
+  return computerState(userId);
 }
+
+const botKey = (botId: string) => botId;

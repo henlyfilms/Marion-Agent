@@ -4,7 +4,7 @@ import { senderBubbleClass } from '../lib/senderKind';
 import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
 import { Film, Paperclip } from 'lucide-react';
 import { api } from '../lib/api';
-import { DEFAULT_BERRY } from '@shared/avatarShapes';
+import { DEFAULT_AVATAR_SHAPE } from '@shared/avatarShapes';
 import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
 import { clock, dividerLabel } from '../lib/time';
 import { useStore } from '../store';
@@ -143,7 +143,7 @@ function SenderLabel({ from }: { from: NonNullable<MessageBody['from']> }) {
   return (
     <div className="sender-label">
       {from.kind === 'model' ? <img className="sender-label__provider" src={`/providers/${({ local: 'qwen-color', codex: 'codex', gemini: 'gemini-color', claude: 'claude-color' } as const)[from.provider ?? 'local']}.svg`} alt="" width="14" height="14" />
-        : bot ? <BotAvatarFor bot={bot} size={16} /> : from.kind === 'routine' ? <Icon name="clock" size={12} opacity={0.56} /> : from.kind === 'voice' ? <Icon name="voice_a" size={12} opacity={0.56} /> : <BotAvatar shape={DEFAULT_BERRY} color="gray" size={16} />}
+        : bot ? <BotAvatarFor bot={bot} size={16} /> : from.kind === 'routine' ? <Icon name="clock" size={12} opacity={0.56} /> : from.kind === 'voice' ? <Icon name="voice_a" size={12} opacity={0.56} /> : <BotAvatar shape={DEFAULT_AVATAR_SHAPE} color="gray" size={16} />}
       <span>{from.kind === 'model' ? `${from.name} · team member` : from.kind === 'routine' ? `Routine · ${from.name}` : from.kind === 'voice' ? 'Asked on a voice call' : `From ${bot?.name ?? from.name}`}</span>
     </div>
   );
@@ -210,8 +210,8 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
 
   const running = !!live?.isRunning;
   const waiting = !running && (!!live?.awaiting || live?.activity?.kind === 'waiting_for_you');
-  const last = rows[rows.length - 1];
-  const streamingNow = last?.body.type === 'message' && last.body.role === 'assistant' && !!last.body.streaming;
+  // Several replies can stream at once (parallel prompts), so any of the newest rows streaming counts, not just the last one.
+  const streamingNow = rows.slice(-12).some(r => r.body.type === 'message' && r.body.role === 'assistant' && !!r.body.streaming);
   const showActivity = (running && !streamingNow) || waiting;
 
   // Keep pinned to the bottom while new content arrives, unless the user scrolled up.

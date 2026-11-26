@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { LayoutTemplate, Users } from 'lucide-react';
 import type { AvatarColor, Bot } from '@shared/types';
 import { BotAvatar } from '../../avatar/BotAvatar';
-import { DEFAULT_BERRY, DEFAULT_STEM_COLOR, type BerryShape } from '@shared/avatarShapes';
+import { DEFAULT_AVATAR_SHAPE, DEFAULT_STEM_COLOR, type AvatarShapeId } from '@shared/avatarShapes';
 import { BotShapePicker } from '../../avatar/BotShapePicker';
 import { BotColorPicker } from '../../avatar/BotColorPicker';
 import { BotStemPicker } from '../../avatar/BotStemPicker';
@@ -16,7 +16,7 @@ import { useFeatureUI } from '../../lib/featuresApi';
 export function CreateBotModal() {
   const setModal = useStore((s) => s.setModal);
   const [name, setName] = useState('');
-  const [shape, setShape] = useState<BerryShape>(DEFAULT_BERRY);
+  const [shape, setShape] = useState<AvatarShapeId>(DEFAULT_AVATAR_SHAPE);
   const [color, setColor] = useState<AvatarColor>('violet');
   const [stemColor, setStemColor] = useState<string | null>(DEFAULT_STEM_COLOR);
   const [glow, setGlow] = useState(false);

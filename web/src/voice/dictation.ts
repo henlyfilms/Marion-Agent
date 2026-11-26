@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { playDictationSound } from './sounds';
 import { voiceApi } from './api';
-import { micErrorMessage, openMic } from './audio';
+import { micErrorMessage, microphoneId, openMic } from './audio';
+import { PcmRecorder } from './pcmRecorder';
 
 export type DictationState = 'idle' | 'recording' | 'transcribing';
 
@@ -14,9 +15,12 @@ function pickMime(): string | undefined {
   }
 }
 
+/** What the recording is made with: a MediaRecorder (servers that take compressed audio) or the lossless PCM recorder (Mac dictation). */
+type Recorder = Pick<MediaRecorder, 'state' | 'stop' | 'mimeType'> & { onstop: unknown };
+
 interface Recording {
   controller: AbortController;
-  media?: MediaRecorder;
+  media?: Recorder;
   timer?: ReturnType<typeof setTimeout>;
   /** Live preview: re-transcribes the audio so far while the user is still talking. */
   preview?: ReturnType<typeof setInterval>;
@@ -52,13 +56,13 @@ function useRevealedWords(target: string) {
   return count >= total ? target : words.slice(0, count).join(' ');
 }
 
-export function useDictation(onText: (text: string) => void, onError: (msg: string) => void, language?: string, maxMs = MAX_MS, native = false) {
+export function useDictation(onText: (text: string) => void, onError: (msg: string) => void, language?: string, maxMs = MAX_MS, native = false, getContext?: () => string) {
   const [state, setState] = useState<DictationState>('idle');
   const [heard, setInterim] = useState('');
   const interim = useRevealedWords(heard);
   const active = useRef<Recording>();
-  const cb = useRef({ onText, onError, language, native });
-  cb.current = { onText, onError, language, native };
+  const cb = useRef({ onText, onError, language, native, getContext });
+  cb.current = { onText, onError, language, native, getContext };
 
   const finish = useCallback((cancel = false) => {
     const recording = active.current;
@@ -88,13 +92,18 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
     playDictationSound(true);
     let stream: MediaStream | undefined;
     try {
-      stream = await openMic();
+      const lossless = cb.current.native; // Mac dictation: raw samples, no Opus, no browser noise gate / auto-gain
+      stream = await openMic(microphoneId(), lossless);
       if (signal.aborted) { stream.getTracks().forEach(track => track.stop()); return; }
       const capture = stream;
       const start = Date.now();
-      const mime = pickMime();
-      const media = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const mime = lossless ? 'audio/wav' : pickMime();
+      const pcm = lossless ? await PcmRecorder.open(stream) : undefined;
+      if (signal.aborted) { pcm?.stop(); stream.getTracks().forEach(track => track.stop()); return; }
+      const media: Recorder & { start?(slice?: number): void; onerror?: unknown } = pcm ?? new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 128_000 } : { audioBitsPerSecond: 128_000 });
       const chunks: Blob[] = [];
+      const chunkCount = () => pcm ? pcm.chunkCount : chunks.length;
+      const audio = () => pcm ? pcm.wav() : new Blob(chunks, { type: media.mimeType || mime || 'audio/webm' });
       recording.media = media;
       const cleanUp = () => {
         clearTimeout(recording.timer);
@@ -105,21 +114,24 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
         recording.previewing?.abort();
         if (active.current === recording) { active.current = undefined; setInterim(''); setState('idle'); }
       };
-      media.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-      media.onerror = () => {
-        cleanUp();
-        if (!signal.aborted) cb.current.onError('Could not record audio from this microphone.');
-        recording.controller.abort();
-        idle();
-      };
+      if (!pcm) {
+        const recorder = media as MediaRecorder;
+        recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+        recorder.onerror = () => {
+          cleanUp();
+          if (!signal.aborted) cb.current.onError('Could not record audio from this microphone.');
+          recording.controller.abort();
+          idle();
+        };
+      }
       media.onstop = async () => {
         cleanUp();
         clearInterval(recording.preview);
         recording.previewing?.abort();
-        if (signal.aborted || !chunks.length || Date.now() - start < 250) { idle(); return; }
+        if (signal.aborted || !chunkCount() || Date.now() - start < 250) { idle(); return; }
         setState('transcribing');
         try {
-          const text = await voiceApi.transcribe(new Blob(chunks, { type: media.mimeType || mime || 'audio/webm' }), cb.current.language, signal, cb.current.native);
+          const text = await voiceApi.transcribe(audio(), cb.current.language, signal, cb.current.native, { final: true, context: cb.current.getContext?.() });
           if (!signal.aborted) {
             if (text) cb.current.onText(text);
             else cb.current.onError('No speech heard'); // short, so it never wraps the model row (owner, Nov 25)
@@ -128,7 +140,7 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
           if (!signal.aborted) cb.current.onError((cause as Error).message || 'Transcription failed');
         } finally { idle(); }
       };
-      media.start(SLICE_MS);
+      if (!pcm) (media as MediaRecorder).start(SLICE_MS);
       recording.timer = setTimeout(() => finish(), maxMs);
       // Live preview: transcribe what has been said so far and show it in the box. Passes run back to back (one at
       // a time) whenever new audio has arrived, so words show up as fast as the speech server answers.
@@ -136,13 +148,12 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
       let previewedChunks = 0;
       const refreshPreview = () => {
         const elapsed = Date.now() - start;
-        if (recording.previewing || media.state !== 'recording' || chunks.length === previewedChunks
+        if (recording.previewing || media.state !== 'recording' || chunkCount() === previewedChunks
           || elapsed < FIRST_PREVIEW_MS || Date.now() - lastPreview < previewGap(elapsed)) return;
-        previewedChunks = chunks.length;
+        previewedChunks = chunkCount();
         const previewing = new AbortController();
         recording.previewing = previewing;
-        const audio = new Blob(chunks, { type: media.mimeType || mime || 'audio/webm' });
-        voiceApi.transcribe(audio, cb.current.language, AbortSignal.any([signal, previewing.signal]), cb.current.native)
+        voiceApi.transcribe(audio(), cb.current.language, AbortSignal.any([signal, previewing.signal]), cb.current.native, { context: cb.current.getContext?.() })
           .then(text => { if (!previewing.signal.aborted && active.current === recording && media.state === 'recording') setInterim(text.trim()); })
           .catch(() => { /* A preview can fail (e.g. too little audio); the final transcription still runs. */ })
           .finally(() => {
@@ -152,7 +163,7 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
             refreshPreview();
           });
       };
-      media.addEventListener('dataavailable', refreshPreview);
+      if (!pcm) (media as MediaRecorder).addEventListener('dataavailable', refreshPreview);
       // The timer only covers the throttled gaps on long recordings; short ones are driven by the events above.
       recording.preview = setInterval(refreshPreview, 250);
     } catch (cause) {

@@ -53,7 +53,7 @@ interface PendingState {
   allowSubscriptionTeam?: boolean;
 }
 
-import { mergeQueuedUser, OVERRIDE_NOTE } from './chat-intent.js';
+import { mergeQueuedUser, PRIORITY_NOTE } from './chat-intent.js';
 
 const MAX_STEPS = 60;
 /** Recent history items a concurrent side run starts from. */
@@ -83,13 +83,35 @@ const endRun = (botId: string) => {
 };
 /** Runs of this bot that are in flight right now (main turn + side runs). */
 export const activeRunCount = (botId: string) => activeRuns.get(botId) ?? 0;
-const abortAll = (botId: string) => {
-  let n = 0;
-  const main = aborts.get(botId);
-  if (main && !main.signal.aborted) { main.abort(); n++; }
-  for (const c of sideAborts.get(botId) ?? []) if (!c.signal.aborted) { c.abort(); n++; }
-  return n;
+/** What each in-flight run is working on (a few words), so an override can tell the bot what it interrupted. */
+const runLabels = new Map<AbortController, string>();
+const labelFor = (t: Trigger) => {
+  const clip = (text: string) => text.replace(/\[[^\]\n]*\]\s*/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  switch (t.type) {
+    case 'user': return clip(t.text) || 'a request with attachments';
+    case 'bot': return `a message from ${t.fromName}: ${clip(t.text)}`;
+    case 'routine': return `the routine "${t.name}"`;
+    case 'system': return clip(t.text);
+    case 'resume': return 'the approved action';
+  }
 };
+/** Abort every run of this bot (main turn and all concurrent runs). Returns how many were running and what they were doing. */
+const abortAll = (botId: string) => {
+  const labels: string[] = [];
+  let count = 0;
+  const stop = (c: AbortController | undefined) => {
+    if (!c || c.signal.aborted) return;
+    c.abort();
+    count++;
+    const label = runLabels.get(c);
+    if (label) labels.push(label);
+  };
+  stop(aborts.get(botId));
+  for (const c of [...(sideAborts.get(botId) ?? [])]) stop(c);
+  return { count, labels };
+};
+/** Contexts of concurrent runs that answer the user (not another bot): they can't pause for approval. */
+const userSideRuns = new WeakSet<object>();
 /** What the bot answered other bots in parallel; shown to it at the start of its next main turn so its memory stays whole. */
 const sideNotes = new Map<string, string[]>();
 
@@ -119,6 +141,13 @@ const consumeStopAnnounced = (botId: string) => {
  * because they continue the main work and must be seen in order.
  */
 export function runsConcurrently(botId: string, trigger: Trigger) {
+  // The user's own messages never wait behind a running turn or relay: each one is answered right away, in parallel.
+  // (Voice calls keep their own strict turn order, and group chats dispatch to their members.)
+  if (trigger.type === 'user') {
+    if (trigger.voice || trigger.queued || !queues.has(botId)) return false;
+    const row = getBotRow(botId);
+    return Boolean(row) && row.kind !== 'room';
+  }
   if (trigger.type !== 'bot' || trigger.autoReply) return false;
   if (!(queues.has(botId) || activeRuns.has(botId))) return false;
   const row = getBotRow(botId);
@@ -167,21 +196,22 @@ export function stopBot(botId: string) {
   pendingUser.delete(botId);
   urgentUser.delete(botId);
   waiting.delete(botId);
-  const aborted = abortAll(botId);
-  if (aborted) stopAnnounced.set(botId, aborted);
-  const running = aborted > 0;
+  const { count } = abortAll(botId);
+  // The runs were just told to stop; this one message says so, so their own "Stopped." notices stay quiet.
+  if (count) stopAnnounced.set(botId, count);
+  const running = count > 0;
   appendRow(botId, 'message', { type: 'message', role: 'assistant', ack: true,
     text: `Stopped.${cleared ? ` I also cleared ${cleared} queued message${cleared === 1 ? '' : 's'}.` : ''}` });
   return { cleared, aborted: running };
 }
 
-/** A "work on this first" message: interrupt the running work and run this next. Messages already waiting stay queued behind it. */
+/**
+ * A "work on this first" message. It never aborts anything: running work (main turn, relayed sessions, concurrent runs) keeps
+ * going and this message is answered immediately in its own parallel run. Only an explicit stop/cancel/abort aborts work.
+ */
 export function preemptWith(botId: string, trigger: Extract<Trigger, { type: 'user' }>) {
-  const first = { ...trigger, queued: undefined, text: `${OVERRIDE_NOTE}\n${trigger.text}` };
-  urgentUser.set(botId, [...(urgentUser.get(botId) ?? []), first]);
-  chain(botId, () => runWaiting(botId));
-  aborts.get(botId)?.abort();
-  appendRow(botId, 'message', { type: 'message', role: 'assistant', ack: true, text: 'On it — doing this first.' });
+  const first = { ...trigger, queued: undefined, text: `${PRIORITY_NOTE}\n${trigger.text}` };
+  if (isBotBusy(botId) && !trigger.voice) runSide(botId, first); else enqueue(botId, first);
 }
 
 export function interrupt(botId: string) {
@@ -351,6 +381,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
   if (trigger.type === 'user' && trigger.generation !== undefined && trigger.generation !== bot.generation) return;
   const userId: string = bot.user_id;
   const ctrl = new AbortController();
+  runLabels.set(ctrl, labelFor(trigger));
   if (side) {
     const set = sideAborts.get(botId) ?? new Set<AbortController>();
     set.add(ctrl);
@@ -368,16 +399,23 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
     ? trigger.subscription : chatModelForBot(bot);
   let subscription = selected && selected.provider !== 'local' ? selected as SubscriptionSelection : undefined;
   const sideHistory = side ? [...pruneImages(repairHistory(recentHistory(loadHistory(botId), SIDE_WINDOW)))] : undefined;
+  // Notes about what this bot already answered in parallel, so a new concurrent run knows the whole conversation.
+  const seenNotes = side ? sideNotes.get(botId) : undefined;
+  if (sideHistory && seenNotes?.length) sideHistory.push({ role: 'user', content: `[While you were busy you also answered in parallel. Those messages and your replies, for your memory only:]\n${seenNotes.join('\n')}` });
   const sideSeed = sideHistory?.length ?? 0;
   const ctx: ToolCtx = { side, sideHistory, userId, botId, enqueueBotMessage, depth, signal: ctrl.signal, allowSubscriptionTeam: trigger.type === 'user' && trigger.allowSubscriptionTeam, messaged: new Set(), replyTo: trigger.type === 'bot' && !trigger.autoReply ? trigger.fromBotId : undefined };
   const startSeq = (db.prepare('SELECT COALESCE(MAX(seq),0) seq FROM rows WHERE bot_id=? AND generation=?').get(botId, bot.generation) as any).seq as number;
   let failure: string | null = null;
+  // Recorded while the run is in flight, so a crash or restart can pick the work up again (see resumeInterruptedTurns).
+  const inflightId = `${botId}:${Date.now().toString(36)}:${++sideCounter}`;
+  if (trigger.type !== 'resume' && !(trigger.type === 'system' && trigger.text.startsWith(CONTINUE_MARK))) {
+    try { db.prepare('INSERT INTO inflight_turns(id,bot_id,generation,label,started_at) VALUES (?,?,?,?,?)').run(inflightId, botId, bot.generation, runLabels.get(ctrl) ?? '', now()); } catch { /* best effort */ }
+  }
+  if (side && trigger.type === 'user') userSideRuns.add(ctx);
   ctx.turn = { id: `${botId}:${bot.generation}:${startSeq}${side ? `:side${++sideCounter}` : ''}`, startedAt: now(), request: '' };
   if (!side) {
     // The main turn picks up what the bot answered other bots while it was busy.
-    const notes = sideNotes.get(botId);
-    sideNotes.delete(botId);
-    if (notes?.length) appendHistory(botId, [{ role: 'user', content: `[While you were busy you also answered other bots in parallel. Their messages and your replies, for your memory only:]\n${notes.join('\n')}` }]);
+    flushSideNotes(botId);
   }
   if (!side || firstRun) {
     const pendingApproval = side && db.prepare('SELECT 1 FROM pending_turns WHERE bot_id=?').get(botId);
@@ -487,8 +525,12 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
       const set = sideAborts.get(botId);
       set?.delete(ctrl);
       if (set && !set.size) sideAborts.delete(botId);
-    } else aborts.delete(botId);
+    } else if (aborts.get(botId) === ctrl) aborts.delete(botId);
+    const runLabel = runLabels.get(ctrl) ?? '';
+    runLabels.delete(ctrl);
+    try { db.prepare('DELETE FROM inflight_turns WHERE id=?').run(inflightId); } catch { /* best effort */ }
     const othersLeft = endRun(botId);
+    if (!othersLeft) stopAnnounced.delete(botId); // a stop notice nobody consumed must not hide a later, real one
     const stillPending = db.prepare('SELECT 1 FROM pending_turns WHERE bot_id=?').get(botId);
     if (!side && completed && !ctrl.signal.aborted && !stillPending) {
       db.prepare("UPDATE bots SET completed_at=? WHERE id=? AND generation=? AND kind<>'room'").run(now(), botId, bot.generation);
@@ -515,13 +557,58 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
     });
     emitBot(botId);
     const sideReply = side ? sideHistoryReply(sideHistory!, sideSeed) : undefined;
-    if (side && sideReply && trigger.type === 'bot') {
+    if (side && sideReply && (trigger.type === 'bot' || trigger.type === 'user') && sameChat) {
       const notes = sideNotes.get(botId) ?? [];
-      notes.push(`${trigger.fromName} asked: ${trigger.text.slice(0, 600)}\nYou answered: ${sideReply.slice(0, 1200)}`);
+      notes.push(`${trigger.type === 'bot' ? trigger.fromName : 'The user'} asked: ${trigger.text.slice(0, 600)}\nYou answered: ${sideReply.slice(0, 1200)}`);
       sideNotes.set(botId, notes.slice(-6));
     }
+    // The last run just ended: write what was answered in parallel into the stored history now (never while an approval is pending).
+    if (!othersLeft && !stillPending && sameChat) flushSideNotes(botId);
+    if (completed) resumeAttempts.delete(botId);
+    else if (failure && !ctrl.signal.aborted && sameChat && !stillPending) scheduleResume(botId, bot.generation, runLabel, failure);
     afterTurn(botId, bot, trigger, { completed: completed && !ctrl.signal.aborted && !stillPending, failure, startSeq, depth, messaged: ctx.messaged!, ...(side ? { reply: sideReply ?? '' } : {}) });
   }
+}
+
+// ---------- resuming work that was cut off without the user asking ----------
+
+const CONTINUE_MARK = '[Interrupted work]';
+const MAX_RESUMES = 2;
+const resumeAttempts = new Map<string, number>();
+/** A run that failed (not stopped by the user) is picked up again, a couple of times, instead of being silently dropped. */
+function scheduleResume(botId: string, generation: number, label: string, reason: string, afterRestart = false) {
+  const tries = resumeAttempts.get(botId) ?? 0;
+  if (tries >= MAX_RESUMES) return;
+  resumeAttempts.set(botId, tries + 1);
+  const why = afterRestart ? 'Marion Agent restarted' : `it hit an error (${reason.slice(0, 200)})`;
+  const text = `${CONTINUE_MARK} Your earlier work${label ? ` on: ${label}` : ''} was cut off because ${why}. The user did NOT ask you to stop. Look at your chat history, continue from where you left off, finish the task and tell the user the result. Do not redo steps that already finished.`;
+  const delay = afterRestart ? 1000 : 3000 * (tries + 1);
+  const timer = setTimeout(() => { if (getBotRow(botId)?.generation === generation) enqueue(botId, { type: 'system', text }); }, delay);
+  timer.unref?.();
+}
+
+/** At startup: turns that were running when the server stopped (crash, update, restart) continue instead of vanishing. */
+export function resumeInterruptedTurns() {
+  const rows = db.prepare('SELECT bot_id, generation, label, started_at FROM inflight_turns ORDER BY started_at').all() as { bot_id: string; generation: number; label: string; started_at: number }[];
+  db.prepare('DELETE FROM inflight_turns').run();
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const bot = getBotRow(r.bot_id);
+    if (!bot || bot.hidden || bot.generation !== r.generation || bot.kind === 'room' || seen.has(r.bot_id)) continue;
+    if (now() - r.started_at > 6 * 3600_000) continue;
+    seen.add(r.bot_id);
+    resumeAttempts.delete(r.bot_id); // a restart is a fresh start, not another failed try
+    scheduleResume(r.bot_id, r.generation, r.label, '', true);
+  }
+  return seen.size;
+}
+
+/** Move what the bot answered in parallel into its stored history. Only call when no run is active and no approval is pending. */
+function flushSideNotes(botId: string) {
+  const notes = sideNotes.get(botId);
+  sideNotes.delete(botId);
+  if (!notes?.length) return;
+  appendHistory(botId, [{ role: 'user', content: `[While you were busy you also answered in parallel. Those messages and your replies, for your memory only:]\n${notes.join('\n')}` }]);
 }
 
 /** Route replies between bots and tell the user what happened. Never throws. */
@@ -639,7 +726,8 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
 
     let res: ToolResult;
     if (decision === 'block') {
-      res = { output: ctx.side && !ap ? 'This action needs the user\'s approval, which is not possible while you answer another bot in parallel. Say so in your reply instead of retrying.'
+      res = { output: userSideRuns.has(ctx) && !ap ? 'This action needs the user\'s approval, which is not possible while you answer this extra message in parallel with your other work. Tell the user what you would do and that it needs their OK; they can send "work on this first" to have you stop the other work and handle it right now.'
+        : ctx.side && !ap ? 'This action needs the user\'s approval, which is not possible while you answer another bot in parallel. Say so in your reply instead of retrying.'
         : 'The user declined this action. Do not retry it. Find another way, or tell the user what you could not do.', summary: 'Not allowed' };
       updateRow(botId, c.rowSeq, { ...body, status: 'denied', summary: 'Not allowed' });
     } else {

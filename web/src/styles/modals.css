@@ -20,7 +20,9 @@
 .create-modal form { display: flex; flex-direction: column; min-height: 0; }
 .create-modal__body { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; overflow-y: auto; }
 .create-modal__name { width: 407px; max-width: 100%; text-align: center; }
-.shape-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(41px, 1fr)); gap: 3px; width: 100%; max-height: 185px; overflow-y: auto; padding: 4px; scrollbar-width: thin; }
+.shape-picker { display: grid; gap: 4px; width: 100%; }
+.shape-picker__name { text-align: center; font-size: 12px; color: var(--color-text-secondary); min-height: 16px; }
+.shape-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 3px; width: 100%; max-height: 196px; overflow-y: auto; overscroll-behavior: contain; padding: 4px; scrollbar-width: thin; }
 .stem-picker {
   --stem-rainbow: conic-gradient(from 90deg, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
   display: grid; justify-items: center; gap: 7px; max-width: 100%; color: var(--color-text-secondary); font-size: 13px;
@@ -34,7 +36,7 @@
 .stem-picker__control:hover:not(:disabled) { background: var(--color-bg-hover); }
 .stem-picker__colors { width: 100%; }
 .stem-picker__colors .reveal__inner { display: grid; justify-items: center; gap: 4px; }
-.shape-cell { display: grid; place-items: center; min-width: 0; height: 40px; border-radius: 10px; }
+.shape-cell { display: grid; place-items: center; min-width: 0; height: 44px; border-radius: 10px; }
 .shape-cell:hover { background: var(--color-bg-hover); }
 .shape-cell[aria-pressed="true"] { background: var(--color-bg-active); box-shadow: inset 0 0 0 1px var(--color-border-focus); }
 .shape-cell:hover .bot-avatar { transform: rotate(-6deg) scale(1.04); }

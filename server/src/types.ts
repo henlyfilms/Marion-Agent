@@ -1,8 +1,9 @@
 // Shared API contract between server and web (web imports these as types only).
 
-import type { BerryShape, ClassicShape } from './avatarShapes.js';
+import type { AvatarShapeId, LegacyAvatarShape } from './avatarShapes.js';
 
-export type AvatarShape = ClassicShape | BerryShape;
+/** An icon id: the current catalog, or an id saved by an older version (shown as its replacement). */
+export type AvatarShape = AvatarShapeId | LegacyAvatarShape;
 
 /** A named bot color, or a custom six-digit hex color picked with the color picker. */
 export type AvatarColor = NamedAvatarColor | `#${string}`;

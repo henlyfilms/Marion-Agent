@@ -79,10 +79,15 @@ export function micErrorMessage(e: unknown): string {
   return (e as Error)?.message || 'Could not open the microphone.';
 }
 
-export async function openMic(deviceId = microphoneId()): Promise<MediaStream> {
+/**
+ * `raw` is for dictation: nothing plays while the user dictates, so echo cancellation has nothing to cancel, and the
+ * browser's noise gate and auto-gain clip soft word starts and pump the level, which is exactly what makes words go missing.
+ * The recogniser (Apple / Whisper) copes with background noise better than that pre-processing does.
+ */
+export async function openMic(deviceId = microphoneId(), raw = false): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error('no mediaDevices'), { name: 'NotSupportedError' });
   return navigator.mediaDevices.getUserMedia({
-    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation: !raw, noiseSuppression: !raw, autoGainControl: !raw, channelCount: 1 },
   });
 }
 

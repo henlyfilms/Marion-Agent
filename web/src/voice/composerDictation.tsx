@@ -17,7 +17,7 @@ import { playDictationSound, primeAudio } from './sounds';
 import { createDictationRouter } from './dictationRouting';
 
 import { getDraft, setDraft, flushDrafts } from '../lib/drafts';
-import { applyCut, insertDictated, shiftRange, type HeardCut, type TextEdit, type TextRange } from './dictationText';
+import { applyCut, freezeCut, insertDictated, shiftRange, skipWords, type HeardCut, type TextEdit, type TextRange } from './dictationText';
 export type { TextRange } from './dictationText';
 
 /** The chat box currently on screen: where dictated words go. */
@@ -87,6 +87,11 @@ export const composerDictation: Controls & {
   noteEdit(botId: string, edit: TextEdit): void;
   /** The user deleted `range` of the words still being heard: drop them for good and keep listening. */
   cutHeard(range: TextRange): void;
+  /**
+   * The user typed inside, right after or past the words still being heard, or put the caret inside them. Those words are
+   * now ordinary text in the box: stop showing them, never add them a second time, and carry on dictating at `anchor`.
+   */
+  freeze(botId: string, anchor: number): void;
 } = {
   start: (botId, range) => controls?.start(botId, range),
   stop: () => controls?.stop(),
@@ -96,8 +101,17 @@ export const composerDictation: Controls & {
     touchLive?.();
     const shown = useComposerDictation.getState().interim;
     const kept = (shown.slice(0, range.start) + shown.slice(range.end)).trim();
-    cut = { original: rawInterim.trim(), kept };
+    // `kept` is what is shown, which already has any frozen words dropped; keep dropping them if the engine revises its text.
+    cut = { original: skipWords(rawInterim, cut?.skip ?? 0), kept, skip: cut?.skip };
     useComposerDictation.setState({ interim: kept });
+  },
+  freeze: (botId, anchor) => {
+    touchLive?.();
+    const shown = useComposerDictation.getState().interim;
+    if (!shown.trim()) { setOrigin(origin?.botId === botId ? { botId, range: { start: anchor, end: anchor } } : origin); return; }
+    cut = freezeCut(cut, shown);
+    setOrigin({ botId, range: { start: anchor, end: anchor } });
+    useComposerDictation.setState({ interim: '' });
   },
   noteEdit: (botId, edit) => {
     touchLive?.();
@@ -151,7 +165,7 @@ export function ComposerDictationHost() {
       if (range && caret !== undefined) setOrigin({ botId: to.botId, range: { start: caret, end: caret } });
     });
   };
-  const recorded = useDictation(insertRecorded, fail, language, 10 * 60_000, status?.nativeSpeech);
+  const recorded = useDictation(insertRecorded, fail, language, 10 * 60_000, status?.nativeSpeech, () => (origin ? getDraft(origin.botId) : ''));
   const spoken = useLiveDictation(deliverWords, fail, language);
 
   touchLive = spoken.touch;

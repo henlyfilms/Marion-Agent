@@ -4,7 +4,7 @@
 // tools, records call start/end rows, and proxies TTS (voice preview) and STT (composer dictation).
 import { macBlock, describeMacBlock } from './lib/macPermissions.js';
 import { notifyMacBlocked } from './features/notify.js';
-import { nativePlayback, nativeTranscription, speakOnMac, transcribeOnMac } from './native-speech.js';
+import { dictationHints, nativePlayback, nativeTranscription, speakOnMac, transcribeOnMac } from './native-speech.js';
 import { remoteAccessFor } from './lib/auth.js';
 import { addCustomVoice, customVoices, macVoices, removeCustomVoice, speakWithVoice } from './features/voices.js';
 import { Hono } from 'hono';
@@ -474,7 +474,9 @@ voiceApi.post('/stt', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.jso
   if (nativeTranscription && !LOCAL_STT_URL && !remoteAccessFor(c)) {
     if (file.type !== 'audio/wav') return c.json({ error: 'Mac dictation requires a WAV recording.' }, 400);
     const locale = lang !== 'auto' && /^[a-z]{2}(?:-[a-z]{2,4})?$/i.test(lang) ? lang : '';
-    try { return c.json({ text: await transcribeOnMac(file, locale, c.req.raw.signal) }); }
+    const names = (db.prepare("SELECT name FROM bots WHERE user_id=? AND deleted_at IS NULL AND kind!='room' LIMIT 60").all(c.get('user').id) as { name: string }[]).map(row => row.name);
+    const hints = dictationHints(names, String(form?.get('context') ?? '').slice(-600));
+    try { return c.json({ text: await transcribeOnMac(file, { language: locale, final: form?.get('final') === '1', hints }, c.req.raw.signal) }); }
     catch (error) {
       const detail = (error as { stderr?: string }).stderr?.trim();
       console.warn('[voice] Mac dictation:', detail || (error as Error).name);

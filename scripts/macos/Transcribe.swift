@@ -18,10 +18,17 @@ struct MarionTranscribe {
         exit(1)
     }
 
+    /// Arguments: `<audio.wav | --prepare> [locale] [--context <file>]`. The context file holds one hint per line
+    /// (names, product terms, words from the text being written); the recogniser leans toward them.
     @available(macOS 26, *)
     static func transcribe() async throws {
-        let args = CommandLine.arguments
-        let requested = args.count > 2 ? Locale(identifier: args[2]) : .current
+        var args = Array(CommandLine.arguments)
+        var contextFile: String?
+        if let flag = args.firstIndex(of: "--context"), flag + 1 < args.count {
+            contextFile = args[flag + 1]
+            args.removeSubrange(flag...(flag + 1))
+        }
+        let requested = args.count > 2 && !args[2].isEmpty ? Locale(identifier: args[2]) : .current
         guard SpeechTranscriber.isAvailable,
               let locale = await SpeechTranscriber.supportedLocale(equivalentTo: requested) else {
             throw NSError(domain: "MarionSpeech", code: 1, userInfo: [
@@ -36,6 +43,15 @@ struct MarionTranscribe {
         if args[1] == "--prepare" { return }
         let audio = try AVAudioFile(forReading: URL(fileURLWithPath: args[1]))
         let analyzer = SpeechAnalyzer(modules: [transcriber])
+        if let contextFile,
+           let text = try? String(contentsOfFile: contextFile, encoding: .utf8) {
+            let hints = text.split(whereSeparator: \.isNewline).map { String($0) }.filter { !$0.isEmpty }
+            if !hints.isEmpty {
+                let context = AnalysisContext()
+                context.contextualStrings[.general] = Array(hints.prefix(500))
+                try? await analyzer.setContext(context) // hints are an extra: never fail the transcription over them
+            }
+        }
         async let words: String = readResults(transcriber)
         do {
             try await analyzer.start(inputAudioFile: audio, finishAfterFile: true)

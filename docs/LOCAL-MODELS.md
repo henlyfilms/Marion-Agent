@@ -15,7 +15,9 @@ With `XAI_API_KEY` configured, Marion can ask Grok for a second opinion with you
 
 ## Local transcription
 
-The native app supports on-device dictation on macOS 26 and later. A fallback speech backend must accept multipart Whisper-compatible audio and return a JSON object with a `text` field. For example, start Speaches after starting Docker.
+The native app supports on-device dictation on macOS 26 and later. It records lossless 16 kHz audio (no browser noise gate or auto-gain), shows a live preview from Apple's recogniser, and gives that recogniser your bot names and the words in your draft as vocabulary hints.
+
+For the most accurate final text, install whisper.cpp (`brew install whisper-cpp`) and put a model such as `ggml-large-v3-turbo.bin` (or `ggml-small.bin` for a lighter one) in `~/Library/Application Support/Marion Agent/models/`. Marion Agent finds it automatically (or set `MARION_WHISPER_CLI`, `MARION_WHISPER_MODEL`, `MARION_WHISPER_MODEL_DIR`), uses it for the pass after you stop dictating, and falls back to Apple's recogniser if Whisper is missing or fails. Whisper also lets dictation work on macOS before 26. A fallback speech backend must accept multipart Whisper-compatible audio and return a JSON object with a `text` field. For example, start Speaches after starting Docker.
 
 ```sh
 docker run --rm -p 127.0.0.1:8001:8000 -v marion-speech-models:/home/ubuntu/.cache/huggingface/hub ghcr.io/speaches-ai/speaches:latest-cpu

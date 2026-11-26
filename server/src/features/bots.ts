@@ -1,5 +1,5 @@
 import { Cron } from 'croner';
-import { DEFAULT_BERRY, DEFAULT_STEM_COLOR, isAvatarColor, isBerryShape, isStemColor } from '../avatarShapes.js';
+import { DEFAULT_STEM_COLOR, isAvatarColor, isStemColor, resolveAvatarShape } from '../avatarShapes.js';
 import { db, now } from '../db.js';
 import { hub } from '../lib/hub.js';
 import { newId } from '../lib/ids.js';
@@ -40,7 +40,7 @@ function pick<T>(seed: string, list: T[]): T {
 /** Create a bot with everything a template or the Bot Builder can give it, in one transaction. */
 export function createBotRecord(userId: string, spec: BotSpec): Bot {
   const id = newId('bot');
-  const shape = isBerryShape(spec.avatarShape) ? spec.avatarShape : DEFAULT_BERRY;
+  const shape = resolveAvatarShape(spec.avatarShape);
   const stem = spec.avatarStemColor === null || isStemColor(spec.avatarStemColor) ? spec.avatarStemColor : DEFAULT_STEM_COLOR;
   const color = isAvatarColor(spec.avatarColor) ? spec.avatarColor.toLowerCase() : pick(id, BOT_COLORS.filter(c => c !== 'black'));
   const integrations = [...new Set((spec.integrations ?? []).map(slug => clean(slug, 40).toLowerCase()).filter(slug => /^[a-z0-9_-]+$/.test(slug)))].slice(0, 20);

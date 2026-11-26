@@ -13,7 +13,7 @@ import { ModelPicker } from './ModelPicker';
 import { VoiceWave } from './VoiceWave';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { voiceApi, type VoiceStatus } from '../voice/api';
-import { deletedHeard, insertDictated, liveSpan, reconcileEdit, withSpan } from '../voice/dictationText';
+import { caretInsideHeard, deletedHeard, insertDictated, liveSpan, placeCaret, planEdit, withSpan } from '../voice/dictationText';
 import { composerDictation, registerDictationSink, useComposerDictation, type TextRange } from '../voice/composerDictation';
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../voice/audio';
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
@@ -245,12 +245,17 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   }), [bot.id]);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
   const state = useComposerDictation(s => s.state);
-  const liveWords = useComposerDictation(s => s.interim);
+  const heardNow = useComposerDictation(s => s.interim);
+  // While an IME composition is open the box must not be rewritten under it (that cancels the composition), so the words
+  // being heard are held until it ends; typed text and final words still go in as usual.
+  const [composing, setComposing] = useState(false);
+  const heldWords = useRef('');
+  if (!composing) heldWords.current = heardNow;
+  const liveWords = composing ? heldWords.current : heardNow;
   // Where dictation began: the words being heard are drawn right there (not at the end of the box).
   const anchor = useComposerDictation(s => s.anchor?.botId === bot.id ? s.anchor.at : undefined);
   const span = liveSpan(text, liveWords, anchor);
   const shown = withSpan(text, span);
-  const tail = span.tail;
   // Setting the box's value moves the browser caret to the end, so remember where it was and put it back: right after
   // the live words when it was on them, otherwise where the user left it.
   const domBefore = useRef<{ value: string; caret: number; focused: boolean }>();
@@ -262,8 +267,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     const previous = liveSpanShown.current;
     liveSpanShown.current = { at: span.at, len: span.tail.length };
     if (!el || !before?.focused || before.value === shown || !(previous.len || span.tail)) return;
-    const caret = before.caret >= previous.at && before.caret <= previous.at + previous.len ? span.end
-      : before.caret > previous.at + previous.len ? before.caret + span.tail.length - previous.len : before.caret;
+    const caret = placeCaret(before.caret, previous, span);
     const place = Math.max(0, Math.min(caret, shown.length));
     el.setSelectionRange(place, place);
   }, [shown, span.at, span.end, span.tail]);
@@ -539,13 +543,27 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             onChange={(e) => {
               // Typing, backspacing and deleting never stop dictation: the edit goes into the text you wrote, and the
               // place dictated words will land follows it.
-              const edit = reconcileEdit(text, tail, e.target.value, span.at);
-              composerDictation.noteEdit(bot.id, edit);
-              // Deleting words that are still being heard removes them for good (the engine's next update keeps them gone).
-              const heardCut = deletedHeard(shown, e.target.value, span, liveWords);
-              if (heardCut) composerDictation.cutHeard(heardCut);
-              setText(edit.text);
+              // Typing inside, right after or past the words being heard freezes them as plain text where they are (nothing
+              // jumps, nothing is added twice) and dictation carries on after what was typed.
+              const plan = planEdit(text, span, liveWords, e.target.value, e.target.selectionStart ?? undefined);
+              if (plan.freeze) composerDictation.freeze(bot.id, plan.freeze.anchor);
+              else {
+                composerDictation.noteEdit(bot.id, plan.edit);
+                // Deleting words that are still being heard removes them for good (the engine's next update keeps them gone).
+                const heardCut = deletedHeard(shown, e.target.value, span, liveWords);
+                if (heardCut) composerDictation.cutHeard(heardCut);
+              }
+              setText(plan.text);
             }}
+            onSelect={(e) => {
+              // Moving the caret into the words being heard freezes them where they are, so the next update can't pull the caret out.
+              const el = e.currentTarget;
+              if (composing || el.selectionStart !== el.selectionEnd || !caretInsideHeard(span, liveWords, el.selectionStart)) return;
+              composerDictation.freeze(bot.id, span.end);
+              setText(shown);
+            }}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
             onPaste={(e) => {
               const pasted = Array.from(e.clipboardData.files);
               if (!pasted.length) return;
