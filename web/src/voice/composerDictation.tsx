@@ -17,7 +17,7 @@ import { playDictationSound } from './sounds';
 import { createDictationRouter } from './dictationRouting';
 
 import { getDraft, setDraft, flushDrafts } from '../lib/drafts';
-import { insertDictated, shiftRange, type TextEdit, type TextRange } from './dictationText';
+import { applyCut, insertDictated, shiftRange, type HeardCut, type TextEdit, type TextRange } from './dictationText';
 export type { TextRange } from './dictationText';
 
 /** The chat box currently on screen: where dictated words go. */
@@ -51,6 +51,16 @@ let controls: Controls | undefined;
 /** Where a recorded dictation began, so its caret position is only reused in that same chat. */
 let origin: { botId: string; range?: TextRange } | undefined;
 let touchLive: (() => void) | undefined;
+/** Words the user deleted from what is still being heard: they must not come back with the engine's next update. */
+let cut: HeardCut | undefined;
+/** What the engine reports as heard right now (before any cut). */
+let rawInterim = '';
+/** The engine's text with the user's deletions applied; a different utterance clears the cut. */
+function filterHeard(text: string) {
+  const result = applyCut(cut, text);
+  cut = result.cut;
+  return result.text;
+}
 /** Moves the dictation anchor and publishes it, so the chat box draws live words right at the caret where dictation began. */
 function setOrigin(next: typeof origin) {
   origin = next;
@@ -75,11 +85,20 @@ export const registerDictationSink = routing.register;
 export const composerDictation: Controls & {
   /** The user typed or deleted text. Dictation keeps running; only its insertion point follows the edit. */
   noteEdit(botId: string, edit: TextEdit): void;
+  /** The user deleted `range` of the words still being heard: drop them for good and keep listening. */
+  cutHeard(range: TextRange): void;
 } = {
   start: (botId, range) => controls?.start(botId, range),
   stop: () => controls?.stop(),
   discard: () => controls?.discard(),
   commit: () => controls?.commit(),
+  cutHeard: range => {
+    touchLive?.();
+    const shown = useComposerDictation.getState().interim;
+    const kept = (shown.slice(0, range.start) + shown.slice(range.end)).trim();
+    cut = { original: rawInterim.trim(), kept };
+    useComposerDictation.setState({ interim: kept });
+  },
   noteEdit: (botId, edit) => {
     touchLive?.();
     if (origin?.botId === botId && origin.range) setOrigin({ botId, range: shiftRange(origin.range, edit) });
@@ -109,14 +128,18 @@ export function ComposerDictationHost() {
     setDraft(botId, insertDictated(getDraft(botId), heard, range).value);
     flushDrafts();
   };
-  const insertRecorded = (text: string) => {
+  const insertRecorded = (heard: string) => {
+    const text = filterHeard(heard);
+    cut = undefined;
     const began = origin;
     setOrigin(undefined);
     if (!chatTarget() && began) { saveToDraft(began.botId, text, began.range); return; }
     routing.route(to => to.insert(text, began?.botId === to.botId ? began.range : undefined));
   };
   // Live words land at the anchor, which then moves to just after them so the next words follow on.
-  const deliverWords = (words: string) => {
+  const deliverWords = (heard: string) => {
+    const words = filterHeard(heard);
+    cut = undefined;
     const began = origin;
     if (!chatTarget() && began) {
       saveToDraft(began.botId, words, began.range);
@@ -133,10 +156,11 @@ export function ComposerDictationHost() {
 
   touchLive = spoken.touch;
   const state = spoken.state !== 'idle' ? spoken.state : recorded.state;
-  const interim = spoken.interim || recorded.interim;
+  rawInterim = spoken.interim || recorded.interim;
+  const interim = filterHeard(rawInterim);
   useLayoutEffect(() => {
     useComposerDictation.setState(chatTarget() ? { state, interim } : { state: 'idle', interim: '' });
-    if (state === 'idle') setOrigin(undefined); // the anchor lives only as long as the dictation does
+    if (state === 'idle') { setOrigin(undefined); cut = undefined; } // the anchor lives only as long as the dictation does
   }, [state, interim]);
 
   useLayoutEffect(() => {

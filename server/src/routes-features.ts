@@ -13,7 +13,8 @@ import type { UploadedAttachment } from './attachments.js';
 import { createBotRecord } from './features/bots.js';
 import { TEMPLATES, templateById, type BotTemplate } from './features/templates.js';
 import { DEFAULT_STEM_COLOR } from './avatarShapes.js';
-import { notificationSettings, notify, pushToDevices, saveNotificationSettings } from './features/notify.js';
+import { notificationSettings, notify, notifyMacBlocked, pushToDevices, saveNotificationSettings } from './features/notify.js';
+import { MacPermissionError, macBlock } from './lib/macPermissions.js';
 import { vapidPublicKey } from './features/webpush.js';
 import { connectLife, disconnectLife, hasLifeKey, lifeLinkSettings, syncLife } from './features/life-link.js';
 import { drainLifeOutbox, outboxStatus } from './features/life-outbox.js';
@@ -356,7 +357,11 @@ const MAC_ONLY = 'Screenshots are only available in the Marion Agent Mac app, on
 featuresApi.get('/screenshots', async (c) => {
   if (!localOnly(c)) return c.json({ error: MAC_ONLY }, 403);
   try { return c.json(await listScreenshots(Number(c.req.query('limit') ?? 3), Number(c.req.query('offset') ?? 0))); }
-  catch (error) { return c.json({ error: (error as Error).message || 'Could not read the screenshot folder.' }, 500); }
+  catch (error) {
+    const block = macBlock(error, 'Read your Mac’s screenshots folder');
+    if (block) { notifyMacBlocked(c.get('user').id, block); return c.json({ error: `${block.doing}: macOS blocked ${block.blocked}. To allow it: ${block.fix}.`, macBlock: block }, 403); }
+    return c.json({ error: (error as Error).message || 'Could not read the screenshot folder.' }, 500);
+  }
 });
 
 featuresApi.get('/screenshots/image', async (c) => {
@@ -395,7 +400,10 @@ featuresApi.post('/bots/:id/folders', async (c) => {
     const path = body.pick ? await pickFolder() : String(body.path ?? '');
     if (!path) return c.json({ folders: storedFolders(b.id), cancelled: true });
     return c.json({ folders: await addBotFolder(b.id, path, typeof body.label === 'string' ? body.label : undefined, body.write !== false) });
-  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  } catch (error) {
+    if (error instanceof MacPermissionError) { notifyMacBlocked(c.get('user').id, error.block, b.id); return c.json({ error: error.message, macBlock: error.block }, 403); }
+    return c.json({ error: (error as Error).message }, 400);
+  }
 });
 
 featuresApi.patch('/bots/:id/folders', async (c) => {

@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { promisify } from 'node:util';
 import { db } from '../db.js';
 import { isDesktop } from '../lib/desktop-access.js';
+import { MacPermissionError, macBlock, rethrowIfMacBlocked } from '../lib/macPermissions.js';
 
 /**
  * Folders on this Mac that the owner lets one bot use. The bot can list and tidy them itself, and can
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS bot_folders (
 );
 `);
 
+export { MacPermissionError, macBlock };
 export interface BotFolder { path: string; label: string; write: boolean }
 
 const MAX_FOLDERS = 20;
@@ -42,8 +44,10 @@ async function checkFolder(input: string) {
   if (!isDesktop) throw new Error('Folder access works in the Mac app.');
   const raw = input.trim().replace(/^~(?=$|\/)/, home);
   if (!raw || !isAbsolute(raw)) throw new Error('Choose a full folder path, like ~/Desktop/Screenshots.');
-  const path = await realpath(raw).catch(() => { throw new Error('That folder doesn’t exist.'); });
-  if (!(await stat(path)).isDirectory()) throw new Error('Choose a folder, not a file.');
+  const doing = `Share the folder ${raw} with a bot`;
+  const path = await realpath(raw).catch((error) => { rethrowIfMacBlocked(error, doing); throw new Error('That folder doesn’t exist.'); });
+  const info = await stat(path).catch((error) => { rethrowIfMacBlocked(error, doing); throw error; });
+  if (!info.isDirectory()) throw new Error('Choose a folder, not a file.');
   if (!path.startsWith(home + sep)) throw new Error('Choose a folder inside your home folder.');
   if (forbidden.some(blocked => path === blocked || (blocked !== home && path.startsWith(blocked + sep)))) {
     throw new Error('That folder holds app or system data. Choose a more specific folder.');
@@ -83,7 +87,11 @@ export async function pickFolder(): Promise<string | null> {
   try {
     const { stdout } = await runFile('osascript', ['-e', 'POSIX path of (choose folder with prompt "Choose a folder for this bot")'], { timeout: 300_000 });
     return stdout.trim().replace(/\/$/, '') || null;
-  } catch { return null; }
+  } catch (error) {
+    // Cancelling the picker is normal (-128); a macOS block (Automation / Accessibility) is not, and must be shown.
+    rethrowIfMacBlocked(error, 'Open the Mac folder picker to choose a folder for a bot');
+    return null;
+  }
 }
 
 /**

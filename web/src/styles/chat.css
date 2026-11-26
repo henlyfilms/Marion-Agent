@@ -64,6 +64,7 @@
   box-shadow: var(--bubble-ring); overflow-wrap: anywhere;
 }
 .bubble.is-agent { background: linear-gradient(180deg, #FFFFFF29 0%, #FFFFFF00 100%), var(--color-bubble-agent); color: var(--color-ink); }
+.bubble.is-agent.is-other-bot, .bubble.is-agent.is-other-bot .md a, .bubble.is-agent.is-other-bot .md blockquote { color: var(--color-text-other-bot); }
 .bubble.is-user { background: linear-gradient(180deg, #FFFFFF0F 0%, #FFFFFF00 100%), var(--palette-bubble, var(--bot-bubble, var(--color-bubble-user))); color: var(--palette-bubble-ink, var(--bot-on-action, var(--color-on-primary))); }
 .bubble__plain { white-space: pre-wrap; }
 /* Grouped bubble "tail" corners (README: bottom-left on first, top-left on last). Mirrored for user bubbles. */

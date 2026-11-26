@@ -88,6 +88,8 @@
   --color-success-text: #00854A;
   --shadow-popover: #1C1C1C1A 0 10px 20px -3px, #1C1C1C14 0 4px 6px -4px;
   --bot-on-action: #FFFFFF;
+  /* Text from other bots: teal, kept dark enough on light surfaces (>= 4.5:1). */
+  --color-text-other-bot: color-mix(in srgb, #0B7285 78%, var(--palette-foreground));
 }
 
 /* ---------- dark theme. Flat: no shadows. ---------- */
@@ -108,6 +110,7 @@
   --shadow-popover: #F5F5F51A 0 0 0 0.5px;
   --bubble-ring: #F5F5F50F 0 0 0 0.5px inset;
 
+  --color-text-other-bot: color-mix(in srgb, #4FD1E0 80%, var(--palette-foreground));
   --color-danger-hover: #F73643;
   --color-danger-bg: #FC2C3E1F;
   --color-danger-text: #FF6463;

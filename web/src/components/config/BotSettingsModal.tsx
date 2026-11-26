@@ -13,6 +13,8 @@ import { featuresApi, type BotFolder, type BotProfileData, type LifeLink } from 
 import { Folder, Share, ShieldAlert } from 'lucide-react';
 import { ToolkitLogo } from '../ToolkitLogo';
 import { Icon } from '../Icon';
+import { openBotChat } from '../botMenuItems';
+import { computerStatusText } from '../DetailsPanel';
 import { Modal } from '../modals/Modal';
 import { Glyph } from './glyphs';
 import { ConfirmButton, Field, Segmented, Switch, nextRunLabel, shortDate } from './ui';
@@ -214,6 +216,8 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
         </div>
       </section>
 
+      {bot.kind !== 'room' && <ComputerSection bot={bot} flash={flash} />}
+
       <section className="cfg-section">
         <div className="cfg-section__label">Danger zone</div>
         <div className="cfg-card">
@@ -246,6 +250,48 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
 
 
 /** Everything this Bot may reach: folders on this Mac, Marion Life, and connected apps. */
+/** Every bot has its own computer; this turns it on (or puts it to sleep) even if the bot has never used it. */
+function ComputerSection({ bot, flash }: { bot: Bot; flash: (text: string, tone?: 'ok' | 'error') => void }) {
+  const computer = useStore((s) => s.computer);
+  const [switching, setSwitching] = useState(false);
+  const running = computer?.screens.some((screen) => screen.botId === bot.id && screen.running) ?? false;
+  const busy = computer?.status === 'starting' || computer?.status === 'resuming' || computer?.status === 'creating';
+  const toggle = (awake: boolean) => {
+    if (switching) return;
+    setSwitching(true);
+    featuresApi.setComputerAwake(bot.id, awake)
+      .then(() => flash(awake ? `${bot.name}'s computer is on` : `${bot.name}'s computer is asleep`))
+      .catch((e) => flash((e as Error).message, 'error'))
+      .finally(() => setSwitching(false));
+  };
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Computer</div>
+      <div className="cfg-card">
+        <div className="cfg-row">
+          <div className="cfg-row__text">
+            <div className="cfg-row__title">{switching ? 'Working…' : running ? 'Computer is on' : busy ? computerStatusText(computer) : 'Computer is off'}</div>
+            <div className="cfg-row__sub">{bot.name}'s own Linux desktop. It starts by itself when {bot.name} needs it; turn it on here any time.</div>
+          </div>
+          <button type="button" className="cfg-btn cfg-btn--secondary" disabled={switching || busy} onClick={() => toggle(!running)}>
+            {running ? 'Put to sleep' : 'Turn on computer'}
+          </button>
+        </div>
+        {running && (
+          <div className="cfg-row">
+            <div className="cfg-row__text"><div className="cfg-row__title">Watch the screen</div></div>
+            <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => {
+              useConfigUI.getState().closeBotSettings();
+              openBotChat(bot.id);
+              useStore.getState().set({ viewerOpen: true });
+            }}>Open computer</button>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function AccessTab({ bot }: { bot: Bot }) {
   return (
     <div className="cfg-page">

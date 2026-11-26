@@ -67,7 +67,12 @@ export function createAudioContext(): AudioContext {
 
 export function micErrorMessage(e: unknown): string {
   const name = (e as { name?: string })?.name;
-  if (name === 'NotAllowedError' || name === 'SecurityError') return 'Microphone access was blocked. Allow it in your browser’s site settings.';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    // In the Mac app the block comes from macOS itself, not a browser site setting.
+    return /Electron\//.test(navigator.userAgent) && /Mac/.test(navigator.platform)
+      ? 'Marion Agent was trying to: use your microphone. macOS blocked the Microphone permission. To allow it: System Settings → Privacy & Security → Microphone → turn on Marion Agent.'
+      : 'Microphone access was blocked. Allow it in your browser’s site settings.';
+  }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'The selected microphone is unavailable. Choose another input in Settings → Audio.';
   if (name === 'NotReadableError') return 'Your microphone is in use by another app.';
   if (!navigator.mediaDevices?.getUserMedia) return 'This browser can’t use the microphone here (it needs HTTPS or localhost).';

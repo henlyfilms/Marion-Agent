@@ -2,7 +2,7 @@
 // and the place a finished dictation lands follows the user's edits.
 // Usage: node tests/dictation-typing.mjs
 import assert from 'node:assert/strict';
-import { appendDictation, dictationTail, insertDictated, liveSpan, reconcileEdit, shiftRange, withSpan } from '../web/src/voice/dictationText.ts';
+import { appendDictation, applyCut, deletedHeard, dictationTail, insertDictated, liveSpan, reconcileEdit, shiftRange, withSpan } from '../web/src/voice/dictationText.ts';
 
 // Words keep the whitespace the user typed (a typed newline is not swallowed).
 assert.equal(appendDictation('', 'hello there'), 'Hello there');
@@ -157,3 +157,17 @@ console.log('PASS: finished dictation merges into edited text.');
   assert.equal(insertDictated(typed.text, heard, anchor).value, 'Oh hello there world is big');
 }
 console.log('PASS: live dictation text appears at the cursor (before existing text), and typing/deleting around it never stops dictation.');
+
+// Deleting words that are still being heard removes them for good while the engine keeps extending the utterance.
+{
+  const span = liveSpan('First words', 'and still being heard');
+  const shown = withSpan('First words', span);
+  assert.equal(shown, 'First words and still being heard');
+  assert.deepEqual(deletedHeard(shown, shown.slice(0, -6), span, 'and still being heard'), { start: 15, end: 21 });
+  assert.equal(deletedHeard(shown, 'irst words and still being heard', span, 'and still being heard'), undefined, 'deleting committed text cuts nothing');
+  const cut = { original: 'and still being heard', kept: 'and still being' };
+  assert.equal(applyCut(cut, 'and still being heard now').text, 'and still being now');
+  assert.equal(applyCut(cut, 'and still being heard').text, 'and still being');
+  assert.equal(applyCut(cut, 'something else').cut, undefined, 'a new utterance clears the cut');
+}
+console.log('PASS: deleting still-being-heard words keeps them deleted.');

@@ -1,5 +1,6 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { copyText } from '../lib/clipboard';
+import { senderBubbleClass } from '../lib/senderKind';
 import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
 import { Film, Paperclip } from 'lucide-react';
 import { api } from '../lib/api';
@@ -80,7 +81,7 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
   const quoted = b.replyTo;
   return (
     <div className={`bubble-wrap is-${side}`} data-seq={row.seq}>
-      <div className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}
+      <div className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${senderBubbleClass(b)}${b.streaming ? ' is-streaming' : ''}`}
         {...contextMenu('Message actions', () => {
           const selection = window.getSelection()?.toString();
           const who = b.role === 'user' && !b.from ? 'You' : b.from?.name ?? botName;

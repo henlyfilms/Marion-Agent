@@ -2,6 +2,8 @@ import { db, now } from '../db.js';
 import { env } from '../env.js';
 import { hub } from '../lib/hub.js';
 import { newId } from '../lib/ids.js';
+import { plainLine } from '../lib/plainText.js';
+import { describeMacBlock, type MacBlock } from '../lib/macPermissions.js';
 import type { AppNotification, NotificationKind, NotificationSettings } from '../types.js';
 import { getSetting, setSetting } from './schema.js';
 import { sendPush } from './webpush.js';
@@ -80,13 +82,34 @@ export function notify(userId: string, input: { kind: NotificationKind; botId?: 
     botId: input.botId,
     botName: bot?.name,
     status: STATUS[input.kind],
-    title: input.title.slice(0, 80),
-    body: settings.previews ? input.body.replace(/\s+/g, ' ').trim().slice(0, 180) : '',
+    // Notifications are plain text: no Markdown symbols (**, `, #, [x](y) ...) on any surface.
+    title: plainLine(input.title).slice(0, 80),
+    body: settings.previews ? plainLine(input.body).slice(0, 180) : '',
     at: now(),
   };
   if (settings.desktop) hub.emit(userId, { type: 'notify', notification });
   if (settings.push && !inQuietHours(settings)) void pushToDevices(userId, notification);
 }
+
+/**
+ * macOS stopped Marion Agent from doing something (Accessibility, Automation, Speech, Screen Recording, protected
+ * folders). Always shown in the app, whatever the notification settings say, because the user has to act:
+ * it says what Marion Agent was trying to do and what macOS blocked.
+ */
+export function notifyMacBlocked(userId: string, block: MacBlock, botId?: string) {
+  const key = `${userId}:mac:${block.doing}:${block.blocked}`;
+  if ((recent.get(key) ?? 0) > now() - 10_000) return;
+  recent.set(key, now());
+  const bot = botId ? db.prepare('SELECT name FROM bots WHERE id=?').get(botId) as { name: string } | undefined : undefined;
+  hub.emit(userId, { type: 'notify', notification: {
+    id: newId('ntf'), kind: 'error', botId, botName: bot?.name, status: 'macOS blocked this',
+    title: 'macOS blocked Marion Agent',
+    body: `Trying to: ${block.doing}. Blocked: ${block.blocked}. To allow it: ${block.fix}.`,
+    at: now(),
+  } });
+}
+
+export const macBlockMessage = describeMacBlock;
 
 export async function pushToDevices(userId: string, notification: AppNotification) {
   const targets = db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id=?').all(userId) as { endpoint: string; p256dh: string; auth: string }[];
@@ -95,8 +118,8 @@ export async function pushToDevices(userId: string, notification: AppNotificatio
     try {
       const status = await sendPush(target, {
         // On a phone the banner leads with the bot's name, then what it needs and what it said.
-        title: notification.botName ?? notification.title,
-        body: notification.botName ? [notification.status, notification.body].filter(Boolean).join(' · ') : notification.body, tag: `${notification.botId ?? 'marion'}:${notification.kind}`,
+        title: plainLine(notification.botName ?? notification.title),
+        body: plainLine(notification.botName ? [notification.status, notification.body].filter(Boolean).join(' · ') : notification.body), tag: `${notification.botId ?? 'marion'}:${notification.kind}`,
         url: notification.botId ? `/?bot=${encodeURIComponent(notification.botId)}` : '/',
       }, pushSubject());
       if (status === 404 || status === 410) db.prepare('DELETE FROM push_subscriptions WHERE endpoint=?').run(target.endpoint);

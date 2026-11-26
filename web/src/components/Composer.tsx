@@ -13,7 +13,7 @@ import { ModelPicker } from './ModelPicker';
 import { VoiceWave } from './VoiceWave';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { voiceApi, type VoiceStatus } from '../voice/api';
-import { insertDictated, liveSpan, reconcileEdit, withSpan } from '../voice/dictationText';
+import { deletedHeard, insertDictated, liveSpan, reconcileEdit, withSpan } from '../voice/dictationText';
 import { composerDictation, registerDictationSink, useComposerDictation, type TextRange } from '../voice/composerDictation';
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../voice/audio';
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
@@ -541,6 +541,9 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
               // place dictated words will land follows it.
               const edit = reconcileEdit(text, tail, e.target.value, span.at);
               composerDictation.noteEdit(bot.id, edit);
+              // Deleting words that are still being heard removes them for good (the engine's next update keeps them gone).
+              const heardCut = deletedHeard(shown, e.target.value, span, liveWords);
+              if (heardCut) composerDictation.cutHeard(heardCut);
               setText(edit.text);
             }}
             onPaste={(e) => {

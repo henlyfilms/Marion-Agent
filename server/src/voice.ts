@@ -2,6 +2,8 @@
 // speaks as the bot, and relays real work to the bot's main text agent loop.
 // This module mints the ephemeral secret, builds the voice agent's prompt and tools, serves the relay
 // tools, records call start/end rows, and proxies TTS (voice preview) and STT (composer dictation).
+import { macBlock, describeMacBlock } from './lib/macPermissions.js';
+import { notifyMacBlocked } from './features/notify.js';
 import { nativePlayback, nativeTranscription, speakOnMac, transcribeOnMac } from './native-speech.js';
 import { remoteAccessFor } from './lib/auth.js';
 import { addCustomVoice, customVoices, macVoices, removeCustomVoice, speakWithVoice } from './features/voices.js';
@@ -476,6 +478,8 @@ voiceApi.post('/stt', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.jso
     catch (error) {
       const detail = (error as { stderr?: string }).stderr?.trim();
       console.warn('[voice] Mac dictation:', detail || (error as Error).name);
+      const block = macBlock(error, 'Transcribe your dictation with Mac speech recognition');
+      if (block) { notifyMacBlocked(c.get('user').id, block); return c.json({ error: describeMacBlock(block), macBlock: block }, 403); }
       return c.json({ error: 'Mac dictation could not transcribe this recording. Check the language and try again.' }, 502);
     }
   }

@@ -21,6 +21,8 @@ import { allowBotMessage } from '../features/coordination.js';
 import { isUsageLimitError, orchestratorFallback, teamPromptSection } from './orchestration.js';
 import { addResponseUsage, tokenCounts, type TokenCounts } from './response-usage.js';
 import { orchestrationForBot } from './orchestration-settings.js';
+import { macBlock, describeMacBlock } from '../lib/macPermissions.js';
+import { notifyMacBlocked } from '../features/notify.js';
 import { activityFor, functionSchemas, humanizeSlug, policyFor, runComposioTool, toolMap, type ToolCtx, type ToolResult } from './tools.js';
 
 type LocalSelection = Omit<ChatModelSelection, 'provider'>;
@@ -450,8 +452,11 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
         res = impl ? await impl.impl(args, { ...ctx, depth: st.depth }) : await runComposioTool(ctx, c.name, args);
         updateRow(botId, c.rowSeq, { ...body, status: 'done', summary: res.summary });
       } catch (e: any) {
-        res = { output: `Tool error: ${e?.message ?? e}` };
-        updateRow(botId, c.rowSeq, { ...body, status: 'error', summary: String(e?.message ?? e).slice(0, 200) });
+        // macOS privacy blocks (Accessibility, Automation, protected folders...) are shown to the user with what was attempted.
+        const blocked = macBlock(e, `Run the “${humanizeSlug(c.name)}” step`);
+        if (blocked) notifyMacBlocked(userId, blocked, botId);
+        res = { output: `Tool error: ${blocked ? describeMacBlock(blocked) : e?.message ?? e}` };
+        updateRow(botId, c.rowSeq, { ...body, status: 'error', summary: blocked ? `macOS blocked ${blocked.blocked}`.slice(0, 200) : String(e?.message ?? e).slice(0, 200) });
       }
     }
     const out: any = { type: 'function_call_output', call_id: c.call_id, output: res.output };

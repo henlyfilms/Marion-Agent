@@ -1,6 +1,12 @@
 import type { AppNotification } from '@shared/types';
 import { featuresApi } from './featuresApi';
 import { playDictationSound } from '../voice/sounds';
+import { plainLine } from '@shared/lib/plainText';
+
+/** The same notification with every field as plain text (no raw Markdown symbols), whatever surface shows it. */
+export const plainNotification = (n: AppNotification): AppNotification => ({
+  ...n, title: plainLine(n.title), body: plainLine(n.body), ...(n.status ? { status: plainLine(n.status) } : {}),
+});
 
 const canNotify = () => typeof Notification !== 'undefined';
 export const notificationPermission = () => (canNotify() ? Notification.permission : 'unsupported') as NotificationPermission | 'unsupported';
@@ -59,7 +65,8 @@ function isRepeat(notification: AppNotification) {
  * Show a notification. In the foreground it becomes an in-app banner with the bot's icon and name
  * (skipped for a plain reply in the chat you're already reading); in the background, a system banner.
  */
-export function showNotification(notification: AppNotification, viewingBotId?: string | null) {
+export function showNotification(incoming: AppNotification, viewingBotId?: string | null) {
+  const notification = plainNotification(incoming);
   if (isRepeat(notification)) return;
   const background = document.visibilityState !== 'visible' || !document.hasFocus();
   if (!background) {

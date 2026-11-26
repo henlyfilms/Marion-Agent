@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { AppNotification } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { clock } from '../lib/time';
+import { plainNotification } from '../lib/notifications';
 import { useStore } from '../store';
 import { openBotChat } from './botMenuItems';
 
@@ -85,7 +86,7 @@ export function NotificationBanners() {
 
   useEffect(() => {
     const show = (event: Event) => {
-      const n = (event as CustomEvent<AppNotification>).detail;
+      const n = plainNotification((event as CustomEvent<AppNotification>).detail);
       setBanners(list => {
         // A newer banner from the same bot replaces the older one instead of stacking.
         const rest = list.filter(b => !(b.botId && b.botId === n.botId) && b.id !== n.id);

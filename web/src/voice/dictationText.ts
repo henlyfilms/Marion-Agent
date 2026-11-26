@@ -124,3 +124,34 @@ export function insertDictated(current: string, words: string, range?: TextRange
   const next = inside ? start + pre.length + said.length : caret > end ? caret + inserted.length - (end - start) : caret;
   return { value, caret: Math.max(0, Math.min(next, value.length)) };
 }
+
+/**
+ * The user deleted part of the words still being heard (Backspace/Delete or a selection inside the grey tail).
+ * `value` is what the textarea holds, `shown` what it held before the edit. Returns the [start, end) range of the
+ * heard words (`heard`, trimmed) that were removed, or undefined when the edit did not delete any of them.
+ */
+export function deletedHeard(shown: string, value: string, span: LiveSpan, heard: string): TextRange | undefined {
+  const words = heard.trim();
+  if (!words || !span.tail || value.length >= shown.length) return undefined;
+  const { start, end } = (({ at, removed }) => ({ start: at, end: at + removed }))(diff(shown, value));
+  const lead = span.tail.length - span.tail.trimStart().length; // the space put before the words, if any
+  const from = span.at + lead;
+  const to = from + words.length;
+  const first = Math.max(start, from);
+  const last = Math.min(end, to);
+  return first < last ? { start: first - from, end: last - from } : undefined;
+}
+
+/** Words the user deleted from an unfinished utterance: the engine's text `original` is shown as `kept` instead. */
+export interface HeardCut { original: string; kept: string }
+
+/**
+ * What to show or deliver for `text` from the engine. While the engine keeps extending the utterance the user cut
+ * words from, the cut stays applied (the deleted words do not come back); a different utterance clears the cut.
+ */
+export function applyCut(cut: HeardCut | undefined, text: string): { text: string; cut?: HeardCut } {
+  if (!cut) return { text };
+  const raw = text.trim();
+  if (!raw.startsWith(cut.original)) return { text };
+  return { text: (cut.kept + raw.slice(cut.original.length)).trim(), cut };
+}
