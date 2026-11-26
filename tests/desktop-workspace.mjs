@@ -302,7 +302,8 @@ try {
   assert.match(await readFile(codexRequests, 'utf8'), /"effort":"xhigh"/);
   const secondSelection = await fetch(origin + '/api/bots/' + second.bot.id + '/chat-model', { headers: signedIn }).then(response => response.json());
   assert.equal(secondSelection.selection.provider, 'claude');
-  assert.equal(secondSelection.selection.model, 'claude-sonnet-5-5');
+  assert.equal(secondSelection.selection.model, 'claude-opus-5-5');
+  assert.equal(secondSelection.selection.effort, 'high');
   const claudeDefault = origin + '/api/settings/subscription-model/claude';
   const defaultChoice = { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' };
   assert.equal((await fetch(claudeDefault, {

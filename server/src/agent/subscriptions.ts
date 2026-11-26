@@ -24,8 +24,10 @@ const extendedEfforts = [...standardEfforts, 'xhigh'];
 const claudeEfforts = [...extendedEfforts, 'max'];
 const defaultGemini = 'gemini-3.8-flash';
 const claudeModels: ChatModel[] = [
+  // Opus 5.5 on high effort is the default for every Claude run; the first entry feeds all fallbacks
+  // (saved-preference fallback, picker default, "claude" name match, team defaults). Sonnet only when chosen explicitly.
+  { provider: 'claude', id: 'claude-opus-5-5', label: 'Claude Opus 5.5', efforts: claudeEfforts, defaultEffort: 'high' },
   { provider: 'claude', id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', efforts: claudeEfforts, defaultEffort: 'high' },
-  { provider: 'claude', id: 'claude-opus-5-5', label: 'Claude Opus 5.5', efforts: claudeEfforts, defaultEffort: 'medium' },
 ];
 
 export type SubscriptionSelection = ChatModelSelection & { provider: SubscriptionProvider };
