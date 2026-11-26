@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, desktopCapturer, dialog, nativeTheme, session,
 const { mkdirSync, copyFileSync, chmodSync, constants, existsSync, readFileSync, statSync } = require('node:fs');
 const path = require('node:path');
 const { createServerHost } = require('./server-host.cjs');
+const { wireExternalLinks } = require('./external-links.cjs');
 
 app.setName('Marion Agent');
 
@@ -100,15 +101,13 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => { if (mainWindow === win) mainWindow = null; });
   // Keep the main desktop window on our server. OAuth popup windows share its cookie session.
-  const stayLocal = (event, url) => { if (!isLocal(url)) event.preventDefault(); };
-  win.webContents.on('will-navigate', stayLocal);
-  win.webContents.on('will-redirect', stayLocal);
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === 'about:blank') {
-      return { action: 'allow', overrideBrowserWindowOptions: { ...windowOptions(), width: 680, height: 780 } };
-    }
-    if (isSecureWeb(url)) void shell.openExternal(url).catch(() => {});
-    return { action: 'deny' };
+  // Links in chat open in the default browser / mail app (http, https, mailto only); the window never leaves our server.
+  wireExternalLinks(win.webContents, {
+    isLocal,
+    openExternal: url => shell.openExternal(url),
+    onOpen: ({ url }) => url === 'about:blank'
+      ? { action: 'allow', overrideBrowserWindowOptions: { ...windowOptions(), width: 680, height: 780 } }
+      : null,
   });
   win.webContents.on('did-create-window', popup => {
     const contents = popup.webContents;

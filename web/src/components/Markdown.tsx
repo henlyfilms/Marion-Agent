@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy } from 'lucide-react';
 import { copyText } from '../lib/clipboard';
+import { safeHref, urlTransform } from '../lib/links';
 
 type HastNode = { type?: string; value?: string; tagName?: string; properties?: { className?: unknown }; children?: HastNode[] };
 
@@ -47,7 +48,11 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<'pre'> & { node?:
 }
 
 const components: Components = {
-  a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+  // Every link opens in a new tab (browser / iPhone) or the default browser (Electron's window-open handler). Unsafe schemes render as plain text.
+  a: ({ node: _n, href, children, ...props }) => {
+    const safe = safeHref(href);
+    return safe ? <a {...props} href={safe} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>;
+  },
   table: ({ node: _n, ...props }) => (
     <div className="md-table"><table {...props} /></div>
   ),
@@ -58,7 +63,7 @@ const components: Components = {
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{text}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={urlTransform}>{text}</ReactMarkdown>
     </div>
   );
 });
