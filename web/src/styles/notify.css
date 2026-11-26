@@ -25,7 +25,18 @@
   to { opacity: 1; transform: none; }
 }
 @keyframes notify-out { to { opacity: 0; transform: translateY(-90%) scale(0.94); } }
-.notify-banner__body { display: flex; align-items: center; gap: 13px; width: 100%; padding: 13px 18px 13px 13px; text-align: left; }
+.notify-banner { display: flex; align-items: stretch; }
+.notify-banner__close {
+  flex: none; align-self: flex-start; display: grid; place-items: center; width: 32px; height: 32px; margin: 8px 8px 0 -6px; border-radius: var(--radius-full);
+  color: var(--color-text-secondary); background: color-mix(in srgb, var(--palette-foreground) 8%, transparent);
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.notify-banner__close:hover { background: color-mix(in srgb, var(--palette-foreground) 16%, transparent); color: var(--color-ink); }
+.notify-banner__close:active { transform: scale(0.9); }
+.notify-banner__close:focus-visible { outline: 2px solid var(--color-accent, currentColor); outline-offset: 1px; }
+.notify-banner:not(:first-child) .notify-banner__close { opacity: 0; pointer-events: none; }
+@media (pointer: coarse) { .notify-banner__close { width: 40px; height: 40px; margin: 4px 6px 0 -8px; } }
+.notify-banner__body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 13px; width: 100%; padding: 13px 8px 13px 13px; text-align: left; }
 .notify-banner__icon { display: grid; place-items: center; flex: none; width: 48px; height: 48px; }
 .notify-banner__text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
 .notify-banner__top { display: flex; align-items: baseline; gap: 10px; }

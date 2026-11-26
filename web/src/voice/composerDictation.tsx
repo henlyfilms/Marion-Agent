@@ -13,7 +13,7 @@ import { voiceApi, type VoiceStatus } from './api';
 import { microphoneId } from './audio';
 import { useDictation, type DictationState } from './dictation';
 import { supportsLiveDictation, useLiveDictation } from './liveDictation';
-import { playDictationSound } from './sounds';
+import { playDictationSound, primeAudio } from './sounds';
 import { createDictationRouter } from './dictationRouting';
 
 import { getDraft, setDraft, flushDrafts } from '../lib/drafts';
@@ -166,6 +166,7 @@ export function ComposerDictationHost() {
   useLayoutEffect(() => {
     controls = {
       start(botId, range) {
+        primeAudio(); // inside the click: lets the start cue and the listening bars run every time
         if (chatTarget() !== botId) return;
         refreshStatus(); // pick up speech settings changed since the last chat box opened
         const audioInput = microphoneId();

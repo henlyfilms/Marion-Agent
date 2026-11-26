@@ -8,7 +8,7 @@ import { Icon } from './Icon';
 import { Menu } from './Menu';
 import { useConfigUI } from '../configStore';
 import { botMenuItems } from './botMenuItems';
-import { BotSessionsButton, BotSessionsPanel } from './sessions/BotSessionsPanel';
+import { BotSessionsButton, BotSessionsDrawer } from './sessions/BotSessionsPanel';
 import { Transcript } from './Transcript';
 import { CallStage } from './CallStage';
 import { VoiceCallBar } from './VoiceCallBar';
@@ -76,7 +76,7 @@ export function ChatView() {
           <BotSessionsButton bot={bot} open={sessionsOpen} onToggle={() => setSessionsOpen(open => !open)} />
         </div>
       </header>
-      {sessionsOpen && <BotSessionsPanel key={bot.id} bot={bot} onClose={() => setSessionsOpen(false)} />}
+      <BotSessionsDrawer bot={bot} open={sessionsOpen} onClose={() => setSessionsOpen(false)} />
       <CallStage bot={bot} />
       <ChatSearchBar />
       <Transcript bot={bot} rows={rows} live={live} loaded={!!transcript?.loaded} />

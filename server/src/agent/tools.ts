@@ -42,6 +42,9 @@ export interface ToolCtx {
   signal?: AbortSignal;
   textScreen?: boolean;
   allowSubscriptionTeam?: boolean;
+  /** A concurrent run answering another bot while the main turn is busy; it works on `sideHistory`, not the stored chat history. */
+  side?: boolean;
+  sideHistory?: any[];
   /** The chat turn this call belongs to (a subscription-backed bot makes several Claude calls per turn). */
   turn?: { id: string; startedAt: number; request: string };
 }

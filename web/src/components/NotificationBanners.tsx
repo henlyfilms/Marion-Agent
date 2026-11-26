@@ -4,6 +4,7 @@ import { BotAvatarFor } from '../avatar/BotAvatar';
 import { clock } from '../lib/time';
 import { plainNotification } from '../lib/notifications';
 import { useStore } from '../store';
+import { Icon } from './Icon';
 import { openBotChat } from './botMenuItems';
 
 interface Banner extends AppNotification { leaving?: boolean }
@@ -66,6 +67,12 @@ function BannerCard({ n, onDismiss, index }: { n: Banner; onDismiss: (id: string
           {body && <span className="notify-banner__message">{body}</span>}
         </span>
       </button>
+      <button type="button" className="notify-banner__close" aria-label={`Dismiss notification from ${name}`} title="Dismiss"
+        onPointerDown={e => e.stopPropagation()}
+        onClick={e => { e.stopPropagation(); e.preventDefault(); onDismiss(n.id); }}
+        onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onDismiss(n.id); } }}>
+        <Icon name="close" size={14} />
+      </button>
     </div>
   );
 }
@@ -74,6 +81,8 @@ function BannerCard({ n, onDismiss, index }: { n: Banner; onDismiss: (id: string
 export function NotificationBanners() {
   const [banners, setBanners] = useState<Banner[]>([]);
   const timers = useRef(new Map<string, number>());
+  const bannersRef = useRef<Banner[]>([]);
+  bannersRef.current = banners;
 
   const dismiss = (id: string) => {
     clearTimeout(timers.current.get(id));
@@ -95,8 +104,11 @@ export function NotificationBanners() {
       timers.current.set(n.id, window.setTimeout(() => dismissRef.current(n.id), n.kind === 'approval' || n.kind === 'question' ? LIFETIME * 2 : LIFETIME));
     };
     window.addEventListener('marion-agent:toast', show);
+    // Esc dismisses the newest banner (unless something else already handled it).
+    const esc = (e: KeyboardEvent) => { const top = bannersRef.current.find(b => !b.leaving); if (e.key === 'Escape' && !e.defaultPrevented && top) dismissRef.current(top.id); };
+    window.addEventListener('keydown', esc);
     const all = timers.current;
-    return () => { window.removeEventListener('marion-agent:toast', show); all.forEach(clearTimeout); };
+    return () => { window.removeEventListener('marion-agent:toast', show); window.removeEventListener('keydown', esc); all.forEach(clearTimeout); };
   }, []);
 
   if (!banners.length) return null;

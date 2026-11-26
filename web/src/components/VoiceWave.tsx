@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { microphoneId } from '../voice/audio';
+import { sharedAudio } from '../voice/sounds';
 
 /** Bars in the listening graphic. */
 export const WAVE_BARS = 9;
@@ -45,27 +46,48 @@ export function VoiceWave({ active }: { active: boolean }) {
     if (!active) return;
     let stopped = false;
     let frame = 0;
+    let retry = 0;
     let stream: MediaStream | undefined;
-    let context: AudioContext | undefined;
-    void (async () => {
+    let source: MediaStreamAudioSourceNode | undefined;
+    const ctx = sharedAudio();
+    // If the browser still holds the shared context back, the next click or key press releases it.
+    const wake = () => { if (ctx && ctx.state !== 'running') void ctx.resume().catch(() => {}); };
+    window.addEventListener('pointerdown', wake, true);
+    window.addEventListener('keydown', wake, true);
+    const release = () => {
+      cancelAnimationFrame(frame);
+      try { source?.disconnect(); } catch { /* already gone */ }
+      stream?.getTracks().forEach(track => track.stop());
+      source = stream = undefined;
+    };
+    const again = () => {
+      if (stopped || retry >= 8) return;
+      retry++;
+      window.setTimeout(() => { void attach(); }, Math.min(1500, 250 * retry));
+    };
+    const attach = async () => {
+      if (stopped || !ctx) return;
       try {
-        stream = await openMeterStream();
-        if (stopped) { stream.getTracks().forEach(track => track.stop()); return; }
-        const Context: typeof AudioContext | undefined = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!Context) throw new Error('no Web Audio');
-        context = new Context();
-        void context.resume().catch(() => {});
-        const analyser = context.createAnalyser();
+        const opened = await openMeterStream();
+        if (stopped) { opened.getTracks().forEach(track => track.stop()); return; }
+        stream = opened;
+        if (ctx.state !== 'running') await Promise.race([ctx.resume(), new Promise(done => setTimeout(done, 800))]).catch(() => {});
+        const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
         // Not connected to the speakers, so the microphone is never played back.
-        context.createMediaStreamSource(stream).connect(analyser);
+        source = ctx.createMediaStreamSource(opened);
+        source.connect(analyser);
+        // The mic can end under us (device switched, speech engine took it): open it again, a few times.
+        opened.getAudioTracks()[0]?.addEventListener('ended', () => { if (!stopped) { release(); again(); } }, { once: true });
         const samples = new Float32Array(analyser.fftSize);
         const history: number[] = new Array(WAVE_BARS).fill(0);
         let last = 0;
         const tick = (now: number) => {
+          if (stopped) return;
           frame = requestAnimationFrame(tick);
           if (now - last < STEP_MS) return;
           last = now;
+          if (ctx.state !== 'running') void ctx.resume().catch(() => {});
           analyser.getFloatTimeDomainData(samples);
           const heard = waveLevel(samples);
           // Rise quickly, fall back gently, so words read as pulses and pauses settle into dots.
@@ -76,14 +98,17 @@ export function VoiceWave({ active }: { active: boolean }) {
         };
         frame = requestAnimationFrame(tick);
       } catch {
-        // No analysis available: the bars simply stay as dots. Dictation is unaffected.
+        // The mic was busy or came up late: try again shortly. Dictation itself is unaffected either way.
+        release();
+        again();
       }
-    })();
+    };
+    void attach();
     return () => {
       stopped = true;
-      cancelAnimationFrame(frame);
-      stream?.getTracks().forEach(track => track.stop());
-      void context?.close().catch(() => {});
+      window.removeEventListener('pointerdown', wake, true);
+      window.removeEventListener('keydown', wake, true);
+      release();
       paint([]);
     };
   }, [active]);
