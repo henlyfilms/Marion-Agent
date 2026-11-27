@@ -98,14 +98,20 @@ export function recoverAgentSessions() {
 
 export interface SessionQuery {
   botId?: string;
-  /** 'chat' (bot conversations) or 'relay' (Claude/Codex/Gemini runs). Omit for both. */
-  type?: 'chat' | 'relay';
+  /**
+   * 'chat' (bot conversations), 'relay' (every Claude/Codex/Gemini run) or 'builders' (relayed agents doing work:
+   * everything except a subscription-backed bot answering in its own chat). Omit for chats and relays.
+   */
+  type?: 'chat' | 'relay' | 'builders';
   /** Relayed runs only: ask_subscription, subscription_bot, orchestration or team. */
   kind?: string;
   provider?: string;
   status?: string;
   limit?: number;
 }
+
+/** Relayed runs that are workers (asked directly, orchestrated, team, Cloud, handoff), not a bot's own chat model replying. */
+export const isBuilderKind = (kind: string) => kind !== 'subscription_bot' && kind !== 'chat';
 
 const toRelay = (row: AgentSessionRow, botName: string): MarionSession => ({
   id: `relay:${row.id}`,
@@ -153,6 +159,7 @@ function relaySessions(userId: string, query: SessionQuery, limit: number): Mari
   const where = ['s.user_id=?', 'COALESCE(b.hidden,0)=0', 'b.deleted_at IS NULL'];
   const args: (string | number)[] = [userId];
   if (query.botId) { where.push('s.bot_id=?'); args.push(query.botId); }
+  if (query.type === 'builders') where.push("s.kind != 'subscription_bot'");
   if (query.kind) { where.push('s.kind=?'); args.push(query.kind); }
   if (query.provider) { where.push('s.provider=?'); args.push(query.provider); }
   if (query.status) { where.push('s.status=?'); args.push(query.status); }
@@ -168,7 +175,7 @@ function relaySessions(userId: string, query: SessionQuery, limit: number): Mari
 export function listSessions(userId: string, query: SessionQuery = {}): MarionSession[] {
   const limit = Math.min(Math.max(Math.floor(query.limit ?? 100), 1), 300);
   const relayOnly = Boolean(query.provider || query.kind || (query.status && query.status !== 'active' && query.status !== 'archived'));
-  const chats = query.type === 'relay' || relayOnly ? [] : chatSessions(userId, query, limit)
+  const chats = query.type === 'relay' || query.type === 'builders' || relayOnly ? [] : chatSessions(userId, query, limit)
     .filter(session => !query.status || session.status === query.status);
   const relays = query.type === 'chat' || query.status === 'active' || query.status === 'archived' ? [] : relaySessions(userId, query, limit);
   return [...chats, ...relays]

@@ -9,7 +9,9 @@ import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { ProviderLogo } from '../ProviderLogo';
 import { openBotChat } from '../botMenuItems';
-import { MarionSessionList, useMarionSessions } from './MarionSessions';
+import { MarionSessionList, isBuilder, useMarionSessions } from './MarionSessions';
+import type { MarionSessionFilter } from '../../lib/featuresApi';
+import type { MarionSession } from '@shared/types';
 
 type Filter = 'all' | SessionProvider;
 const FILTERS: { id: Filter; label: string }[] = [
@@ -72,9 +74,9 @@ const SCOPES: { id: Scope; label: string }[] = [{ id: 'marion', label: 'Marion A
 const SCOPE_PREF = 'marion-agent:sessions-scope';
 const readScope = (): Scope => { try { return localStorage.getItem(SCOPE_PREF) === 'mac' ? 'mac' : 'marion'; } catch { return 'marion'; } };
 
-type MarionFilter = 'all' | 'chat' | 'relay' | SessionProvider;
+type MarionFilter = 'all' | 'builders' | 'chat' | 'relay' | SessionProvider;
 const MARION_FILTERS: { id: MarionFilter; label: string; logo?: SessionProvider }[] = [
-  { id: 'all', label: 'All' }, { id: 'chat', label: 'Bot chats' }, { id: 'relay', label: 'Agents' },
+  { id: 'all', label: 'All' }, { id: 'builders', label: 'Builders' }, { id: 'chat', label: 'Bot chats' }, { id: 'relay', label: 'Agents' },
   { id: 'claude', label: 'Claude', logo: 'claude' }, { id: 'codex', label: 'Codex', logo: 'codex' }, { id: 'gemini', label: 'Gemini', logo: 'gemini' },
 ];
 const MARION_FILTER_PREF = 'marion-agent:sessions-marion-filter';
@@ -82,17 +84,33 @@ const readMarionFilter = (): MarionFilter => {
   try { const saved = localStorage.getItem(MARION_FILTER_PREF); return MARION_FILTERS.some(f => f.id === saved) ? saved as MarionFilter : 'all'; } catch { return 'all'; }
 };
 
+/**
+ * The server query behind each filter. Each tab asks for its own rows, so a provider or Builders tab is never limited to
+ * whatever survived the newest-200 cut of everything (busy Gemini/Codex chat bots used to push Claude and Cloud runs out).
+ */
+export function marionFilterQuery(filter: MarionFilter): MarionSessionFilter {
+  if (filter === 'all') return { limit: 200 };
+  if (filter === 'chat' || filter === 'relay' || filter === 'builders') return { type: filter, limit: 200 };
+  return { provider: filter, limit: 200 };
+}
+
+export function matchesMarionFilter(filter: MarionFilter, s: Pick<MarionSession, 'type' | 'kind' | 'provider'>) {
+  return filter === 'all' || (filter === 'builders' ? isBuilder(s) : filter === s.type || filter === s.provider);
+}
+
 /** Everything across all bots: their chat sessions and every Claude, Codex and Gemini run they relayed. */
 function MarionSessionsPane() {
-  const sessions = useMarionSessions({ limit: 200 });
   const [filter, setFilterState] = useState<MarionFilter>(readMarionFilter);
+  const sessions = useMarionSessions(marionFilterQuery(filter));
+  // Live counts on every tab come from the running runs, whichever tab is open.
+  const live = useMarionSessions({ type: 'relay', status: 'running' }, 10_000);
   const setFilter = (f: MarionFilter) => { setFilterState(f); try { localStorage.setItem(MARION_FILTER_PREF, f); } catch { /* private mode */ } };
   const running = useMemo(() => {
-    const c: Record<MarionFilter, number> = { all: 0, chat: 0, relay: 0, claude: 0, codex: 0, gemini: 0 };
-    for (const s of sessions ?? []) if (s.status === 'running') { c.all++; c.relay++; if (s.provider) c[s.provider]++; }
+    const c: Record<MarionFilter, number> = { all: 0, builders: 0, chat: 0, relay: 0, claude: 0, codex: 0, gemini: 0 };
+    for (const s of live ?? []) if (s.status === 'running') { c.all++; c.relay++; if (isBuilder(s)) c.builders++; if (s.provider) c[s.provider]++; }
     return c;
-  }, [sessions]);
-  const shown = useMemo(() => (sessions ?? []).filter(s => filter === 'all' || filter === s.type || filter === s.provider), [sessions, filter]);
+  }, [live]);
+  const shown = useMemo(() => (sessions ?? []).filter(s => matchesMarionFilter(filter, s)), [sessions, filter]);
   const bots = useStore(s => s.bots);
   const open = (botId: string) => { if (bots.some(b => b.id === botId)) openBotChat(botId); };
   return (
@@ -106,7 +124,9 @@ function MarionSessionsPane() {
             : shown.length === 0 ? (
               <div className="tasks-empty">
                 <div className="tasks-empty__title">No {filter === 'all' ? '' : `${MARION_FILTERS.find(f => f.id === filter)!.label} `}sessions yet</div>
-                <div className="tasks-empty__sub">Your bots’ chats and the Claude, Codex and Gemini runs they start show up here, live.</div>
+                <div className="tasks-empty__sub">{filter === 'builders'
+                  ? 'Claude, Codex and Gemini agents your bots put to work (asked directly, orchestrated, team, Cloud) show up here, live.'
+                  : 'Your bots’ chats and the Claude, Codex and Gemini runs they start show up here, live.'}</div>
               </div>
             ) : (
               <MarionSessionList key={filter} sessions={shown} showBot onOpenBot={open}

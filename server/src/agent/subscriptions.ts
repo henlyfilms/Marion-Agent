@@ -453,7 +453,7 @@ async function spawnSubscriptionReply(
       const runModel = chosen?.id ?? model;
       args.push('--model', runModel);
       // No saved effort (older bots, first run): high, like everywhere else.
-      const baseEffort = effort ?? (chosen ? preferredEffort(chosen.efforts) : null);
+      const baseEffort = effort ?? (chosen ? preferredEffort(chosen.efforts) : DEFAULT_SUBSCRIPTION_EFFORT);
       const fastEffort = chosen?.efforts.includes('low') ? 'low' : baseEffort;
       const selectedEffort = options.fast ? fastEffort : baseEffort;
       if (selectedEffort) args.push('--effort', selectedEffort);

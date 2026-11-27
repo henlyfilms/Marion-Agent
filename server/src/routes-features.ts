@@ -518,7 +518,7 @@ const sessionQuery = (c: { req: { query: (name: string) => string | undefined } 
   const type = c.req.query('type');
   return {
     botId: botId ?? c.req.query('botId') ?? undefined,
-    type: type === 'chat' || type === 'relay' ? type : undefined,
+    type: type === 'chat' || type === 'relay' || type === 'builders' ? type : undefined,
     kind: c.req.query('kind') || undefined,
     provider: c.req.query('provider') || undefined,
     status: c.req.query('status') || undefined,
@@ -526,7 +526,7 @@ const sessionQuery = (c: { req: { query: (name: string) => string | undefined } 
   } as const;
 };
 
-/** GET /api/sessions/marion?botId=&type=chat|relay&kind=&provider=claude|codex|gemini&status=&limit= */
+/** GET /api/sessions/marion?botId=&type=chat|relay|builders&kind=&provider=claude|codex|gemini&status=&limit= */
 featuresApi.get('/sessions/marion', (c) => {
   const sessions = listSessions(c.get('user').id, sessionQuery(c));
   return c.json({ sessions, running: sessions.filter(s => s.status === 'running').length });

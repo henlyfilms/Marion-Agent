@@ -91,52 +91,134 @@ const isNoise = (text: string) => !text.trim()
 
 // ---------- Claude Code: ~/.claude/projects/<project>/<session>.jsonl ----------
 
-function claudeSessions(): CodingSession[] {
-  const root = path.join(HOME, '.claude', 'projects');
-  let files: { file: string; mtime: number }[] = [];
-  try {
-    for (const dir of fs.readdirSync(root)) {
-      const full = path.join(root, dir);
-      let entries: string[] = [];
-      try { entries = fs.readdirSync(full); } catch { continue; }
-      for (const name of entries) {
-        if (!name.endsWith('.jsonl')) continue;
-        const file = path.join(full, name);
-        try { files.push({ file, mtime: fs.statSync(file).mtimeMs }); } catch { /* removed meanwhile */ }
+/** Marion's own relayed runs work in temporary provider folders; they are not your sessions. */
+const MARION_TEMP = /marion-provider-|\/T\/marion-|marion-usage-probe/;
+/** Project folder names encode the session's cwd with "/" (and other symbols) turned into "-". */
+const MARION_TEMP_DIR = /-T-marion-provider-|-T-marion-|marion-usage-probe/;
+const CLAUDE_APP_LIMIT = 150;
+
+/** Title and working folder of one Claude Code transcript. */
+function claudeTranscriptInfo(file: string) {
+  // The app keeps re-saving a "custom-title" record; the newest one is near the end of the file.
+  let title = '';
+  let cwd = '';
+  for (const line of jsonLines(readTail(file, 192 * 1024)).reverse()) {
+    if (!title && line.type === 'custom-title' && typeof line.customTitle === 'string') title = line.customTitle;
+    if (!cwd && typeof line.cwd === 'string') cwd = line.cwd;
+    if (title && cwd) break;
+  }
+  // Otherwise use the first thing you asked. Pasted images can make that line huge, so read further in steps.
+  for (const bytes of [96 * 1024, 1024 * 1024, 6 * 1024 * 1024]) {
+    if (title && cwd) break;
+    for (const line of jsonLines(readHead(file, bytes))) {
+      if (!cwd && typeof line.cwd === 'string') cwd = line.cwd;
+      if (!title && line.type === 'user' && !line.isMeta && !line.isSidechain) {
+        const text = contentText(line.message?.content);
+        if (!isNoise(text)) title = clean(text);
+      }
+      if (title && cwd) break;
+    }
+    if (fs.statSync(file).size <= bytes) break;
+  }
+  return { title, cwd };
+}
+
+interface ClaudeAppSession { cliId: string; title: string; cwd: string; activityAt: number; archived: boolean }
+const appIndexCache = new Map<string, { mtime: number; session: ClaudeAppSession | null }>();
+
+/**
+ * The Claude app's own list of Code sessions (Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json):
+ * the sessions you see in the app, with the titles you gave them and whether you archived them. Each points at its
+ * transcript in ~/.claude/projects by `cliSessionId`.
+ */
+function claudeAppSessions(): ClaudeAppSession[] {
+  const root = path.join(HOME, 'Library', 'Application Support', 'Claude', 'claude-code-sessions');
+  const out: ClaudeAppSession[] = [];
+  const seen = new Set<string>();
+  let accounts: string[] = [];
+  try { accounts = fs.readdirSync(root); } catch { return out; }
+  for (const account of accounts) {
+    let orgs: string[] = [];
+    try { orgs = fs.readdirSync(path.join(root, account)); } catch { continue; }
+    for (const org of orgs) {
+      let names: string[] = [];
+      try { names = fs.readdirSync(path.join(root, account, org)); } catch { continue; }
+      for (const name of names) {
+        if (!/^local_[\w-]+\.json$/.test(name)) continue;
+        const file = path.join(root, account, org, name);
+        seen.add(file);
+        try {
+          const mtime = fs.statSync(file).mtimeMs;
+          let cached = appIndexCache.get(file);
+          if (!cached || cached.mtime !== mtime) {
+            const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+            const cliId = typeof raw.cliSessionId === 'string' ? raw.cliSessionId : '';
+            const cwd = typeof raw.cwd === 'string' ? raw.cwd : typeof raw.originCwd === 'string' ? raw.originCwd : '';
+            const activityAt = Number(raw.lastActivityAt ?? raw.lastTurnEdgeAt ?? raw.createdAt) || 0;
+            cached = { mtime, session: cliId ? { cliId, cwd, activityAt, archived: raw.isArchived === true, title: typeof raw.title === 'string' ? clean(raw.title) : '' } : null };
+            appIndexCache.set(file, cached);
+          }
+          if (cached.session) out.push(cached.session);
+        } catch { /* being rewritten; next poll */ }
       }
     }
-  } catch { return []; }
-  files = files.sort((a, b) => b.mtime - a.mtime).slice(0, LIMIT);
-  return files.flatMap(({ file, mtime }) => {
+  }
+  for (const file of appIndexCache.keys()) if (!seen.has(file)) appIndexCache.delete(file);
+  return out;
+}
+
+/**
+ * Claude Code sessions: every session listed in the Claude app (unless archived there), plus the newest other transcripts
+ * (CLI and headless runs). Marion's own relayed runs are skipped before the cap, so they never crowd your sessions out.
+ */
+function claudeSessions(): CodingSession[] {
+  const root = path.join(HOME, '.claude', 'projects');
+  const transcripts = new Map<string, { file: string; mtime: number }>();
+  let dirs: string[] = [];
+  try { dirs = fs.readdirSync(root); } catch { /* no CLI transcripts; the app index may still list sessions */ }
+  for (const dir of dirs) {
+    if (MARION_TEMP_DIR.test(dir)) continue;
+    const full = path.join(root, dir);
+    let entries: string[] = [];
+    try { entries = fs.readdirSync(full); } catch { continue; }
+    for (const name of entries) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = path.join(full, name);
+      try { transcripts.set(path.basename(name, '.jsonl'), { file, mtime: fs.statSync(file).mtimeMs }); } catch { /* removed meanwhile */ }
+    }
+  }
+  const app = claudeAppSessions();
+  const archived = new Set(app.filter(s => s.archived).map(s => s.cliId));
+  const out: CodingSession[] = [];
+  const listed = new Set<string>();
+  const add = (id: string, title: string, cwd: string, updatedAt: number, activeAt: number) => {
+    if (!title || listed.has(id) || MARION_TEMP.test(cwd)) return;
+    listed.add(id);
+    out.push({
+      id: `claude:${id}`, provider: 'claude', title, path: cwd,
+      project: projectName(cwd), updatedAt: Math.round(updatedAt), active: Date.now() - activeAt < ACTIVE_MS,
+    });
+  };
+  const appSessions = app.filter(s => !s.archived)
+    .map(s => ({ ...s, transcript: transcripts.get(s.cliId) }))
+    .sort((a, b) => Math.max(b.activityAt, b.transcript?.mtime ?? 0) - Math.max(a.activityAt, a.transcript?.mtime ?? 0))
+    .slice(0, CLAUDE_APP_LIMIT);
+  for (const s of appSessions) {
     try {
-      // The app keeps re-saving a "custom-title" record; the newest one is near the end of the file.
-      let title = '';
-      let cwd = '';
-      for (const line of jsonLines(readTail(file, 192 * 1024)).reverse()) {
-        if (!title && line.type === 'custom-title' && typeof line.customTitle === 'string') title = line.customTitle;
-        if (!cwd && typeof line.cwd === 'string') cwd = line.cwd;
-        if (title && cwd) break;
-      }
-      // Otherwise use the first thing you asked. Pasted images can make that line huge, so read further in steps.
-      for (const bytes of [96 * 1024, 1024 * 1024, 6 * 1024 * 1024]) {
-        if (title && cwd) break;
-        for (const line of jsonLines(readHead(file, bytes))) {
-          if (!cwd && typeof line.cwd === 'string') cwd = line.cwd;
-          if (!title && line.type === 'user' && !line.isMeta && !line.isSidechain) {
-            const text = contentText(line.message?.content);
-            if (!isNoise(text)) title = clean(text);
-          }
-          if (title && cwd) break;
-        }
-        if (fs.statSync(file).size <= bytes) break;
-      }
-      if (!title || /marion-provider-|\/T\/marion-/.test(cwd)) return [];
-      return [{
-        id: `claude:${path.basename(file, '.jsonl')}`, provider: 'claude' as const, title, path: cwd,
-        project: projectName(cwd), updatedAt: Math.round(mtime), active: Date.now() - mtime < ACTIVE_MS,
-      }];
-    } catch { return []; }
-  });
+      const info = s.transcript && (!s.title || !s.cwd) ? claudeTranscriptInfo(s.transcript.file) : null;
+      const updatedAt = Math.max(s.activityAt, s.transcript?.mtime ?? 0);
+      add(s.cliId, s.title || info?.title || 'Untitled session', s.cwd || info?.cwd || '', updatedAt, s.transcript?.mtime ?? s.activityAt);
+    } catch { /* unreadable transcript */ }
+  }
+  const rest = [...transcripts].filter(([id]) => !listed.has(id) && !archived.has(id))
+    .sort((a, b) => b[1].mtime - a[1].mtime).slice(0, LIMIT);
+  for (const [id, { file, mtime }] of rest) {
+    try {
+      const { title, cwd } = claudeTranscriptInfo(file);
+      add(id, title, cwd, mtime, mtime);
+    } catch { /* unreadable transcript */ }
+  }
+  return out;
 }
 
 // ---------- Codex: ~/.codex/state_5.sqlite (threads) + session_index.jsonl names ----------

@@ -68,7 +68,7 @@ export interface CodingSession { id: string; provider: SessionProvider; title: s
 export interface SessionMessage { role: 'user' | 'assistant'; text: string; at?: number }
 export type { MarionSession };
 /** Filters for Marion Agent's own sessions (bot chats and relayed Claude / Codex / Gemini runs). */
-export interface MarionSessionFilter { botId?: string; type?: 'chat' | 'relay'; kind?: string; provider?: SessionProvider; status?: string; limit?: number }
+export interface MarionSessionFilter { botId?: string; type?: 'chat' | 'relay' | 'builders'; kind?: string; provider?: SessionProvider; status?: string; limit?: number }
 const sessionParams = (filter: MarionSessionFilter) => {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filter)) if (value !== undefined && value !== '') params.set(key, String(value));

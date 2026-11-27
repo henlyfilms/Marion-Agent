@@ -126,6 +126,9 @@ try {
   assert.equal(lines('codex').at(-1).params.effort, 'high');
   await S.subscriptionReply({ provider: 'claude', model: 'claude-sonnet-5-5', effort: null }, 'hi', signal, []);
   assert.equal(flag(lines('claude').at(-1), '--effort'), 'high');
+  // A Gemini model missing from the cached catalog, with no saved effort, is still launched on high (not the CLI default).
+  await S.subscriptionReply({ provider: 'gemini', model: 'gemini-unlisted', effort: null }, 'hi', signal, []);
+  assert.equal(flag(lines('agy').at(-1), '--effort'), 'high');
   // medium stays selectable everywhere.
   await S.subscriptionReply({ provider: 'gemini', model: 'gemini-4-neon', effort: 'medium' }, 'hi', signal, []);
   assert.equal(flag(lines('agy').at(-1), '--effort'), 'medium');

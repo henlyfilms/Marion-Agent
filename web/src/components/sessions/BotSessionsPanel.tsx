@@ -3,10 +3,11 @@ import { CloudSessionModal } from '../modals/ProjectActions';
 import type { Bot } from '@shared/types';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../Icon';
-import { MarionSessionList, useMarionSessions } from './MarionSessions';
+import { MarionSessionList, isBuilder, useMarionSessions } from './MarionSessions';
 
-type Tab = 'all' | 'chat' | 'relay';
-const TABS: { id: Tab; label: string }[] = [{ id: 'all', label: 'All' }, { id: 'chat', label: 'Chats' }, { id: 'relay', label: 'Agents' }];
+type Tab = 'all' | 'builders' | 'chat' | 'relay';
+const TABS: { id: Tab; label: string }[] = [{ id: 'all', label: 'All' }, { id: 'builders', label: 'Builders' }, { id: 'chat', label: 'Chats' }, { id: 'relay', label: 'Agents' }];
+const inTab = (tab: Tab, s: Parameters<typeof isBuilder>[0]) => tab === 'all' || (tab === 'builders' ? isBuilder(s) : s.type === tab);
 
 /** Header button of a bot's chat: opens the Sessions panel; shows how many relayed agents are running for this bot. */
 export function BotSessionsButton({ bot, open, onToggle }: { bot: Pick<Bot, 'id' | 'name'>; open: boolean; onToggle: () => void }) {
@@ -29,8 +30,11 @@ export function BotSessionsPanel({ bot, onClose, closing = false }: { bot: Pick<
   const local = useStore(s => s.localWorkspace && !s.mobilePaired);
   const room = useStore(s => s.bots.find(b => b.id === bot.id)?.kind === 'room');
   const [cloud, setCloud] = useState(false);
-  const sessions = useMarionSessions({ botId: bot.id });
   const [tab, setTab] = useState<Tab>('all');
+  // Each tab asks the server for its own rows, so Builders (and Cloud runs) aren't crowded out by chat-model replies.
+  const all = useMarionSessions({ botId: bot.id, limit: 200 });
+  const filtered = useMarionSessions(tab === 'all' ? { botId: bot.id, limit: 200 } : { botId: bot.id, type: tab, limit: 200 });
+  const sessions = tab === 'all' ? all : filtered;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   useEffect(() => {
@@ -40,12 +44,12 @@ export function BotSessionsPanel({ bot, onClose, closing = false }: { bot: Pick<
     return () => window.removeEventListener('keydown', close, true);
   }, [closing, cloud]);
   const counts = useMemo(() => {
-    const c = { all: 0, chat: 0, relay: 0 };
-    for (const s of sessions ?? []) { c.all++; c[s.type]++; }
+    const c = { all: 0, builders: 0, chat: 0, relay: 0 };
+    for (const s of all ?? []) { c.all++; c[s.type]++; if (isBuilder(s)) c.builders++; }
     return c;
-  }, [sessions]);
-  const shown = (sessions ?? []).filter(s => tab === 'all' || s.type === tab);
-  const running = (sessions ?? []).filter(s => s.status === 'running').length;
+  }, [all]);
+  const shown = (sessions ?? []).filter(s => inTab(tab, s));
+  const running = (all ?? []).filter(s => s.status === 'running').length;
   return (
     <aside className={`bot-sessions${closing ? ' is-closing' : ''}`} id="bot-sessions" aria-label={`${bot.name}’s sessions`}>
       <header className="bot-sessions__head">
@@ -68,7 +72,7 @@ export function BotSessionsPanel({ bot, onClose, closing = false }: { bot: Pick<
         {sessions === null ? <div className="session-skeleton" aria-hidden>{[0, 1, 2, 3].map(i => <span key={i} />)}</div>
           : shown.length === 0 ? (
             <div className="tasks-empty">
-              <div className="tasks-empty__title">No {tab === 'relay' ? 'agent ' : tab === 'chat' ? 'chat ' : ''}sessions yet</div>
+              <div className="tasks-empty__title">No {tab === 'builders' ? 'builder ' : tab === 'relay' ? 'agent ' : tab === 'chat' ? 'chat ' : ''}sessions yet</div>
               <div className="tasks-empty__sub">Conversations with {bot.name} and the Claude, Codex or Gemini runs it starts show up here.</div>
             </div>
           ) : <MarionSessionList key={tab} sessions={shown} showBot={false} onPick={s => { if (s.type === 'chat' && s.status === 'active') { onClose(); return true; } return false; }} />}

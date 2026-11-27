@@ -14,6 +14,9 @@ import { ProviderLogo } from '../ProviderLogo';
  * Used by the global Sessions view and by each bot's Sessions panel.
  */
 
+/** Relayed agents put to work (asked directly, orchestrated, team, Cloud, handoff): every relayed run except a bot's own chat model replying. */
+export const isBuilder = (s: Pick<MarionSession, 'type' | 'kind'>) => s.type === 'relay' && s.kind !== 'subscription_bot';
+
 export const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' } as const;
 const KIND_NAMES: Record<string, string> = {
   chat: 'Chat', ask_subscription: 'Asked directly', subscription_bot: 'Chat model', orchestration: 'Orchestrated', team: 'Team', cloud: 'Cloud', handoff: 'Handoff',
