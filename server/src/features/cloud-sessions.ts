@@ -135,8 +135,10 @@ const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
 /**
  * Runs `program args` attached to a pseudo-terminal (the CLI refuses `--cloud` without one), with a channel Marion can
- * type into (trust prompt, approvals). script(1) needs a non-socket stdin, so Node's stdin is copied into a private FIFO
- * by a background `cat`; the shell exits with script's status as soon as the CLI ends. macOS: BSD script(1); Linux:
+ * type into (trust prompt, approvals). script(1) reads the terminal settings of its stdin and only carries on when that
+ * fails with ENOTTY. Node's stdio pipes are socketpairs and macOS FIFOs are sockets too (EOPNOTSUPP: "tcgetattr/ioctl:
+ * Operation not supported on socket"), so Node's stdin is copied by a background `cat` into a real pipe(2) instead.
+ * When the CLI ends, that `cat` is stopped and the shell exits with script's status. macOS: BSD script(1); Linux:
  * util-linux script(1). stty gives the terminal a wide, fixed size so URLs never wrap.
  */
 export function ptyCommand(program: string, args: string[]): [string, string[]] {
@@ -145,8 +147,11 @@ export function ptyCommand(program: string, args: string[]): [string, string[]] 
     ? `/usr/bin/script -q /dev/null /bin/sh -c ${shellQuote(inner)} marion-pty "$@"`
     : `script -qfec ${shellQuote(['/bin/sh', '-c', inner, 'marion-pty', program, ...args].map(shellQuote).join(' '))} /dev/null`;
   const script = [
-    'f="${TMPDIR:-/tmp}/marion-pty-$$"', 'rm -f "$f"', 'mkfifo -m 600 "$f" || exit 97', 'exec 3<&0',
-    'cat <&3 >"$f" 2>/dev/null & c=$!', `${run} <"$f" 3<&-`, 's=$?', '{ kill $c; wait $c; } 2>/dev/null', 'rm -f "$f"', 'exit $s',
+    'p="${TMPDIR:-/tmp}/marion-pty-$$"', 'rm -f "$p"', 'exec 3<&0',
+    '{ cat <&3 & echo $! >"$p"; wait; } 2>/dev/null | {',
+    `  ${run} 3<&-`, '  s=$?',
+    '  i=0; while [ ! -s "$p" ] && [ $i -lt 20 ]; do sleep 0.1; i=$((i+1)); done',
+    '  kill "$(cat "$p" 2>/dev/null)" 2>/dev/null; rm -f "$p"; exit $s', '}',
   ].join('\n');
   return ['/bin/sh', ['-c', script, 'marion-cloud', program, ...args]];
 }

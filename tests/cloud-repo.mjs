@@ -341,7 +341,7 @@ try {
   assert.equal(CS.terminalCloudUrl('https://evil.test/code/session_x'), null);
   assert.equal(CS.cleanTerminal('\x1b[1mHi\x1b[22m\x1b[3Cthere\r\n\x1b]0;title\x07ok'), 'Hi   there\nok');
   const [shell, shellArgs] = CS.ptyCommand('/x/claude', ['--cloud', "it's"]);
-  assert.equal(shell, '/bin/sh'); assert.match(shellArgs[1], /mkfifo -m 600/); assert.match(shellArgs[1], process.platform === 'darwin' ? /\/usr\/bin\/script -q \/dev\/null/ : /script -qfec/);
+  assert.equal(shell, '/bin/sh'); assert.match(shellArgs[1], /cat <&3 & echo \$! >"\$p"; wait; \} 2>\/dev\/null \| \{/); assert.doesNotMatch(shellArgs[1], /mkfifo/); assert.match(shellArgs[1], process.platform === 'darwin' ? /\/usr\/bin\/script -q \/dev\/null/ : /script -qfec/);
   assert.deepEqual(CS.cloudTerminalArgs('Fix it').slice(0, 2), ['--cloud', 'Fix it']);
   // This sandbox cannot open a pseudo-terminal, so the fake CLI runs directly; the real wrapper is checked above.
   CS.setCloudTerminal((program, args) => [program, args]);
