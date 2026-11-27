@@ -1,4 +1,4 @@
-// Claude / Codex / Gemini relays: default models (Opus 5.5, 6.2 Sol, Gemini 4 Neon), high effort by default,
+// Claude / Codex / Gemini relays: default models (Opus 5.5, 6.2 Sol, Gemini 4 Neon), medium effort by default,
 // auto mode CLI args, fresh sessions, action cards for questions, the exact model on work cards, and the per-provider
 // default model & effort from Settings used whenever a request names none (explicit model/effort win).
 // Drives fake claude/codex/agy executables: no listener, no network, no model calls.
@@ -61,30 +61,31 @@ const lines = (name) => { try { return readFileSync(log(name), 'utf8').trim().sp
 const flag = (args, name) => args[args.indexOf(name) + 1];
 
 try {
-  // ---- 1. defaults: exact model IDs, high effort ----
+  // ---- 1. defaults: exact model IDs, medium effort ----
   assert.deepEqual({ ...S.DEFAULT_SUBSCRIPTION_MODELS }, { claude: 'claude-opus-5-5', codex: 'gpt-6.2-sol', gemini: 'gemini-4-neon' });
-  assert.equal(S.DEFAULT_SUBSCRIPTION_EFFORT, 'high');
-  assert.equal(S.preferredEffort(['low', 'medium', 'high', 'xhigh']), 'high');
-  assert.equal(S.preferredEffort(['low', 'medium']), 'medium', 'medium when high is missing');
+  assert.equal(S.DEFAULT_SUBSCRIPTION_EFFORT, 'medium');
+  assert.equal(S.preferredEffort(['low', 'medium', 'high', 'xhigh']), 'medium');
+  assert.equal(S.preferredEffort(['low', 'high']), 'low', 'closest step down when medium is missing');
+  assert.equal(S.preferredEffort(['high', 'xhigh']), 'high', 'whatever it has when neither medium nor low is offered');
   assert.equal(S.preferredEffort([]), null);
   const user = 'u1';
   db.prepare('INSERT INTO users(id,email,name,created_at) VALUES (?,?,?,?)').run(user, 'a@example.com', 'A', 1000);
   for (const provider of ['claude', 'codex', 'gemini']) {
-    assert.deepEqual(S.subscriptionSelection(user, provider), { provider, model: S.DEFAULT_SUBSCRIPTION_MODELS[provider], effort: 'high' }, `${provider} default selection`);
+    assert.deepEqual(S.subscriptionSelection(user, provider), { provider, model: S.DEFAULT_SUBSCRIPTION_MODELS[provider], effort: 'medium' }, `${provider} default selection`);
   }
   const claudeCatalog = await S.subscriptionModels('claude');
   assert.equal(claudeCatalog.defaultModel, 'claude-opus-5-5');
-  assert.ok(claudeCatalog.models.every((m) => m.defaultEffort === 'high' && m.efforts.includes('medium') && m.efforts.includes('high')));
+  assert.ok(claudeCatalog.models.every((m) => m.defaultEffort === 'medium' && m.efforts.includes('medium') && m.efforts.includes('high')));
   const codexCatalog = await S.subscriptionModels('codex');
   assert.equal(codexCatalog.defaultModel, 'gpt-6.2-sol', '6.2 Sol wins over the account default');
   assert.equal(codexCatalog.models[0].id, 'gpt-6.2-sol', 'default listed first (so "codex" name match lands on it)');
-  assert.ok(codexCatalog.models.every((m) => m.defaultEffort === 'high'), 'high replaces the catalog default of low');
+  assert.ok(codexCatalog.models.every((m) => m.defaultEffort === 'medium'), 'medium replaces the catalog default of low');
   const geminiCatalog = await S.subscriptionModels('gemini');
   assert.equal(geminiCatalog.defaultModel, 'gemini-4-neon');
   const neon = geminiCatalog.models.find((m) => m.id === 'gemini-4-neon');
   assert.deepEqual(neon.efforts, ['low', 'medium', 'high']);
-  assert.equal(neon.defaultEffort, 'high');
-  assert.equal(geminiCatalog.models.find((m) => m.id === 'gemini-3.8-flash').defaultEffort, 'medium', 'medium when that is the top level');
+  assert.equal(neon.defaultEffort, 'medium');
+  assert.equal(geminiCatalog.models.find((m) => m.id === 'gemini-3.8-flash').defaultEffort, 'medium', 'medium when that is the only level');
 
   // ---- 2. auto mode CLI args ----
   assert.equal(flag(S.claudeArgs, '--permission-mode'), 'auto');
@@ -96,7 +97,7 @@ try {
   assert.deepEqual(S.codexThreadPolicy({ write: false }), { sandbox: 'read-only', approvalPolicy: 'never' });
   assert.deepEqual(S.codexThreadPolicy(), { sandbox: 'read-only', approvalPolicy: 'never' });
 
-  // ---- 3. real launches: defaults + high effort reach each CLI; auto mode in a folder ----
+  // ---- 3. real launches: defaults + medium effort reach each CLI; auto mode in a folder ----
   const signal = new AbortController().signal;
   const seen = {};
   const folder = { path: bin, label: 'bin', write: true };
@@ -106,27 +107,27 @@ try {
   }
   const claudeRun = lines('claude').at(-1);
   assert.equal(flag(claudeRun, '--model'), 'claude-opus-5-5');
-  assert.equal(flag(claudeRun, '--effort'), 'high');
+  assert.equal(flag(claudeRun, '--effort'), 'medium');
   assert.equal(flag(claudeRun, '--permission-mode'), 'auto');
   assert.ok(!claudeRun.includes('dontAsk'));
   const agyRun = lines('agy').at(-1);
   assert.equal(flag(agyRun, '--model'), 'gemini-4-neon');
-  assert.equal(flag(agyRun, '--effort'), 'high');
+  assert.equal(flag(agyRun, '--effort'), 'medium');
   assert.equal(flag(agyRun, '--mode'), 'auto');
   const [thread, turn] = lines('codex').slice(-2);
   assert.equal(thread.params.model, 'gpt-6.2-sol');
   assert.equal(thread.params.sandbox, 'workspace-write');
   assert.equal(thread.params.approvalPolicy, 'on-request');
   assert.equal(thread.params.approvalsReviewer, 'auto_review');
-  assert.equal(turn.params.effort, 'high');
+  assert.equal(turn.params.effort, 'medium');
   assert.equal(seen.claude.label, 'Claude Opus 5.5');
   assert.equal(seen.codex.model, 'gpt-6.2-sol');
-  assert.equal(seen.gemini.effort, 'high');
-  // A saved model with no effort (older bots) still runs on high.
+  assert.equal(seen.gemini.effort, 'medium');
+  // A saved model with no effort (older bots) still runs on medium.
   await S.subscriptionReply({ provider: 'codex', model: 'gpt-6.2-sol', effort: null }, 'hi', signal, []);
-  assert.equal(lines('codex').at(-1).params.effort, 'high');
+  assert.equal(lines('codex').at(-1).params.effort, 'medium');
   await S.subscriptionReply({ provider: 'claude', model: 'claude-sonnet-5-5', effort: null }, 'hi', signal, []);
-  assert.equal(flag(lines('claude').at(-1), '--effort'), 'high');
+  assert.equal(flag(lines('claude').at(-1), '--effort'), 'medium');
   // A Gemini model missing from the cached catalog has unknown levels, so it is launched with no --effort at all (no blind high).
   await S.subscriptionReply({ provider: 'gemini', model: 'gemini-unlisted', effort: null }, 'hi', signal, []);
   assert.ok(!lines('agy').at(-1).includes('--effort'));
@@ -182,7 +183,7 @@ try {
   assert.equal(work.card, 'work');
   assert.equal(work.status, 'needs-input');
   assert.deepEqual(work.options, ['main', 'release']);
-  assert.deepEqual(work.agents[0], { id: 'worker-0', label: 'Claude', provider: 'claude', model: 'claude-opus-5-5', role: 'worker', modelLabel: 'Opus 5.5', effort: 'high' });
+  assert.deepEqual(work.agents[0], { id: 'worker-0', label: 'Claude', provider: 'claude', model: 'claude-opus-5-5', role: 'worker', modelLabel: 'Opus 5.5', effort: 'medium' });
   assert.equal(question.card, 'question');
   assert.deepEqual(question.options, ['main', 'release']);
   for (const [provider, model, label] of [['codex', 'gpt-6.2-sol', '6.2 Sol'], ['gemini', 'gemini-4-neon', 'Gemini 4 Neon']]) {
@@ -192,7 +193,7 @@ try {
     assert.equal(work.status, 'done');
     assert.equal(work.agents[0].model, model);
     assert.equal(work.agents[0].modelLabel, label, `${provider} card shows ${label}`);
-    assert.equal(work.agents[0].effort, 'high');
+    assert.equal(work.agents[0].effort, 'medium');
   }
   // ---- 8. Settings defaults per provider: used whenever a request names no model/effort; explicit ones win ----
   const savePref = (provider, model, effort) => db.prepare(`INSERT INTO subscription_model_preferences(user_id,provider,model,effort) VALUES (?,?,?,?)
@@ -227,7 +228,7 @@ try {
   assert.equal(O.pickModel(team, '6.2 Sol', defaults).id, 'gpt-6.2-sol', 'a named model is kept');
   assert.equal(O.defaultEffortFor(team.find((m) => m.id === 'gpt-6.2-sol'), defaults.codex), 'low');
 
-  console.log('PASS default models (claude-opus-5-5, gpt-6.2-sol, gemini-4-neon) on high, auto-mode args, fresh sessions, action cards, model on work cards, Settings defaults per provider');
+  console.log('PASS default models (claude-opus-5-5, gpt-6.2-sol, gemini-4-neon) on medium, auto-mode args, fresh sessions, action cards, model on work cards, Settings defaults per provider');
 } finally {
   rmSync(bin, { recursive: true, force: true });
 }

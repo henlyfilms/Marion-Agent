@@ -550,7 +550,9 @@ api.post('/bots/:id/messages', bodyLimit({
   const question = current.kind !== 'room' && !call && text ? pendingQuestion(b.id) : null;
   const answerNote = question ? answerQuestion(b.id, question, text) : '';
   // A reply in the chat is the answer to its other open question cards and the input its needs-input tasks waited for.
-  if (current.kind !== 'room') ownerReplied(b.id, text || 'Sent an attachment', { questions: !call });
+  // An attachment-only message (no text) answers no question: the bot gets no answer note for it, so its question cards
+  // stay pending rather than being silently marked answered; needs-input tasks still get the attachment as their input.
+  if (current.kind !== 'room') ownerReplied(b.id, text || 'Sent an attachment', { questions: !call && !!text });
   const mediaNote = media.note ? `[${media.note}]\n` : '';
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, media.attachments, notes + mediaNote);

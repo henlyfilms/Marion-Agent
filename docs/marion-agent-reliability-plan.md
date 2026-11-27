@@ -3,8 +3,8 @@
 Status: **plan only, nothing implemented.** Written 2026-11-27 on branch `docs/reliability-plan` (off `main` @ `83630e8`).
 Sources: `.worktrees/rock-solid-batch/docs/RELIABILITY-PLAN.md` (read-only, uncommitted) plus a re-check of `main` @ `83630e8`.
 Line numbers are from `main` unless stated otherwise. **(proposed)** means it does not exist yet.
-Revision 2 (uncommitted, 2026-11-27): Jensen's QA revisions applied to the draft committed in `49467c9` (§§1.3–1.4, 3.1–3.6, 4.2a, 4.4, 5, 6.1, 7). The RC stays separate and unsigned.
-Revision 3 (uncommitted, 2026-11-27): Jensen's §8 QA revisions (§§3.1–3.2, 3.4, 4.2a, 8.3.5, 8.4, 8.5, 8.7). All §8 causes stay unverified.
+Revision 2 (2026-11-27; committed on `feat/rock-solid-batch` in `a68d563`): Jensen's QA revisions applied to the draft committed in `49467c9` (§§1.3–1.4, 3.1–3.6, 4.2a, 4.4, 5, 6.1, 7). The RC stays separate and unsigned.
+Revision 3 (2026-11-27; committed on `feat/rock-solid-batch` in `a68d563`): Jensen's §8 QA revisions (§§3.1–3.2, 3.4, 4.2a, 8.3.5, 8.4, 8.5, 8.7). All §8 causes stay unverified.
 Revision 3, gate 6 alignment (2026-11-27, committed with the RC on `feat/rock-solid-batch` after Jensen's HOLD on `5ee8688`): the account-mismatch row (§3.1 `account_mismatch`, §3.2 blocker, §8.3.3 H-P7), the narrowed sign-in classifier shared by the sign-in card and `downstreamClass` (§1.3 gate 2), agy's unknown-model wording as a runner-settings failure with one launch (§3.5), and reconciled grant pass/fail rules (§8.7 gates 2 and 8). `docs/RELIABILITY-PLAN.md` is a separate, untracked draft and is unchanged.
 
 ## 0. Ownership

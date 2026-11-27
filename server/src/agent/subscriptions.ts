@@ -28,7 +28,7 @@ const extendedEfforts = [...standardEfforts, 'xhigh'];
 const claudeEfforts = [...extendedEfforts, 'max'];
 /**
  * The model each provider starts on when the owner hasn't picked one (relays, bot defaults, Settings, team and
- * orchestrate all resolve through here): Claude Opus 5.5, Codex 6.2 Sol and Gemini 4 Neon, all on high effort.
+ * orchestrate all resolve through here): Claude Opus 5.5, Codex 6.2 Sol and Gemini 4 Neon, all on medium effort (the token-optimizer default).
  */
 export const DEFAULT_SUBSCRIPTION_MODELS = { claude: 'claude-opus-5-5', codex: 'gpt-6.2-sol', gemini: 'gemini-4-neon' } as const;
 export const DEFAULT_SUBSCRIPTION_EFFORT = 'medium';
@@ -92,7 +92,7 @@ export const effortUnsupported = (error: unknown) => {
 /** The default model first, so name matches ("codex", "gemini") and pickers land on it. */
 const defaultFirst = <T>(models: T[], isDefault: (model: T) => boolean) => [...models].sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)));
 const claudeModels: ChatModel[] = [
-  // Opus 5.5 on high effort is the default for every Claude run; the first entry feeds all fallbacks
+  // Opus 5.5 on medium effort is the default for every Claude run; the first entry feeds all fallbacks
   // (saved-preference fallback, picker default, "claude" name match, team defaults). Sonnet only when chosen explicitly.
   { provider: 'claude', id: 'claude-opus-5-5', label: 'Claude Opus 5.5', efforts: claudeEfforts, defaultEffort: DEFAULT_SUBSCRIPTION_EFFORT },
   { provider: 'claude', id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', efforts: claudeEfforts, defaultEffort: DEFAULT_SUBSCRIPTION_EFFORT },

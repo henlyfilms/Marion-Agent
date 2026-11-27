@@ -6,14 +6,15 @@
  * "please sign in", "login required", "agy acp --login" … — so startup, logging ("logging", "log in to file"), sandbox
  * and loopback failures that merely contain those letters are reported as themselves, not as a sign-in card.
  * Three look-alikes are excluded too:
- *  - proxy authentication (HTTP 407, "Proxy Authentication Required", "Proxy returned 407", proxy credentials) is the
- *    network's sign-in, not Google's;
+ *  - proxy authentication (HTTP 407, "Proxy Authentication Required", "Proxy returned 407", proxy credentials,
+ *    "Authentication failed for proxy server") is the network's sign-in, not Google's;
  *  - an account mismatch ("Wrong Google account: please log in with …", "Account mismatch: not authenticated as …") means
- *    the owner IS signed in, to the wrong account: signing in again with the same card would not fix it;
+ *    the owner IS signed in, to the wrong account: signing in again with the same card would not fix it, so a mismatch
+ *    anywhere in the message means no sign-in at all, even when another clause names a Google sign-in;
  *  - a bare `--login` only counts as agy's own hint (`agy acp --login`), never a CLI/shell flag error ("unknown option
  *    '--login'", "bash --login: …") or a path ("/tmp/--login").
- * Clauses about any of them are dropped before matching, and once a proxy-auth or account-mismatch clause is present only
- * Google-specific wording still counts.
+ * Clauses about any of them are dropped before matching, and once a proxy-auth clause is present only Google-specific
+ * wording still counts.
  */
 const GOOGLE_SIGN_IN = [
   /\b(?:not|un)[\s-]?authenticated\b/i,
@@ -35,7 +36,7 @@ const GOOGLE_SPECIFIC_SIGN_IN = [
   /\bcould(?:n['’]?t| ?not) load (?:the |your )?saved (?:google |gemini )?credentials\b/i,
 ];
 /** HTTP 407 / proxy authentication: the network proxy wants credentials, Google sign-in would not help. */
-const PROXY_AUTH = /\bproxy[\s-]+(?:auth\w*|credentials?|log[\s-]?in|sign[\s-]?in)\b|\bproxy\b[^\n]{0,60}\b(?:(?:un|not\s)authenticated|auth(?:entication|orization)? (?:is )?(?:required|failed|needed))\b|\bproxy\b[^\n]{0,40}\b407\b|\b(?:HTTP(?:\/[\d.]+)?|status(?:[\s_-]?code)?|code|error)\s*[:=]?\s*407\b|\b407\s+proxy\b|\bCONNECT\s+tunnel\s+failed\b[^\n]{0,40}\b407\b|\bproxy\s+response\s*\(?\s*407\b|\b(?:HTTPS?|ALL)_PROXY\b[^\n]{0,120}\b(?:returned|response|responded|status)\b[^\n]{0,20}\(?\s*407\b/i;
+const PROXY_AUTH = /\b(?:auth(?:entication|orization)?|(?:un|not\s)authenticated|credentials?)\b[^\n]{0,40}?\b(?:for|by|from|at|to|with|on|against)\s+(?:the\s+|an?\s+|your\s+)?(?:[\w.:\/-]+\s+){0,2}?proxy\b|\bproxy[\s-]+(?:auth\w*|credentials?|log[\s-]?in|sign[\s-]?in)\b|\bproxy\b[^\n]{0,60}\b(?:(?:un|not\s)authenticated|auth(?:entication|orization)? (?:is )?(?:required|failed|needed))\b|\bproxy\b[^\n]{0,40}\b407\b|\b(?:HTTP(?:\/[\d.]+)?|status(?:[\s_-]?code)?|code|error)\s*[:=]?\s*407\b|\b407\s+proxy\b|\bCONNECT\s+tunnel\s+failed\b[^\n]{0,40}\b407\b|\bproxy\s+response\s*\(?\s*407\b|\b(?:HTTPS?|ALL)_PROXY\b[^\n]{0,120}\b(?:returned|response|responded|status)\b[^\n]{0,20}\(?\s*407\b/i;
 /** Signed in, but to the wrong account: a sign-in card asking to sign in again would loop. */
 const ACCOUNT_MISMATCH = /\bwrong\s+(?:google\s+|gemini\s+)?account\b|\baccount\s+mismatch\b|\bmismatched\s+account\b|\b(?:different|another)\s+(?:google\s+)?account\s+than\b|\b(?:signed|logged)[\s-]?in\s+as\b[^\n]{0,80}\b(?:instead|expected|but)\b/i;
 /** A CLI or shell rejecting a `--login` flag, or a login shell (`bash --login`), is not agy asking for Google sign-in. */
@@ -45,23 +46,44 @@ const PROVIDER_SIGN_IN = [
   /\b(?:sign|log)[\s-]?in to (?:claude|codex|chatgpt|gemini|antigravity|your (?:claude|chatgpt|google) account)\b/i,
   /\b(?:sign|log)[\s-]?in with (?:chatgpt|claude|your (?:claude|chatgpt) (?:subscription|account))\b/i,
   /\b(?:codex|claude(?:\s+auth)?)\s+login\b/i,
-  /\bunauthori[sz]ed\b/i,
   /\b(?:token|session|subscription|credentials?)\s+(?:has\s+)?expired\b|\bexpired\s+(?:token|session|subscription|credentials?)\b/i,
 ];
+/**
+ * A bare "Unauthorized" / 401 is the provider's own sign-in only when nothing on the same line pins it on someone else:
+ * a tool or third-party API ("GitHub API 401 Unauthorized", an MCP server, a webhook, a non-provider URL) failing auth
+ * does not mean the provider needs a sign-in.
+ */
+const UNAUTHORIZED = /\bunauthori[sz]ed\b/i;
+const THIRD_PARTY_AUTH = [
+  // Tools, plugins and MCP servers are the agent's own downstream calls.
+  /\b(?:mcp|tool|plugin|webhook|connector)\b/i,
+  // Well-known third-party services.
+  /\b(?:github|gitlab|bitbucket|slack|jira|atlassian|notion|linear|vercel|netlify|npm|docker|stripe|twilio|sentry|figma|discord|dropbox|aws|azure|heroku|cloudflare|supabase|firebase)\b/i,
+  // A named service's API/server ("Acme API", "Jenkins server"): a capitalised name that is not a provider or a plain word.
+  /(?<!\b(?:Claude|Anthropic|OpenAI|Google|Gemini)\s)\b(?!(?:Claude|Anthropic|OpenAI|Codex|ChatGPT|Gemini|Google|Antigravity|Agy|Code|Invalid|Missing|Expired|Bad|Wrong|Unauthori[sz]ed|Error|Failed|The|This|An?|Your|Its|HTTP|Request)\b)[A-Z][\w.-]*\s+(?:REST\s+|GraphQL\s+)?(?:API|[Ss]erver|[Ee]ndpoint|[Ww]ebhook)\b/,
+  // A URL on a host that is not the provider's.
+  /\bhttps?:\/\/(?![\w.-]*\b(?:anthropic\.com|claude\.ai|openai\.com|chatgpt\.com|googleapis\.com|google\.com)\b)[\w.-]+/i,
+];
+const isProviderUnauthorized = (relevant: string) =>
+  relevant.split('\n').some(line => UNAUTHORIZED.test(line) && !THIRD_PARTY_AUTH.some(pattern => pattern.test(line)));
 
 function clausesOf(diagnostic: string) {
   // Scoped to whole clauses: only a clause that is itself a proxy-auth / account-mismatch failure counts, so a harmless
   // "Connecting via proxy …" line never suppresses a later sign-in error.
   const clauses = diagnostic.split(/\r?\n|;\s*|\.\s+/);
-  const guarded = clauses.some(clause => PROXY_AUTH.test(clause) || ACCOUNT_MISMATCH.test(clause));
+  const mismatch = clauses.some(clause => ACCOUNT_MISMATCH.test(clause));
+  const guarded = mismatch || clauses.some(clause => PROXY_AUTH.test(clause));
   const relevant = clauses
     .filter(clause => !PROXY_AUTH.test(clause) && !ACCOUNT_MISMATCH.test(clause) && !LOGIN_FLAG_ERROR.test(clause))
     .join('\n');
-  return { guarded, relevant };
+  return { mismatch, guarded, relevant };
 }
 
 export const isGoogleSignInFailure = (diagnostic: string) => {
-  const { guarded, relevant } = clausesOf(diagnostic);
+  const { mismatch, guarded, relevant } = clausesOf(diagnostic);
+  // Rev 3: an account mismatch never shows a sign-in card, whatever another clause says ("Wrong account. Sign in with
+  // your Google account a@b" is still the wrong account).
+  if (mismatch) return false;
   if (GOOGLE_SPECIFIC_SIGN_IN.some(pattern => pattern.test(relevant))) return true;
   return !guarded && GOOGLE_SIGN_IN.some(pattern => pattern.test(relevant));
 };
@@ -70,5 +92,5 @@ export const isGoogleSignInFailure = (diagnostic: string) => {
 export const isSignInFailure = (diagnostic: string) => {
   if (isGoogleSignInFailure(diagnostic)) return true;
   const { guarded, relevant } = clausesOf(diagnostic);
-  return !guarded && PROVIDER_SIGN_IN.some(pattern => pattern.test(relevant));
+  return !guarded && (PROVIDER_SIGN_IN.some(pattern => pattern.test(relevant)) || isProviderUnauthorized(relevant));
 };

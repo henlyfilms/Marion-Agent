@@ -331,6 +331,27 @@ try {
       pass('an attachment error never leaves the question card answered with no turn queued');
     }
 
+    // b2) Attachment-only message (no text) with a pending question card: it is not an answer, so the card stays pending
+    //     (never silently marked answered with no answer note reaching the bot). A typed reply then answers it.
+    {
+      const card = await ask(third.id);
+      const base = requests.length;
+      const res = await sendForm(third.id, '', [['diagram.txt', 'just a file', 'text/plain']]);
+      assert.equal(res.status, 200, await res.clone().text());
+      await waitFor(() => requests.length === base + 1, 'the attachment-only message never ran');
+      await idle(third.id); await settle();
+      assert.ok(!requests.at(-1).user.includes('[Answer to '), `no answer note for an attachment-only message: ${requests.at(-1).user}`);
+      const after = (await questions(third.id)).find(r => r.seq === card.seq);
+      assert.equal(after.body.status, 'pending', 'an attachment-only message leaves the question card pending');
+      assert.equal(after.body.answer, undefined, 'no answer recorded');
+      assert.equal((await send('rock-solid-batch', third.id)).status, 200);
+      await waitFor(() => requests.length === base + 2, 'the typed answer never ran');
+      await idle(third.id); await settle();
+      assert.equal((await questions(third.id)).find(r => r.seq === card.seq).body.status, 'answered');
+      assert.ok(requests.at(-1).user.includes(`[Answer to "${QUESTION}"] rock-solid-batch`), requests.at(-1).user);
+      pass('an attachment-only message never resolves a pending question card');
+    }
+
     // c) Whitespace-only input: rejected, the card stays pending, no turn.
     {
       const card = await ask(third.id);

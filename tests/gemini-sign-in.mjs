@@ -378,6 +378,63 @@ try {
     if (failures.length) { console.error('GATE1 FAILURES:\n  ' + failures.join('\n  ')); assert.fail(`${failures.length} gate-1 check(s) failed`); }
   });
 
+  await test('HOLD a68d563 P2 #1: account mismatch beside a Google sign-in clause, "auth … proxy" order, third-party 401s (negative); provider auth still auth', async () => {
+    const RS = await import('../server/dist/agent/runner-settings.js');
+    const failures = [];
+    // 1. Account mismatch anywhere in the message: never a sign-in card, even when another clause is Google-specific.
+    for (const text of [
+      'Wrong account. Sign in with your Google account a@b',
+      'Wrong account; Google OAuth token expired',
+      'Account mismatch\nYou need to sign in with your personal Google account: run `agy acp --login`',
+      'Please sign in with your personal Google account. Wrong Google account: expected a@b',
+    ]) {
+      if (S.isGoogleSignInFailure(text)) failures.push(`account mismatch → sign-in card: ${text}`);
+      const { e, cards } = await tracked(text);
+      if (e instanceof S.GoogleSignInRequired || cards !== 0) failures.push(`caller account mismatch → ${e?.name}, ${cards} card(s): ${text}`);
+      if (RS.downstreamClass(new Error(`Gemini exited with code 1: ${text}`)) === 'auth') failures.push(`downstreamClass = auth for mismatch: ${text}`);
+    }
+    // 2. Proxy auth with "auth" before "proxy".
+    for (const text of [
+      'Authentication failed for proxy server',
+      'Authentication required by proxy proxy.corp:8080',
+      'authentication with the upstream proxy failed',
+      'Error: authorization failed for corporate proxy; please sign in',
+      'invalid credentials for proxy http://proxy.corp:8080',
+    ]) {
+      if (S.isGoogleSignInFailure(text)) failures.push(`proxy auth → sign-in card: ${text}`);
+      const { e, cards } = await tracked(text);
+      if (e instanceof S.GoogleSignInRequired || cards !== 0) failures.push(`caller proxy auth → ${e?.name}, ${cards} card(s): ${text}`);
+      if (RS.downstreamClass(new Error(`Gemini exited with code 1: ${text}`)) === 'auth') failures.push(`downstreamClass = auth for proxy: ${text}`);
+    }
+    // A plain sign-in error that merely mentions a proxy elsewhere still counts.
+    if (!S.isGoogleSignInFailure('Authentication required. Retrying through proxy http://proxy.corp:8080')) failures.push('lost sign-in beside a harmless proxy mention');
+    // 3. Third-party / downstream 401 Unauthorized is not the provider's sign-in.
+    for (const text of [
+      'GitHub API 401 Unauthorized',
+      'Codex exited with code 1: GitHub API 401 Unauthorized',
+      'Claude Code exited with code 1: tool gh failed: HTTP 401 Unauthorized',
+      'Request to https://api.example.com/v1/items failed: 401 Unauthorized',
+      'Acme API returned 401 Unauthorized',
+      'MCP server "linear" error: Unauthorized',
+    ]) {
+      const cls = RS.downstreamClass(new Error(text));
+      if (cls === 'auth') failures.push(`downstreamClass = auth for third-party 401: ${text}`);
+      if (S.isGoogleSignInFailure(text)) failures.push(`third-party 401 → sign-in card: ${text}`);
+    }
+    // Genuine provider auth failures stay auth.
+    for (const text of [
+      'Unauthorized: token expired',
+      'Codex exited with code 1: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header',
+      'OpenAI API error: 401 Unauthorized',
+      'Claude Code exited with code 1: Unauthorized. Invalid API key · Please run /login',
+      'Sign in to Claude Code in Terminal',
+      'Gemini: not authenticated. Run agy acp --login',
+    ]) {
+      if (RS.downstreamClass(new Error(text)) !== 'auth') failures.push(`downstreamClass lost provider auth for: ${text}`);
+    }
+    if (failures.length) { console.error('P2#1 FAILURES:\n  ' + failures.join('\n  ')); assert.fail(`${failures.length} P2 #1 check(s) failed`); }
+  });
+
   console.log(`PASS gemini-sign-in (${passed} tests)`);
 } finally {
   rmSync(bin, { recursive: true, force: true });
