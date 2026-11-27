@@ -1,7 +1,7 @@
 import { now } from '../db.js';
 import { agentSettings } from '../features/agent-settings.js';
 import { appendRow, getBotRow, getRow, updateRow } from '../store.js';
-import type { WorkAgent, WorkCardBody, WorkPhase, WorkStep } from '../types.js';
+import type { WorkAgent, WorkCardBody, WorkPhase, WorkStep, WorkUsage } from '../types.js';
 import { modelLabel as shortModelLabel } from './subscriptions.js';
 import { notify } from '../features/notify.js';
 
@@ -75,8 +75,23 @@ export class WorkCard {
     this.schedule();
   }
 
+  /** One agent's task usage and session context, live while it runs (batched like every other update). */
+  setUsage(agentId: string, usage: WorkUsage) {
+    const agent = this.body.agents.find(a => a.id === agentId);
+    if (!agent) return;
+    agent.usage = usage;
+    this.schedule();
+  }
+
+  /** A callback for subscriptionReply's onTaskUsage, tagged with one agent. */
+  usage(agentId: string) {
+    return (usage: WorkUsage) => this.setUsage(agentId, usage);
+  }
+
   finish(status: WorkCardBody['status'], question?: string, options?: string[]) {
     this.body.status = status;
+    // The finished card keeps the final numbers, no longer marked live.
+    for (const agent of this.body.agents) if (agent.usage) agent.usage = { ...agent.usage, live: false };
     this.body.endedAt = now();
     if (question) this.body.question = question.slice(0, 1200);
     if (question && options?.length) this.body.options = options.slice(0, 6);
@@ -94,7 +109,7 @@ export class WorkCard {
     // The chat was cleared meanwhile: nothing to update.
     const row = getRow(this.botId, this.seq);
     if (!row || row.generation !== getBotRow(this.botId)?.generation) return;
-    updateRow(this.botId, this.seq, { ...this.body, steps: [...this.body.steps], phases: this.body.phases.map(p => ({ ...p })) });
+    updateRow(this.botId, this.seq, { ...this.body, agents: this.body.agents.map(a => ({ ...a })), steps: [...this.body.steps], phases: this.body.phases.map(p => ({ ...p })) });
   }
 }
 

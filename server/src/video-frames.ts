@@ -108,8 +108,8 @@ export async function lookableMedia(files: UploadedAttachment[], limit = MAX_FRA
       notes.push(`screen recording "${video.name}" (could not be turned into frames: ${result.error ?? 'unknown error'})`);
     }
   }
-  const attached = images.slice(0, limit);
-  return { images: attached, note: notes.length ? `Attached by the user: ${notes.join('; ')}. The images are included with this request; look at them.` : '' };
+  // Every photo the user attached is kept (up to the per-message file limit); `limit` only budgets recording frames.
+  return { images, note: notes.length ? `Attached by the user: ${notes.join('; ')}. The images are included with this request; look at them.` : '' };
 }
 
 /** What a chat model receives for an upload: recordings become frames (with a note saying so); everything else is unchanged. */

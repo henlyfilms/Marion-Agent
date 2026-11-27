@@ -8,6 +8,7 @@ import {
   attachFiles, listScreenshots, SCREENSHOT_SHORTCUT_LABEL, screenshotFile, screenshotUrl, type ScreenshotEntry,
 } from '../../lib/screenshots';
 import { Modal } from './Modal';
+import { MAX_ATTACHMENTS } from '@shared/attachment-limits';
 
 const RECENT = 3;
 const PAGE = 24;
@@ -68,7 +69,7 @@ export function ScreenshotPicker() {
     try {
       const file = await screenshotFile(entry, controller.signal);
       if (controller.signal.aborted) return;
-      if (!attachFiles(botId, [file])) throw new Error('Could not add the screenshot to this draft. A message can have up to four attachments.');
+      if (!attachFiles(botId, [file])) throw new Error(`Could not add the screenshot to this draft. A message can have up to ${MAX_ATTACHMENTS} attachments.`);
       close();
     } catch (cause) {
       if (!controller.signal.aborted) {

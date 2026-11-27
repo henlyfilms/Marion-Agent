@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
+import { MAX_ATTACHMENTS, TOO_MANY_ATTACHMENTS } from '@shared/attachment-limits';
 import { Activity, BarChart3, Brain, Eraser, FileText, Film, Images, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
 import { featuresApi, formatTokens, useFeatureUI } from '../lib/featuresApi';
 import { MicSolid, PhoneSolid, ScreenRecordGlyph } from './SolidGlyphs';
@@ -201,7 +202,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const chooseFiles = () => fileInput.current?.click();
   const addFiles = (added: File[]) => {
     const combined = [...files, ...added];
-    if (combined.length > 4) { setError('Add up to four attachments per message.'); return false; }
+    if (combined.length > MAX_ATTACHMENTS) { setError(TOO_MANY_ATTACHMENTS); return false; }
     if (combined.filter(isVideo).length > MAX_VIDEOS) { setError(`Add up to ${MAX_VIDEOS} screen recordings per message.`); return false; }
     const unsupported = added.find(file => !isPhoto(file) && !isVideo(file) && !isTextFile(file));
     if (unsupported) {
@@ -506,7 +507,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
         </div>
       )}
       {/* Attachments sit above the model/effort/Team/dictation row. */}
-      {files.length > 0 && <ul className="composer-files" aria-label="Draft attachments">
+      {files.length > 0 && <ul className="composer-files" aria-label={`Draft attachments: ${files.length} of ${MAX_ATTACHMENTS}`}>
         {files.map((file, index) => <DraftAttachment key={`${file.name}:${file.lastModified}:${index}`} file={file} disabled={sending}
           remove={() => setFiles(current => current.filter((_, position) => position !== index))} />)}
       </ul>}

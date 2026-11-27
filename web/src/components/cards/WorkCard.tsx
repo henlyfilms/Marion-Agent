@@ -3,6 +3,7 @@ import { Check, ChevronDown, CircleAlert, CircleHelp, Eye, FilePen, FileText, Se
 import type { WorkAgent, WorkCardBody, WorkStep } from '@shared/types';
 import { modelLabel } from '@shared/model-label';
 import { ProviderLogo } from '../ProviderLogo';
+import { UsageRings } from './UsageRings';
 
 const elapsed = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -125,6 +126,7 @@ export function WorkCard({ body }: { body: WorkCardBody }) {
             <span>{running ? `${names(body.agents).join(' and ')} ${body.agents.length > 1 ? 'are' : 'is'} working` : `${who}${body.status === 'done' ? ' · done' : ''}`}</span>
           )}
         </span>
+        <UsageRings agents={body.agents} />
         <span className={`work-card__status is-${body.status}`}>
           {running && <span className="work-card__pulse" aria-hidden="true" />}
           {running ? time : `${STATUS[body.status]} · ${time}`}

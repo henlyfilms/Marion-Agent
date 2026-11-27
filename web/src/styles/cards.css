@@ -77,6 +77,33 @@
 .work-card__who .work-card__model { color: var(--color-text-primary); font-weight: 500; }
 /* Effort is extra detail: dropped first when the card is narrow (the model always stays). */
 @container work-card (max-width: 460px) { .work-card__who .work-card__effort { display: none; } }
+/* Task usage + session context rings (UsageRings.tsx): blue at low usage, red near the top. */
+.work-meters { position: relative; display: inline-flex; align-items: center; gap: 8px; flex: none; height: 22px; padding: 0 2px; border-radius: 6px; outline: none; cursor: default; }
+.work-meters:focus-visible { box-shadow: 0 0 0 2px var(--color-focus-ring, #3b82f6); }
+.work-meter { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-text-secondary); white-space: nowrap; }
+.work-meter > b { font-weight: 600; color: var(--color-text-primary); }
+.work-meter > small { font-size: 10.5px; color: var(--color-text-tertiary); }
+.usage-ring { flex: none; }
+.usage-ring circle { fill: none; stroke-width: 2.6; }
+.usage-ring__track { stroke: var(--color-border-secondary); opacity: .7; }
+.usage-ring__value { stroke-linecap: round; transition: stroke-dasharray 600ms var(--ease-ios), stroke 600ms linear; }
+.work-meters.is-live .usage-ring__value { animation: usage-ring-breathe 2.4s ease-in-out infinite; }
+@keyframes usage-ring-breathe { 50% { opacity: .72; } }
+@media (prefers-reduced-motion: reduce) { .usage-ring__value { transition: none; } .work-meters.is-live .usage-ring__value { animation: none; } }
+.work-meters__tip {
+  position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: max-content; max-width: min(300px, 80vw);
+  display: flex; flex-direction: column; gap: 2px; padding: 9px 11px; border-radius: 10px;
+  background: var(--color-bg-pane); box-shadow: var(--shadow-popover), 0 0 0 0.5px var(--color-border-secondary);
+  font-size: 12px; line-height: 17px; color: var(--color-ink); white-space: normal; font-variant-numeric: tabular-nums;
+  opacity: 0; visibility: hidden; transform: translateY(-3px); transition: opacity 140ms ease, transform 140ms ease, visibility 0s 140ms; pointer-events: none;
+}
+.work-meters__tip > strong { font-size: 12px; font-weight: 600; }
+.work-meters__tip > strong:not(:first-child) { margin-top: 6px; }
+.work-meters__tip small { font-size: 11px; color: var(--color-text-secondary); }
+.work-meters:hover .work-meters__tip, .work-meters:focus-visible .work-meters__tip { opacity: 1; visibility: visible; transform: none; transition: opacity 140ms ease, transform 140ms ease; }
+/* Narrow cards: captions go first, then the numbers; the rings always stay (details on hover/focus). */
+@container work-card (max-width: 520px) { .work-meter > small { display: none; } }
+@container work-card (max-width: 400px) { .work-meter > b { display: none; } .work-meters { gap: 5px; } }
 .work-node__model { margin-left: 2px; font-size: 11px; color: var(--color-text-tertiary); white-space: nowrap; }
 .work-card__status.is-done { background: var(--color-success-bg); color: var(--color-success-text); }
 .work-card__status.is-failed { background: var(--color-danger-bg); color: var(--color-danger-text); }

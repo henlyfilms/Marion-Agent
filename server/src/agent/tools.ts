@@ -382,7 +382,7 @@ export const TOOLS: ToolDef[] = [
         let used: number | undefined;
         // One relayed session at a time per project folder, so two runs never edit it (or its git state) together.
         const text = await withFolder(folder, ctx.signal, () => card.step(who, 'note', `Waiting for another session in ${folder?.label} to finish first`), () => subscriptionReply(selection, task, ctx.signal ?? new AbortController().signal, media.images, {
-          folder, handoffProgress: plan.carried ? [plan.carried] : [], handoffContinuation: ctx.turn?.handoff, onStep: card.feed(who), onModel: model => card.setModel('worker-0', model), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
+          folder, handoffProgress: plan.carried ? [plan.carried] : [], handoffContinuation: ctx.turn?.handoff, onStep: card.feed(who), onModel: model => card.setModel('worker-0', model), onTaskUsage: card.usage('worker-0'), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
           session: {
             id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
             request: prompt, title: miniTitle(prompt, args.title), folder: folder && { path: folder.path, label: folder.label },

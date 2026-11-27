@@ -2,6 +2,9 @@ import { TextDecoder } from 'node:util';
 import { db } from './db.js';
 import { newId } from './lib/ids.js';
 import type { ChatAttachment } from './types.js';
+import { MAX_ATTACHMENTS, TOO_MANY_ATTACHMENTS } from './attachment-limits.js';
+
+export { MAX_ATTACHMENTS } from './attachment-limits.js';
 
 const photoTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const textExtensions = /\.(?:txt|md|markdown|csv|tsv|json|xml|ya?ml|log|html?|css|[cm]?js|tsx?|py|sh|sql)$/i;
@@ -11,10 +14,10 @@ const maxText = 256 * 1024;
 /**
  * A screen recording (QuickTime .mov, MP4, WebM). Models see sampled frames; the original stays in the chat.
  * A few minutes of macOS screen recording is well over 64 MB, so the limit is generous. One message may carry
- * up to two recordings of this size (the request limit below), plus a few photos and text files.
+ * up to two recordings of this size (the request limit below), plus photos and text files up to 30 files in all.
  */
 export const maxVideo = 256 * 1024 * 1024;
-export const attachmentBodyLimit = 2 * maxVideo + 4 * maxPhoto + 4 * maxText + 64 * 1024;
+export const attachmentBodyLimit = 2 * maxVideo + MAX_ATTACHMENTS * maxPhoto + MAX_ATTACHMENTS * maxText + 64 * 1024;
 
 export type UploadedAttachment = ChatAttachment & { data: Buffer };
 
@@ -34,7 +37,7 @@ function videoType(bytes: Buffer, name: string) {
 }
 
 export async function readAttachments(files: (File | string)[]): Promise<UploadedAttachment[]> {
-  if (files.length > 4) throw new Error('Add up to four attachments per message.');
+  if (files.length > MAX_ATTACHMENTS) throw new Error(TOO_MANY_ATTACHMENTS);
   return Promise.all(files.map(async file => {
     if (typeof file === 'string' || !file.size) throw new Error('Choose a file with content.');
     const name = (file.name.split(/[\\/]/).pop() || 'Attachment').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 180) || 'Attachment';

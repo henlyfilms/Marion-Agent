@@ -14,7 +14,8 @@ import { recordSessionEnd, type SessionFinish, type SessionTrack } from '../feat
 import type { UploadedAttachment } from '../attachments.js';
 import '../db-config.js';
 import { isDesktop } from '../lib/desktop-access.js';
-import type { ChatModel, ChatModelSelection, ChatProvider } from '../types.js';
+import type { ChatModel, ChatModelSelection, ChatProvider, WorkUsage } from '../types.js';
+import { TaskUsageMeter } from './task-usage.js';
 export { modelLabel } from '../model-label.js';
 
 export type SubscriptionProvider = Exclude<ChatProvider, 'local'>;
@@ -363,6 +364,8 @@ interface ReplyOptions {
   onModel?: (model: SubscriptionSelection) => void;
   /** Each step the CLI takes (a command, an edit, a file read…), for the live work feed. Costs nothing extra. */
   onStep?: (kind: StepKind, text: string) => void;
+  /** This run's task usage and session context as the CLI reports them (live, then final), for the work card. */
+  onTaskUsage?: (usage: WorkUsage) => void;
   /** When set, this run is kept in Marion Agent's Sessions (any provider); for Claude a short summary also goes to Marion Life. */
   session?: SessionTrack;
 }
@@ -467,6 +470,9 @@ async function spawnSubscriptionReply(
   if (!program) throw new Error(`Install ${labels[provider]} and check Settings → Models.`);
   const cwd = await mkdtemp(join(tmpdir(), 'marion-provider-'));
   const folder = options.folder;
+  // Usage for the work card, read from the same JSON lines (no extra calls).
+  const meter = options.onTaskUsage ? new TaskUsageMeter(provider, model) : undefined;
+  const measure = (message: unknown) => { if (meter?.feed(message)) { const usage = meter.value(); if (usage) options.onTaskUsage?.(usage); } };
   // Claude and Gemini builders learn about public GitHub access from the task (Codex gets it in its base instructions).
   if (folder && provider !== 'codex') prompt += `\n\n${GITHUB_ACCESS_LINE}`;
   // No time limit of any kind (wall-clock, silence or idle): a relayed session runs until it finishes, fails or the
@@ -485,6 +491,7 @@ async function spawnSubscriptionReply(
       const chosen = catalog.find(option => option.id === model)
         ?? (model === DEFAULT_SUBSCRIPTION_MODELS[provider] ? catalog[0] : undefined);
       const runModel = chosen?.id ?? model;
+      if (meter) meter.model = runModel;
       args.push('--model', runModel);
       // No saved effort (older bots, first run): high, like everywhere else.
       const baseEffort = effort ?? (chosen ? preferredEffort(chosen.efforts) : DEFAULT_SUBSCRIPTION_EFFORT);
@@ -526,7 +533,7 @@ async function spawnSubscriptionReply(
 
     try {
       if (provider === 'codex') {
-        try { return await codexReply(lines, write, folder?.path ?? cwd, prompt, selection, codexImages, options); }
+        try { return await codexReply(lines, write, folder?.path ?? cwd, prompt, selection, codexImages, options, measure); }
         catch (error) { checkUsageLimit(error, diagnostic); throw error; }
       }
       if (provider === 'claude' && images.length) {
@@ -541,6 +548,7 @@ async function spawnSubscriptionReply(
       }
       for await (const line of lines) {
         if (options.onStep) (provider === 'claude' ? claudeSteps : geminiSteps)(line, options.onStep);
+        if (meter) measure(parseLine(line));
         if (provider === 'claude') {
           const message = parseLine<ClaudeResult>(line);
           if (message?.type !== 'result') continue;
@@ -648,6 +656,7 @@ export function parseLine<T = ProviderMessage>(line: string): T | undefined {
 
 async function codexReply(
   lines: AsyncIterable<string>, write: (value: unknown) => void, cwd: string, prompt: string, selection: SubscriptionSelection, images: { type: string; path: string }[], options: ReplyOptions,
+  measure: (message: unknown) => void = () => {},
 ): Promise<string> {
   let threadId: string | undefined;
   let actualEffort = selection.effort;
@@ -677,6 +686,8 @@ async function codexReply(
   for await (const line of lines) {
     const message = parseLine(line);
     if (!message) continue;
+    // Token usage carries the thread id; plan limits are account-wide (one ephemeral thread per process).
+    measure(message);
     const { id, method, params, result, error } = message;
     if (typeof id !== 'undefined' && method) {
       write({ id, error: { code: -32601, message: 'Unavailable in Marion subscription chat' } });

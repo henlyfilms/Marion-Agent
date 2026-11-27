@@ -251,6 +251,31 @@ export interface WorkAgent {
   /** The exact model in use, short ("Opus 5.5", "6.2 Sol", "Gemini 4 Neon"); updated once the CLI resolves it. */
   modelLabel?: string;
   effort?: string | null;
+  /** What this agent's run used so far (live while it works, kept on the finished card). */
+  usage?: WorkUsage;
+}
+
+/**
+ * One builder run's usage, read from what Claude, Codex or Gemini print while they work (no extra model calls).
+ * Tokens follow one convention for every CLI: `input` is fresh (uncached) input, `cached` cache reads,
+ * `cacheWrite` cache writes and `output` includes reasoning; `total` is their sum.
+ */
+export interface WorkUsage {
+  tokens: { input: number; cached: number; cacheWrite: number; output: number; reasoning: number; total: number };
+  /** API-equivalent cost when the CLI reports one (Claude Code does). */
+  costUsd?: number;
+  /** A plan limit window the CLI reported during the run: where it started and where it is now. */
+  limit?: { label: string; startPercent: number; usedPercent: number; resetsAt?: number };
+  /** The session's context: tokens in its latest request and the model's window. */
+  context?: { tokens: number; window: number; percent: number; windowKnown: boolean };
+  /**
+   * 0–100, drives the task ring and its blue → red color: the share of the plan limit this run took when the CLI
+   * reported the limit twice, otherwise cost-weighted tokens against a large task budget.
+   */
+  taskPercent: number;
+  taskBasis: 'limit' | 'tokens';
+  /** False once the run has finished. */
+  live: boolean;
 }
 export interface WorkStep { at: number; agent: string; kind: 'command' | 'edit' | 'read' | 'search' | 'note' | 'review' | 'approve' | 'error' | 'question'; text: string }
 export interface WorkPhase { title: string; status: 'pending' | 'running' | 'done' | 'failed' }
