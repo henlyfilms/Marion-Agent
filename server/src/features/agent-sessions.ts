@@ -224,10 +224,18 @@ export function listSessions(userId: string, query: SessionQuery = {}): MarionSe
     .filter(session => !query.status || session.status === query.status);
   const relays = query.type === 'chat' || query.status === 'active' || query.status === 'archived' ? [] : relaySessions(userId, query, limit);
   const live = (s: MarionSession) => Number(s.status === 'running' || s.status === 'waiting');
-  return [...chats, ...relays]
-    .sort((a, b) => live(b) - live(a) || b.updatedAt - a.updatedAt)
-    .slice(0, limit);
+  const order = (a: MarionSession, b: MarionSession) => live(b) - live(a) || b.updatedAt - a.updatedAt;
+  const shown = [...chats, ...relays].sort(order).slice(0, limit);
+  // Cloud runs are few and easy to lose: busy chat models or many local builder runs used to push them out of the All and
+  // Builders windows. The newest Cloud runs this query allows are always kept, after the usual window.
+  if (query.kind || query.type === 'chat' || (query.provider && query.provider !== 'claude') || query.status === 'active' || query.status === 'archived') return shown;
+  const have = new Set(shown.map(s => s.id));
+  const cloud = relaySessions(userId, { ...query, kind: 'cloud' }, CLOUD_PINNED).filter(s => !have.has(s.id));
+  return cloud.length ? [...shown, ...cloud].sort(order) : shown;
 }
+
+/** How many recent Cloud runs every session list keeps, however many newer rows it has. */
+export const CLOUD_PINNED = 50;
 
 /** The messages of one bot conversation (any generation), oldest first, trimmed for a preview. */
 export function chatSessionMessages(userId: string, botId: string, generation: number, limit = 40) {

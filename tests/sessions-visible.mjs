@@ -78,7 +78,17 @@ try {
   for (let i = 0; i < 250; i++) run(`gem-${i}`, 'gemini', 'subscription_bot', t0 + 10_000 + i);
 
   const everything = S.listSessions(userId, { limit: 200 });
-  assert.ok(!everything.some(s => s.provider === 'claude'), 'precondition: chat-model turns crowd Claude out of the All window');
+  assert.ok(!everything.some(s => s.id === 'relay:claude-ask'), 'precondition: chat-model turns crowd older runs out of the All window');
+  assert.ok(everything.some(s => s.id === 'relay:claude-cloud' && s.kind === 'cloud'), 'All: Cloud runs stay listed however many newer rows there are');
+  assert.equal(everything.filter(s => s.id === 'relay:claude-cloud').length, 1, 'once');
+  assert.ok(!S.listSessions(userId, { type: 'chat', limit: 200 }).some(s => s.kind === 'cloud'), 'Bot chats never get Cloud rows');
+  assert.ok(!S.listSessions(userId, { provider: 'codex', limit: 200 }).some(s => s.kind === 'cloud'), 'nor Codex');
+  // Builders: 250 newer local builder runs don't push the Cloud run out either.
+  for (let i = 0; i < 250; i++) run(`codex-b-${i}`, 'codex', 'orchestration', t0 + 20_000 + i);
+  const crowded = S.listSessions(userId, { type: 'builders', limit: 200 });
+  assert.ok(crowded.some(s => s.id === 'relay:claude-cloud'), 'Builders: Cloud runs stay listed');
+  assert.ok(S.listSessions(userId, { limit: 200 }).some(s => s.id === 'relay:claude-cloud'), 'All, crowded by builders too');
+  db.prepare("DELETE FROM agent_sessions WHERE id LIKE 'codex-b-%'").run();
   const claudeRuns = S.listSessions(userId, { provider: 'claude', limit: 200 });
   assert.deepEqual(claudeRuns.map(s => s.id).sort(), ['relay:claude-ask', 'relay:claude-cloud'], 'the Claude tab gets its own rows, Cloud included');
   assert.equal(claudeRuns.find(s => s.id === 'relay:claude-cloud').kind, 'cloud');
@@ -121,6 +131,20 @@ try {
   S.beginAgentSession({ id: 'cloud-wait', kind: 'cloud', userId, botId: 'bot_a', request: 'Port the CLI', folder: { path: 'https://github.com/octo/cli', label: 'octo/cli' } }, 'claude');
   const started = S.listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:cloud-wait');
   assert.equal(started.status, 'running'); assert.equal(started.error, null, 'the waiting note clears once it runs');
+
+  // ---------- Sessions view (web): Cloud rows pass the All and Builders filters and are labelled Cloud ----------
+  const { readFileSync } = await import('node:fs');
+  const src = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const marion = src('web/src/components/sessions/MarionSessions.tsx');
+  const view = src('web/src/components/sessions/SessionsView.tsx');
+  assert.match(marion, /export const isBuilder = \(s: [^)]*\) => s\.type === 'relay' && s\.kind !== 'subscription_bot';/, 'Builders = every relayed worker, Cloud included');
+  assert.match(marion, /export const isCloud = \(s: [^)]*\) => s\.kind === 'cloud';/);
+  assert.match(view, /return filter === 'all' \|\| \(filter === 'builders' \? isBuilder\(s\)/, 'All keeps every row; Builders uses isBuilder');
+  assert.match(view, /if \(filter === 'chat' \|\| filter === 'relay' \|\| filter === 'builders'\) return \{ type: filter, limit: 200 \};/, 'Builders asks the server for builders');
+  assert.match(view, /\{ id: 'builders', label: 'Builders' \}, \{ id: 'cloud', label: 'Cloud' \}/, 'Builders and Cloud tabs');
+  assert.match(marion, /isCloud\(s\) && <span className="msession-cloudtag" title="Claude Cloud: runs on GitHub">Cloud<\/span>/, 'Cloud rows are tagged in every list');
+  assert.match(marion, /s\.cloudUrl && <Detail label="Cloud session"><a href=\{s\.cloudUrl\}/, 'and link to the Cloud session');
+  assert.match(src('web/src/styles/sessions.css'), /\.msession-cloudtag \{/);
 
   console.log('sessions-visible: all checks passed');
 } finally {

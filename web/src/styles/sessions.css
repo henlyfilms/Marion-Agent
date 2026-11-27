@@ -127,6 +127,11 @@
 }
 .msession-open:hover { background: var(--color-bg-hover); }
 .msession-badge.is-waiting { background: var(--color-warn-bg); color: var(--color-warn-text); }
+/* Cloud runs are tagged in every list (All, Builders, Cloud, Claude) so they read apart from local runs at a glance. */
+.msession-cloudtag {
+  display: inline-flex; align-items: center; height: 16px; margin-right: 6px; padding: 0 6px; border-radius: var(--radius-full); vertical-align: 1px;
+  background: color-mix(in srgb, #3b82f6 14%, transparent); color: #2f6fe0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.2px;
+}
 /* Claude Cloud runs on "This Mac": started here, running on GitHub. */
 .mac-cloud { margin-bottom: 14px; }
 .mac-cloud__title { display: flex; align-items: baseline; gap: 8px; padding: 2px 14px 6px; font-size: 12px; font-weight: 650; letter-spacing: 0.3px; text-transform: uppercase; color: var(--color-text-tertiary); }
@@ -174,8 +179,12 @@
 }
 .sidebar__float .sidebar-island:hover { background: color-mix(in srgb, var(--color-ink) 8%, color-mix(in srgb, var(--sidebar-surface) 86%, transparent)); }
 .sidebar__float .sidebar-island.is-active { background: color-mix(in srgb, var(--color-ink) 12%, color-mix(in srgb, var(--sidebar-surface) 86%, transparent)); }
-.sidebar__float .update-pill--sidebar { background: color-mix(in srgb, var(--palette-accent) 16%, var(--sidebar-surface)); }
-.sidebar__float .update-pill--sidebar:hover:not(:disabled) { background: color-mix(in srgb, var(--palette-accent) 24%, var(--sidebar-surface)); }
+/* Update available floats like Tasks / Sessions: a translucent, frosted pill (never a solid block), so chats stay visible behind it. */
+.sidebar__float .update-pill--sidebar {
+  background: color-mix(in srgb, var(--palette-accent) 16%, color-mix(in srgb, var(--sidebar-surface) 72%, transparent));
+  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
+}
+.sidebar__float .update-pill--sidebar:hover:not(:disabled) { background: color-mix(in srgb, var(--palette-accent) 24%, color-mix(in srgb, var(--sidebar-surface) 78%, transparent)); }
 @media (max-width: 700px) {
   .sidebar { --sidebar-surface: var(--color-bg-chrome); }
   .sidebar__list { order: 1; }

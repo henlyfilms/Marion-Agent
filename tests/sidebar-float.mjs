@@ -30,6 +30,11 @@ assert.match(floatRule, /position: absolute/, 'the overlay floats over the list'
 assert.match(floatRule, /background: none/, 'no solid background behind the pills');
 assert.match(floatRule, /pointer-events: none/, 'the transparent wrapper lets clicks/scrolls through');
 assert.match(css, /\.sidebar__float :is\(\.sidebar-island, \.update-pill, button, a\) \{ pointer-events: auto; \}/, 'the pills stay clickable');
+for (const selector of ['.sidebar__float .sidebar-island', '.sidebar__float .update-pill--sidebar']) {
+  const body = rule(selector);
+  assert.match(body, /background: color-mix\([^;]*transparent\)\)?;/, `${selector}: translucent, never a solid block`);
+  assert.match(body, /backdrop-filter: blur/, `${selector}: frosted`);
+}
 console.log('PASS source: floating, transparent, click-through Tasks/Sessions/Update overlay over the chat list.');
 
 // ---------- measured check ----------

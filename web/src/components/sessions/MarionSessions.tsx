@@ -123,7 +123,7 @@ function Details({ s, onOpenBot }: { s: MarionSession; onOpenBot?: (botId: strin
         {relay && (s.modelLabel || s.model) && <Detail label="Model">{s.modelLabel || s.model}{s.effort ? ` · ${s.effort}` : ''}</Detail>}
         {s.kind === 'cloud' && <Detail label="Runs on">Claude Cloud (GitHub)</Detail>}
         {s.cloudUrl && <Detail label="Cloud session"><a href={s.cloudUrl} target="_blank" rel="noreferrer">Open in Claude ↗</a></Detail>}
-        {s.folder && <Detail label={s.kind === 'cloud' ? 'Repository' : 'Folder'}>{s.kind === 'cloud' && /^https:\/\/github\.com\//.test(s.folder.path)
+        {s.folder && <Detail label={s.kind === 'cloud' || /^https:\/\/github\.com\//.test(s.folder.path) ? 'Repository' : 'Folder'}>{/^https:\/\/github\.com\//.test(s.folder.path)
           ? <a href={s.folder.path} target="_blank" rel="noreferrer">{s.folder.name} ↗</a> : <span title={s.folder.path}>{s.folder.name}</span>}</Detail>}
         <Detail label="Started">{dividerLabel(s.startedAt)}</Detail>
         {s.status !== 'running' && s.endedAt && <Detail label="Ended">{dividerLabel(s.endedAt)}</Detail>}
@@ -151,7 +151,7 @@ export function MarionSessionRow({ s, index, open, onToggle, showBot, onOpenBot 
       <button type="button" className={`session-row${open ? ' is-selected' : ''}`} aria-expanded={open} onClick={onToggle}>
         <Logo s={s} />
         <span className="session-row__text">
-          <span className="session-row__title">{s.title}</span>
+          <span className="session-row__title">{isCloud(s) && <span className="msession-cloudtag" title="Claude Cloud: runs on GitHub">Cloud</span>}{s.title}</span>
           <span className="session-row__meta">{who}</span>
         </span>
         <span className="msession-side">

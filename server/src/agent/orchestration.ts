@@ -11,6 +11,7 @@ import { localModel } from './models.js';
 import { orchestrationForBot } from './orchestration-settings.js';
 import { lastUsedPercent } from './subscription-usage.js';
 import { subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
+import { githubRepoArg, prepareRepoCheckout, type RepoFolder } from './github-checkout.js';
 
 /**
  * Multi-model orchestration ("Team").
@@ -42,9 +43,9 @@ const isCooling = (m: TeamMember) => (cooling.get(memberKey(m)) ?? 0) > Date.now
 // ---------- one model call, any provider ----------
 
 /** A single text reply from any model Marion can reach. Throws on failure. */
-export async function modelReply(selection: ChatModelSelection, prompt: string, signal: AbortSignal, onUsage?: (counts: TokenCounts) => void, images: UploadedAttachment[] = [], session?: SessionTrack): Promise<string> {
+export async function modelReply(selection: ChatModelSelection, prompt: string, signal: AbortSignal, onUsage?: (counts: TokenCounts) => void, images: UploadedAttachment[] = [], session?: SessionTrack, folder?: RepoFolder): Promise<string> {
   if (selection.provider !== 'local') {
-    return (await subscriptionReply(selection as SubscriptionSelection, prompt, signal, images, { onUsage, session })).trim();
+    return (await subscriptionReply(selection as SubscriptionSelection, prompt, signal, images, { onUsage, session, folder })).trim();
   }
   try {
     const response: any = await localModel.responses.create({
@@ -148,7 +149,7 @@ function memberPrompt(botId: string, member: TeamMember, members: TeamMember[], 
 type MemberResult = { member: TeamMember; text: string; handoffs: string[]; usage?: ResponseUsage[]; failed?: boolean };
 
 /** Run a task on a member; on a usage limit or failure, hand it to the next member. */
-async function runMember(members: TeamMember[], first: TeamMember, prompt: (m: TeamMember) => string, signal: AbortSignal, images: UploadedAttachment[] = [], track?: (m: TeamMember) => SessionTrack): Promise<MemberResult> {
+async function runMember(members: TeamMember[], first: TeamMember, prompt: (m: TeamMember) => string, signal: AbortSignal, images: UploadedAttachment[] = [], track?: (m: TeamMember) => SessionTrack, folder?: RepoFolder): Promise<MemberResult> {
   const tried = new Set<string>();
   const handoffs: string[] = [];
   let member: TeamMember | undefined = first;
@@ -159,7 +160,7 @@ async function runMember(members: TeamMember[], first: TeamMember, prompt: (m: T
     try {
       const input = prompt(current);
       let counts: TokenCounts | undefined;
-      const text = await modelReply(current, input, signal, value => { counts = value; }, images, track?.(current));
+      const text = await modelReply(current, input, signal, value => { counts = value; }, images, track?.(current), folder);
       if (!text) throw new Error('returned an empty reply');
       const usage: ResponseUsage[] = [];
       const { provider, model, effort, label } = current;
@@ -233,23 +234,34 @@ export async function teamDelegate(botId: string, args: any, signal: AbortSignal
   });
   // The owner's screenshots and screen-recording frames go to Claude, Codex and Gemini members too.
   const media = await relayMedia(botId);
-  if (chain) {
-    // Pass the baton: each member sees what the previous one produced (e.g. write → review → fix).
-    for (const step of plan) {
-      working(botId, [step.member.label]);
-      const prior = results.map(result => ({
-        member: result.member.label, result: result.text.slice(0, BOARD_CHARS), failed: Boolean(result.failed),
-      }));
-      const extra = [prior.length ? `Earlier steps in this assignment (JSON):\n${JSON.stringify(prior)}` : '', media.note].filter(Boolean).join('\n');
-      const result = await runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task, extra), signal, media.images, track(step.task));
-      show(botId, result);
-      results.push(result);
+  // A named GitHub repository: Marion clones it once into a scratch folder every Claude, Codex and Gemini member works in.
+  const repo = githubRepoArg(args?.repo);
+  const checkout = repo ? await prepareRepoCheckout(repo, signal) : undefined;
+  const folder = checkout?.folder;
+  if (checkout) media.note = [checkout.note, media.note].filter(Boolean).join('\n');
+  // Sessions show the repository the members worked on.
+  const inRepo = (of: (m: TeamMember) => SessionTrack) => (m: TeamMember): SessionTrack => ({ ...of(m), ...(folder ? { folder: { path: `https://github.com/${checkout!.repo}`, label: checkout!.repo } } : {}) });
+  try {
+    if (chain) {
+      // Pass the baton: each member sees what the previous one produced (e.g. write → review → fix).
+      for (const step of plan) {
+        working(botId, [step.member.label]);
+        const prior = results.map(result => ({
+          member: result.member.label, result: result.text.slice(0, BOARD_CHARS), failed: Boolean(result.failed),
+        }));
+        const extra = [prior.length ? `Earlier steps in this assignment (JSON):\n${JSON.stringify(prior)}` : '', media.note].filter(Boolean).join('\n');
+        const result = await runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task, extra), signal, media.images, inRepo(track(step.task)), folder);
+        show(botId, result);
+        results.push(result);
+      }
+    } else {
+      working(botId, plan.map(step => step.member.label));
+      const settled = await Promise.all(plan.map(step =>
+        runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task, media.note), signal, media.images, inRepo(track(step.task)), folder)));
+      for (const result of settled) { show(botId, result); results.push(result); }
     }
-  } else {
-    working(botId, plan.map(step => step.member.label));
-    const settled = await Promise.all(plan.map(step =>
-      runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task, media.note), signal, media.images, track(step.task))));
-    for (const result of settled) { show(botId, result); results.push(result); }
+  } finally {
+    await checkout?.cleanup();
   }
   setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() } });
   const ok = results.filter(r => !r.failed).length;

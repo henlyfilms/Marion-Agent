@@ -48,6 +48,14 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
 });
 `), { mode: 0o700 });
 
+// Fake git: "clones" any public repo (a README naming it) and refuses one called private-*, like GitHub without sign-in.
+writeFileSync(join(bin, 'git'), script(`
+fs.appendFileSync(${JSON.stringify(log('git'))}, JSON.stringify({ args, env: { GH_TOKEN: process.env.GH_TOKEN, GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT } }) + '\\n');
+const url = args.at(-2), target = args.at(-1);
+if (/private-/.test(url)) { console.error('fatal: could not read Username for https://github.com: terminal prompts disabled'); process.exit(128); }
+fs.mkdirSync(target, { recursive: true }); fs.writeFileSync(require('node:path').join(target, 'README.md'), 'readme of ' + url);
+`), { mode: 0o700 });
+
 const { db } = await import('../server/dist/db.js');
 await import('../server/dist/features/schema.js');
 const S = await import('../server/dist/agent/subscriptions.js');
@@ -135,9 +143,45 @@ try {
   const scratch = await T.repoScratch('octo/lib');
   assert.equal(scratch.write, true); assert.match(scratch.path, /marion-repo-/); assert.ok(existsSync(scratch.path));
   rmSync(scratch.path, { recursive: true, force: true });
+  assert.throws(() => T.githubRepoArg('../etc'), /owner\/repo/);
   const ask = T.TOOLS.find((tool) => tool.name === 'ask_subscription');
   assert.ok(ask.parameters.properties.repo, 'ask_subscription takes a GitHub repository');
-  console.log('PASS public GitHub for Claude, Codex and Gemini builders (GitHub-only where the CLI allows it, sandboxes kept), repo argument, no token leak');
+  for (const name of ['orchestrate', 'team_delegate']) assert.ok(T.TOOLS.find((tool) => tool.name === name).parameters.properties.repo, `${name} takes a GitHub repository`);
+
+  // ---- Marion clones a public repo itself, once, the same for every provider ----
+  const G = await import('../server/dist/agent/github-checkout.js');
+  const ready = await G.prepareRepoCheckout('octo/public-lib');
+  assert.ok(ready.checkout && existsSync(join(ready.checkout, 'README.md')), 'cloned into the scratch folder');
+  assert.ok(ready.checkout.startsWith(ready.folder.path) && ready.folder.write, 'the checkout sits in a writable scratch folder');
+  assert.match(ready.note, /already cloned it for you/); assert.ok(ready.note.includes(ready.checkout));
+  const gitRun = lines('git').at(-1);
+  assert.ok(gitRun.args.includes('--depth') && gitRun.args.includes('https://github.com/octo/public-lib.git'), 'shallow anonymous HTTPS clone');
+  assert.ok(gitRun.args.includes('credential.helper='), 'no credential helper');
+  assert.equal(gitRun.env.GH_TOKEN, undefined, 'no token to git'); assert.equal(gitRun.env.GIT_TERMINAL_PROMPT, '0', 'git never prompts');
+  await ready.cleanup(); assert.ok(!existsSync(ready.folder.path), 'scratch removed');
+  const refused = await G.prepareRepoCheckout('octo/private-lib');
+  assert.equal(refused.checkout, null, 'a failed clone does not throw');
+  assert.match(refused.note, /could not clone it ahead/); assert.match(refused.note, /git clone --depth 1 https:\/\/github\.com\/octo\/private-lib\.git/);
+  assert.ok(existsSync(refused.folder.path), 'the builder still gets its scratch folder'); await refused.cleanup();
+
+  // ---- ask_subscription with only a repo: every provider gets the same ready checkout as its working folder ----
+  db.prepare('INSERT INTO bots(id,user_id,name,label,description,instructions,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)').run('b1', 'u1', 'Quinn', 'Helper', '', '', 1000, 1000);
+  for (const provider of ['claude', 'codex', 'gemini']) {
+    const result = await ask.impl({ provider, prompt: 'Summarise the README', repo: 'https://github.com/octo/public-lib' }, { userId: 'u1', botId: 'b1', signal });
+    assert.ok(result.output.length > 0, `${provider} answered`);
+  }
+  const claudeAsk = lines('claude').at(-1), agyAsk = lines('agy').at(-1), [codexThread, codexTurn] = lines('codex').slice(-2);
+  for (const [name, text] of [['claude', claudeAsk.stdin], ['gemini', agyAsk.stdin], ['codex', codexTurn.params.input.map((part) => part.text ?? '').join('\n')]]) {
+    assert.match(text, /Marion already cloned it for you/, `${name} is told about the ready checkout`);
+    assert.match(text, /marion-repo-[^/\s]+\/public-lib/, `${name} gets the checkout path`);
+  }
+  assert.ok(claudeAsk.stdin.includes(S.GITHUB_ACCESS_LINE) && /Public GitHub|public GitHub/.test(agyAsk.stdin) && codexThread.params.baseInstructions.includes(S.GITHUB_ACCESS_LINE), 'and keep GitHub access');
+  assert.equal(codexTurn.params.sandboxPolicy.type, 'workspaceWrite', 'Codex can work in the checkout');
+  assert.ok(JSON.parse(flag(claudeAsk.args, '--settings')).sandbox.network, 'Claude sandbox keeps GitHub network');
+  assert.equal(JSON.parse(flag(agyAsk.args, '--settings')).sandboxAllowNetwork, true, 'Gemini terminal keeps GitHub network');
+  const scratchPaths = [...claudeAsk.stdin.matchAll(/(\S*marion-repo-[^/\s]+)/g)].map((m) => m[1]);
+  assert.ok(scratchPaths.length && scratchPaths.every((p) => !existsSync(p.replace(/[.,]$/, ''))), 'scratch checkout removed after the run');
+  console.log('PASS public GitHub for Claude, Codex and Gemini builders (GitHub-only where the CLI allows it, sandboxes kept), Marion-made checkout for ask_subscription/orchestrate/team, no token leak');
 } finally {
   rmSync(bin, { recursive: true, force: true });
 }

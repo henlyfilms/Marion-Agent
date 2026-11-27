@@ -24,6 +24,8 @@ import { getDraft, onDraftChange, setDraft } from '../lib/drafts';
 import { useMessageActions } from '../lib/messageActions';
 import { ATTACH_EVENT, SCREENSHOT_SHORTCUT_LABEL } from '../lib/screenshots';
 import { isOfflineError, newClientId, outbox, useOnline, useQueuedPrompts } from '../lib/offlineQueue';
+import { insertMention, matchMentionBots, mentionAt } from '../lib/mentions';
+import { BotAvatarFor } from '../avatar/BotAvatar';
 
 const MAX_H = 200;
 const fileDrafts = new Map<string, File[]>();
@@ -108,6 +110,13 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const [micError, setMicError] = useState<string | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState('');
+  /** "@" bot mentions: the caret (the picker follows it), the highlighted bot, and a mention closed with Esc. */
+  const [caret, setCaret] = useState<number | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
+  const pendingCaret = useRef<number | null>(null);
+  const allBots = useStore(s => s.bots);
+  const [roomMemberIds, setRoomMemberIds] = useState<Set<string> | null>(null);
   const [menu, setMenu] = useState<'attachments' | 'commands' | null>(null);
   const [files, setFiles] = useState(() => fileDrafts.get(bot.id) ?? []);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -277,6 +286,22 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const anchor = useComposerDictation(s => s.anchor?.botId === bot.id ? s.anchor.at : undefined);
   const span = liveSpan(text, liveWords, anchor);
   const shown = withSpan(text, span);
+  /** Puts an edit of the box (typed, or a picked @mention) into the draft, keeping dictation in step. */
+  const applyEdit = (value: string, caretAt?: number) => {
+    // Typing, backspacing and deleting never stop dictation: the edit goes into the text you wrote, and the
+    // place dictated words will land follows it.
+    // Typing inside, right after or past the words being heard freezes them as plain text where they are (nothing
+    // jumps, nothing is added twice) and dictation carries on after what was typed.
+    const plan = planEdit(text, span, liveWords, value, caretAt);
+    if (plan.freeze) composerDictation.freeze(bot.id, plan.freeze.anchor);
+    else {
+      composerDictation.noteEdit(bot.id, plan.edit);
+      // Deleting words that are still being heard removes them for good (the engine's next update keeps them gone).
+      const heardCut = deletedHeard(shown, value, span, liveWords);
+      if (heardCut) composerDictation.cutHeard(heardCut);
+    }
+    setText(plan.text);
+  };
   // Setting the box's value moves the browser caret to the end, so remember where it was and put it back: right after
   // the live words when it was on them, otherwise where the user left it.
   const domBefore = useRef<{ value: string; caret: number; focused: boolean }>();
@@ -427,6 +452,38 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const slashOpen = slashMatches.length > 0;
   const slashActive = Math.min(slashIndex, Math.max(0, slashMatches.length - 1));
   useEffect(() => { setSlashIndex(0); }, [slashQuery]);
+  // A group chat offers its members first (an @mention asks just them); a 1-on-1 chat offers the rest of the team.
+  useEffect(() => {
+    setRoomMemberIds(null);
+    if (!room) return;
+    let alive = true;
+    api.roomMembers(bot.id).then(r => { if (alive) setRoomMemberIds(new Set(r.members.map(m => m.id))); }).catch(() => {});
+    return () => { alive = false; };
+  }, [bot.id, room]);
+  const mentionBots = allBots.filter(other => other.kind !== 'room' && other.id !== bot.id
+    && (!room || !roomMemberIds?.size || roomMemberIds.has(other.id)));
+  // Typing "@" at the start or after a space opens the Bots list at the caret, filtered as you type (not while words
+  // are still being dictated, and not inside an email address).
+  const mention = !liveWords && slashQuery === null ? mentionAt(shown, caret) : null;
+  const mentionMatches = mention && mention.start !== mentionDismissed ? matchMentionBots(mentionBots, mention.query, { prefer: roomMemberIds ?? undefined }) : [];
+  const mentionOpen = mentionMatches.length > 0;
+  const mentionActive = Math.min(mentionIndex, Math.max(0, mentionMatches.length - 1));
+  useEffect(() => { setMentionIndex(0); }, [mention?.start, mention?.query]);
+  useEffect(() => { if (mentionDismissed !== null && mention?.start !== mentionDismissed) setMentionDismissed(null); }, [mention?.start, mentionDismissed]);
+  const pickMention = (picked: Bot) => {
+    if (!mention) return;
+    const next = insertMention(shown, mention, picked.name);
+    pendingCaret.current = next.caret;
+    setCaret(next.caret);
+    applyEdit(next.text, next.caret);
+    ref.current?.focus();
+  };
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || pendingCaret.current === null) return;
+    el.setSelectionRange(pendingCaret.current, pendingCaret.current);
+    pendingCaret.current = null;
+  });
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 4000);
@@ -527,6 +584,21 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           {lastMicTone.current === 'error' && <button type="button" className="mic-note__close" tabIndex={micText ? 0 : -1} onClick={() => setMicError(null)} aria-label="Dismiss"><Icon name="close" size={9} /></button>}
         </div>
       </div>
+      {mentionOpen && (
+        <div className="slash-menu mention-menu" id={`${inputId}-mentions`} role="listbox" aria-label="Mention a Bot">
+          <div className="slash-menu__header">{room && roomMemberIds?.size ? 'Members' : 'Bots'}</div>
+          {mentionMatches.map((other, index) => (
+            <button key={other.id} id={`${inputId}-mention-${index}`} type="button" role="option" aria-selected={index === mentionActive} tabIndex={-1}
+              className={`slash-menu__item${index === mentionActive ? ' is-active' : ''}`}
+              onMouseDown={event => event.preventDefault()} onMouseEnter={() => setMentionIndex(index)} onClick={() => pickMention(other)}>
+              <span className="slash-menu__icon mention-menu__avatar" aria-hidden="true"><BotAvatarFor bot={other} size={20} /></span>
+              <span className="slash-menu__label">@{other.name}</span>
+              {other.label && <span className="slash-menu__detail">{other.label}</span>}
+            </button>
+          ))}
+          <div className="slash-menu__footer"><kbd>↑</kbd><kbd>↓</kbd> to move · <kbd>Enter</kbd> to mention · <kbd>Esc</kbd> to close</div>
+        </div>
+      )}
       {slashOpen && (
         <div className="slash-menu" id={`${inputId}-commands`} role="listbox" aria-label="Commands">
           <div className="slash-menu__header">Commands</div>
@@ -576,28 +648,17 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
             rows={1}
             value={shown}
             placeholder={`Message ${displayName(bot)}`}
-            onChange={(e) => {
-              // Typing, backspacing and deleting never stop dictation: the edit goes into the text you wrote, and the
-              // place dictated words will land follows it.
-              // Typing inside, right after or past the words being heard freezes them as plain text where they are (nothing
-              // jumps, nothing is added twice) and dictation carries on after what was typed.
-              const plan = planEdit(text, span, liveWords, e.target.value, e.target.selectionStart ?? undefined);
-              if (plan.freeze) composerDictation.freeze(bot.id, plan.freeze.anchor);
-              else {
-                composerDictation.noteEdit(bot.id, plan.edit);
-                // Deleting words that are still being heard removes them for good (the engine's next update keeps them gone).
-                const heardCut = deletedHeard(shown, e.target.value, span, liveWords);
-                if (heardCut) composerDictation.cutHeard(heardCut);
-              }
-              setText(plan.text);
-            }}
+            onChange={(e) => { setCaret(e.target.selectionStart); applyEdit(e.target.value, e.target.selectionStart ?? undefined); }}
             onSelect={(e) => {
+              setCaret(e.currentTarget.selectionStart === e.currentTarget.selectionEnd ? e.currentTarget.selectionStart : null);
               // Moving the caret into the words being heard freezes them where they are, so the next update can't pull the caret out.
               const el = e.currentTarget;
               if (composing || el.selectionStart !== el.selectionEnd || !caretInsideHeard(span, liveWords, el.selectionStart)) return;
               composerDictation.freeze(bot.id, span.end);
               setText(shown);
             }}
+            onBlur={() => setCaret(null)}
+            onFocus={e => setCaret(e.currentTarget.selectionStart === e.currentTarget.selectionEnd ? e.currentTarget.selectionStart : null)}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
             onPaste={(e) => {
@@ -607,6 +668,16 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
               addFiles(pasted.map(named));
             }}
             onKeyDown={(e) => {
+              if (mentionOpen && !e.nativeEvent.isComposing) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  const step = e.key === 'ArrowDown' ? 1 : -1;
+                  setMentionIndex((mentionActive + step + mentionMatches.length) % mentionMatches.length);
+                  return;
+                }
+                if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') { e.preventDefault(); pickMention(mentionMatches[mentionActive]); return; }
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMentionDismissed(mention?.start ?? null); return; }
+              }
               if (slashOpen && !e.nativeEvent.isComposing) {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                   e.preventDefault();
@@ -619,8 +690,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
               }
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
             }}
-            aria-controls={slashOpen ? `${inputId}-commands` : undefined}
-            aria-activedescendant={slashOpen ? `${inputId}-command-${slashActive}` : undefined} aria-autocomplete="list"
+            aria-controls={mentionOpen ? `${inputId}-mentions` : slashOpen ? `${inputId}-commands` : undefined}
+            aria-activedescendant={mentionOpen ? `${inputId}-mention-${mentionActive}` : slashOpen ? `${inputId}-command-${slashActive}` : undefined} aria-autocomplete="list"
             aria-label={`Message ${bot.name}`}
           />
         </div>

@@ -19,6 +19,7 @@ import { quoteText, useMessageActions } from '../lib/messageActions';
 import { isBlankQuery } from '../lib/chatSearch';
 import { useChatSearch } from '../lib/chatSearchStore';
 import { useChatSearchHighlights } from '../lib/chatSearchDom';
+import { mentionSegments } from '../lib/mentions';
 
 /** A screen recording in a message. If the browser can't decode it (e.g. HEVC .mov), it becomes a download chip instead of a blank player. */
 function ChatVideo({ url, name }: { url: string; name: string }) {
@@ -111,7 +112,7 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
               :<a key={file.id} href={url} download={file.name} className="bubble__file"><Paperclip size={15} /> {file.name}</a>;
           })}
         </div>}
-        {side === 'right' ? (b.text && <div className="bubble__plain">{b.text}</div>) : <Markdown text={b.text || ' '} />}
+        {side === 'right' ? (b.text && <div className="bubble__plain"><MentionText text={b.text} /></div>) : <Markdown text={b.text || ' '} />}
         {b.citations && b.citations.length > 0 && (
           <div className="bubble__cites">
             {b.citations.filter((c) => /^https?:\/\//i.test(c.url)).slice(0, 6).map((c, i) => {
@@ -137,6 +138,14 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
     </div>
   );
 });
+
+/** A sent message with its @mentions of the team's Bots marked (the text itself is unchanged, so copy and search work). */
+function MentionText({ text }: { text: string }) {
+  const names = useStore(s => s.bots.filter(bot => bot.kind !== 'room').map(bot => bot.name).join('\n'));
+  const parts = useMemo(() => mentionSegments(text, names ? names.split('\n') : []), [text, names]);
+  if (parts.length === 1 && !parts[0].mention) return <>{text}</>;
+  return <>{parts.map((part, i) => part.mention ? <span key={i} className="bubble__mention">{part.text}</span> : <Fragment key={i}>{part.text}</Fragment>)}</>;
+}
 
 function SenderLabel({ from }: { from: NonNullable<MessageBody['from']> }) {
   const bot = useStore((s) => (from.kind === 'bot' ? s.bots.find((b) => b.id === from.id) : undefined));

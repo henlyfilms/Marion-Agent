@@ -24,6 +24,12 @@ for (const { path, text } of web) {
   assert.doesNotMatch(text, /CloudSessionModal|BotSessionsButton|BotSessionsDrawer|chat__sessions|utility-cloud-action/, `${path}: no leftovers of the header Sessions button or Cloud modal`);
 }
 assert.ok(!existsSync(new URL('../web/src/components/sessions/BotSessionsPanel.tsx', import.meta.url)), 'the header-only Sessions drawer is removed');
+// The button's own server route is gone too; Cloud starts only from the bot tool (and continues from its cards).
+const routes = read('server/src/routes-features.ts');
+assert.doesNotMatch(routes, /featuresApi\.post\('\/bots\/:id\/cloud-session'/, 'no route left for the removed button');
+assert.match(routes, /\/bots\/:id\/cloud-cards\/:seq/, 'Cloud cards still act');
+assert.match(routes, /\/bots\/:id\/cloud-sessions\/:session\/stop/, 'Cloud sessions can still be stopped');
+assert.doesNotMatch(read('web/src/lib/featuresApi.ts'), /startCloud|\/cloud-session[`'"]/, 'no client call to start Cloud from the UI');
 const chatView = read('web/src/components/ChatView.tsx');
 assert.match(chatView, /className="chat__pill-name">\{bot\.name\}/, 'the nametag shows the bot name');
 assert.doesNotMatch(chatView, /Sessions/, 'no Sessions button in the chat header');

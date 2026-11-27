@@ -1,9 +1,7 @@
 import { createGitHubRepo } from '../features/github-repos.js';
 import { launchCloudWork } from '../features/cloud-cards.js';
-import { exactRepo, repoHint } from '../features/cloud-repo.js';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join as joinPath } from 'node:path';
+import { repoHint } from '../features/cloud-repo.js';
+import { githubRepoArg, prepareRepoCheckout, type RepoCheckout } from './github-checkout.js';
 import { isDesktop } from '../lib/desktop-access.js';
 import { grok } from './models.js';
 import { modelLabel, subscriptionReply, subscriptionSelection } from './subscriptions.js';
@@ -119,19 +117,7 @@ export const backgroundScript = (job: string, command: string) => {
   return `mkdir -p /workspace/.jobs && cd /workspace || exit 1\n( $(command -v setsid || true) bash -c ${quoted} > /workspace/.jobs/${job}.log 2>&1 < /dev/null; echo $? > /workspace/.jobs/${job}.exit ) > /dev/null 2>&1 & echo $!`;
 };
 
-/** "owner/repo" or a GitHub URL from a tool argument; anything else is refused with a clear message. */
-export function githubRepoArg(value: unknown): string | null {
-  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null;
-  const repo = exactRepo(value) ?? (typeof value === 'string' ? repoHint(value) : null);
-  if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Give the GitHub repository as owner/repo or a github.com URL.');
-  return repo;
-}
-
-/** An empty folder of Marion's own for a builder to clone a GitHub repository into; removed when the run ends. */
-export async function repoScratch(repo: string) {
-  const path = await mkdtemp(joinPath(tmpdir(), 'marion-repo-'));
-  return { path, label: `GitHub ${repo}`, write: true };
-}
+export { githubRepoArg, repoScratch } from './github-checkout.js';
 
 export const TOOLS: ToolDef[] = [
   {
@@ -339,7 +325,7 @@ export const TOOLS: ToolDef[] = [
       provider: { type: 'string', enum: ['claude', 'codex', 'gemini'] },
       prompt: { type: 'string', description: 'The full task. The provider knows nothing else, so include every detail it needs' },
       folder: { type: 'string', description: 'Optional: a folder on this Mac to work in, by name (e.g. "Marion Agent") or full path. It does not need to be shared with you; the owner approves it' },
-      repo: { type: 'string', description: 'Optional: a GitHub repository to inspect or use (owner/repo or a github.com URL; public ones always work). Without a folder, the assistant gets an empty scratch folder to clone it into' },
+      repo: { type: 'string', description: 'Optional: a GitHub repository to inspect or use (owner/repo or a github.com URL; public ones always work, on Claude, Codex and Gemini alike). Without a folder, Marion clones it into a scratch folder the assistant works in; nothing on this Mac needs sharing' },
       title: { type: 'string', description: 'Optional: a mini title of 3-8 words for the work card (e.g. "Fix login redirect"). Derived from the prompt if omitted' },
       new_session: { type: 'boolean', description: 'Optional: true to start this provider from a fresh session. Marion also does that by itself when the folder changes, the topic is clearly different, or the session has grown large' },
     }, ['provider', 'prompt']),
@@ -350,9 +336,10 @@ export const TOOLS: ToolDef[] = [
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
       const repo = githubRepoArg(args.repo);
-      // A named repository without a folder: a fresh scratch folder (nothing of the owner's) to clone it into.
-      const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : repo ? await repoScratch(repo) : undefined;
-      const scratch = !args.folder && folder ? folder.path : undefined;
+      // A named repository without a folder: Marion clones it into a fresh scratch folder (nothing of the owner's) that
+      // the assistant works in, the same way for every provider.
+      const checkout: RepoCheckout | undefined = !args.folder && repo ? await prepareRepoCheckout(repo, ctx.signal) : undefined;
+      const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : checkout?.folder;
       const selection = subscriptionSelection(ctx.userId, provider);
       const name = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[provider as 'claude' | 'codex' | 'gemini'];
       const generation = getBotRow(ctx.botId)?.generation ?? 0;
@@ -364,7 +351,7 @@ export const TOOLS: ToolDef[] = [
         plan.carried,
         prompt,
         media.note,
-        repo ? `GitHub repository: ${repo} (https://github.com/${repo}).${scratch ? ' Clone it into your working folder (git clone --depth 1 is enough to read it) and work from that copy.' : ''}` : '',
+        checkout ? checkout.note : repo ? `GitHub repository: ${repo} (https://github.com/${repo}). Clone it into your working folder if you need its files (git clone --depth 1 is enough to read it).` : '',
         folder ? `Work only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.` : '',
         ASK_OWNER_LINE,
         leanLine(ctx.botId, Boolean(folder)),
@@ -377,6 +364,7 @@ export const TOOLS: ToolDef[] = [
       const who = name;
       const askedAt = Date.now();
       if (plan.rotated) card.step(who, 'note', `Fresh session: ${plan.rotated}`);
+      if (checkout) card.step(who, 'note', checkout.checkout ? `Cloned GitHub ${checkout.repo}` : `Could not clone GitHub ${checkout.repo} ahead; ${name} clones it`);
       if (media.images.length) card.step(who, 'note', `Sent ${media.images.length} image${media.images.length === 1 ? '' : 's'} from your message`);
       try {
         let used: number | undefined;
@@ -385,7 +373,7 @@ export const TOOLS: ToolDef[] = [
           folder, handoffProgress: plan.carried ? [plan.carried] : [], handoffContinuation: ctx.turn?.handoff, onStep: card.feed(who), onModel: model => card.setModel('worker-0', model), onTaskUsage: card.usage('worker-0'), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
           session: {
             id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
-            request: prompt, title: miniTitle(prompt, args.title), folder: folder && { path: folder.path, label: folder.label },
+            request: prompt, title: miniTitle(prompt, args.title), folder: checkout ? { path: `https://github.com/${checkout.repo}`, label: checkout.repo } : folder && { path: folder.path, label: folder.label },
             groupId: `${ctx.botId}:${generation}:${provider}:${plan.session.startedAt}`, rotated: plan.rotated,
           },
         }));
@@ -406,7 +394,7 @@ export const TOOLS: ToolDef[] = [
         card.finish(ctx.signal?.aborted ? 'stopped' : 'failed');
         throw error;
       } finally {
-        if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
+        await checkout?.cleanup();
       }
     },
   },
@@ -419,14 +407,23 @@ export const TOOLS: ToolDef[] = [
       workers: { type: 'array', items: { type: 'string' }, description: 'Subagent model names as the owner said them' },
       worker_count: { type: 'integer', description: 'How many subagents to run (default: one per name)' },
       folder: { type: 'string', description: 'Optional folder on this Mac to work in (name or full path); it does not need to be shared with you' },
+      repo: { type: 'string', description: 'Optional: a GitHub repository the team works on (owner/repo or a github.com URL; public ones always work). Without a folder, Marion clones it into a scratch folder every subagent shares, whatever its provider' },
       title: { type: 'string', description: 'A short title for the work' },
     }, ['goal', 'orchestrator', 'workers']),
     activity: 'messaging_named',
     label: 'Orchestrating a team',
     impl: async (args, ctx) => {
-      const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
-      // The whole team run holds the folder, so no other relayed session edits it meanwhile.
-      return withFolder(folder, ctx.signal, () => appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Waiting for another session in ${folder?.label} to finish first.` }), () => orchestrate(ctx, args, folder));
+      const repo = githubRepoArg(args.repo);
+      const checkout = !args.folder && repo ? await prepareRepoCheckout(repo, ctx.signal) : undefined;
+      try {
+        const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : checkout?.folder;
+        const repoLine = checkout ? checkout.note : repo ? `GitHub repository: ${repo} (https://github.com/${repo}).` : '';
+        const goal = repoLine ? `${String(args.goal ?? '').trim().slice(0, 18_000)}\n\n${repoLine}` : args.goal;
+        // The whole team run holds the folder, so no other relayed session edits it meanwhile.
+        return await withFolder(folder, ctx.signal, () => appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Waiting for another session in ${folder?.label} to finish first.` }), () => orchestrate(ctx, { ...args, goal }, folder));
+      } finally {
+        await checkout?.cleanup();
+      }
     },
   },
   {
@@ -484,6 +481,7 @@ export const TOOLS: ToolDef[] = [
         items: obj({ member: { type: 'string', description: 'Team member name, provider, or "auto"' }, task: { type: 'string', description: 'A complete, self-contained task with everything the member needs' } }, ['member', 'task']),
       },
       mode: { type: 'string', enum: ['parallel', 'chain'] },
+      repo: { type: 'string', description: 'Optional: a GitHub repository the members work on (owner/repo or a github.com URL; public ones always work). Marion clones it into a scratch folder Claude, Codex and Gemini members share' },
     }, ['assignments', 'mode']),
     activity: 'messaging_named',
     label: 'Working with the team',
