@@ -169,6 +169,8 @@ export interface MessageBody {
   replyTo?: { seq: number; role: 'user' | 'assistant'; name: string; text: string };
   /** Set when the user forwarded this message from another chat (Message menu → Forward). */
   forwarded?: { name: string };
+  /** The browser's id for this prompt (offline queue): a retried send with the same id returns this row instead of posting again. */
+  clientId?: string;
 }
 
 export interface ToolCallBody {

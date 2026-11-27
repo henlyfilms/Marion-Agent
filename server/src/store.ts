@@ -119,6 +119,16 @@ export function getRow(botId: string, seq: number): Row | null {
   return r ? toRow(r) : null;
 }
 
+/**
+ * The user message already saved under this client id (a prompt queued while offline and retried on reconnect), if any.
+ * Looks at the last day of this chat in any generation so a retry never posts the same prompt twice.
+ */
+export function findClientMessage(botId: string, clientId: string): Row | null {
+  const r = db.prepare(`SELECT * FROM rows WHERE bot_id=? AND kind='message' AND created_at>? AND json_extract(body,'$.clientId')=? ORDER BY seq DESC LIMIT 1`)
+    .get(botId, now() - 24 * 60 * 60 * 1000, clientId);
+  return r ? toRow(r) : null;
+}
+
 export function listRows(botId: string, opts: { beforeSeq?: number; limit?: number; afterRev?: number } = {}): Row[] {
   const b = getBotRow(botId);
   if (!b) return [];

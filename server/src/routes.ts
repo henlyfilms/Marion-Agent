@@ -13,7 +13,7 @@ import { hub } from './lib/hub.js';
 import { archiveExists } from './features/deleted-archive.js';
 import { archiveDeletedBot, noteRestoredBot } from './features/life-outbox.js';
 import { createSession, destroySession, remoteAccessFor, remoteWorkspaceUser, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
-import { allLive, appendRow, chatTranscript, clearConversation, emitBot, getBot, getBotRow, toBot, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
+import { allLive, appendRow, chatTranscript, clearConversation, emitBot, findClientMessage, getBot, getBotRow, toBot, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
 import { enqueue, interrupt, isBotBusy, preemptWith, resolveApproval, runInBotQueue, stopBot } from './agent/loop.js';
 import { classifyIntent } from './agent/chat-intent.js';
 import { planLabels, planOptions, readProvider, savePlanLabels, subscriptionUsage, usageProviders, withPlanLabel } from './agent/subscription-usage.js';
@@ -475,6 +475,7 @@ api.post('/bots/:id/messages', bodyLimit({
   let override: unknown;
   let replySeq: unknown;
   let forwardedFrom: unknown;
+  let clientIdRaw: unknown;
   let attachments: UploadedAttachment[] = [];
   if (c.req.header('content-type')?.startsWith('multipart/form-data')) {
     try {
@@ -485,12 +486,14 @@ api.post('/bots/:id/messages', bodyLimit({
       const reply = form.get('replyTo');
       replySeq = typeof reply === 'string' ? Number(reply) : undefined;
       forwardedFrom = form.get('forwardedFrom');
+      clientIdRaw = form.get('clientId');
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : 'Could not read the attachments.' }, 400);
     }
   } else {
-    const body = await c.req.json<{ text?: unknown; call?: unknown; model?: unknown; replyTo?: unknown; forwardedFrom?: unknown }>().catch(() => null);
+    const body = await c.req.json<{ text?: unknown; call?: unknown; model?: unknown; replyTo?: unknown; forwardedFrom?: unknown; clientId?: unknown }>().catch(() => null);
     replySeq = body?.replyTo;
+    clientIdRaw = body?.clientId;
     forwardedFrom = body?.forwardedFrom;
     text = typeof body?.text === 'string' ? body.text.trim() : '';
     call = typeof body?.call === 'string' && /^[\w-]{1,80}$/.test(body.call) ? body.call : null;
@@ -512,8 +515,12 @@ api.post('/bots/:id/messages', bodyLimit({
   // The bot sees the quote or forward note in front of the message; the chat shows them as a quote or a label.
   const notes = (replyTo ? `[The user is replying to ${replyTo.role === 'user' ? 'their own earlier message' : `an earlier message from ${replyTo.name}`}: "${replyTo.text}"]\n` : '')
     + (forwarded ? `[The user forwarded this message from their chat with ${forwarded.name}.]\n` : '');
+  // A prompt queued offline is retried until a reply arrives; the same client id is answered with the row it already made.
+  const clientId = typeof clientIdRaw === 'string' && /^[\w-]{8,80}$/.test(clientIdRaw) ? clientIdRaw : null;
+  const already = clientId ? findClientMessage(b.id, clientId) : null;
+  if (already) return c.json({ row: already, duplicate: true });
   const row = appendRow(b.id, 'message', {
-    type: 'message', role: 'user', text,
+    type: 'message', role: 'user', text, ...(clientId ? { clientId } : {}),
     ...(replyTo ? { replyTo } : {}), ...(forwarded ? { forwarded } : {}),
     ...(call ? { from: { kind: 'voice' as const, id: call, name: 'Voice call' } } : {}),
     ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),

@@ -22,6 +22,7 @@ import { setDetailsOpen, useCompactLayout, useDetailsOpen } from '../lib/layout'
 import { getDraft, onDraftChange, setDraft } from '../lib/drafts';
 import { useMessageActions } from '../lib/messageActions';
 import { ATTACH_EVENT, SCREENSHOT_SHORTCUT_LABEL } from '../lib/screenshots';
+import { isOfflineError, newClientId, outbox, useOnline, useQueuedPrompts } from '../lib/offlineQueue';
 
 const MAX_H = 200;
 const fileDrafts = new Map<string, File[]>();
@@ -130,6 +131,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     configApi.chatModels(bot.id, true).then(result => setCallModels(result.models)).catch(() => setCallModels([]));
   };
   const mobileChatOpen = useStore(s => s.mobileChatOpen);
+  const queued = useQueuedPrompts(bot.id);
+  const online = useOnline();
   const compact = useCompactLayout();
   useEffect(() => { voiceApi.status().then(setVoiceStatus).catch(() => {}); }, []);
   const openCall = () => {
@@ -162,15 +165,32 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     const command = findCommand(t.toLowerCase());
     if (command && !files.length) { runCommand(command); return; }
     discardDictation();
-    setSending(true); setError(null);
-    try {
-      await api.send(bot.id, t, files, reply ? { replyTo: reply.seq } : {});
+    const replyTo = reply ? { replyTo: reply.seq } : {};
+    const sent = () => {
       useMessageActions.getState().setReply(bot.id, null);
       setFiles([]);
       fileDrafts.delete(bot.id);
       setText('');
+    };
+    // Offline, or earlier prompts in this chat are still waiting: queue it behind them so the order holds.
+    if (!files.length && (!navigator.onLine || outbox.pending(bot.id))) {
+      outbox.enqueue(bot.id, t, replyTo);
+      sent(); setError(null);
+      void outbox.flush();
+      return;
+    }
+    setSending(true); setError(null);
+    const clientId = newClientId();
+    try {
+      await api.send(bot.id, t, files, { ...replyTo, clientId });
+      sent();
     } catch (e) {
-      setError((e as Error).message || 'Message failed to send');
+      if (isOfflineError(e) && !files.length) {
+        // Same id: if the request did reach Marion before the connection dropped, the retry is dropped there.
+        outbox.enqueue(bot.id, t, { ...replyTo, id: clientId });
+        sent();
+      } else if (isOfflineError(e)) setError('You’re offline. Messages with attachments send once you’re back online — try again then.');
+      else setError((e as Error).message || 'Message failed to send');
     } finally {
       setSending(false);
       if (!compact) ref.current?.focus();
@@ -460,6 +480,21 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       <div className="composer__progress" role="status" data-visible={sending}>
         <span className="loading-dot" aria-hidden="true" />Sending…
       </div>
+      {queued.length > 0 && (
+        <ul className="composer-queue" aria-label="Queued messages">
+          {queued.map(item => (
+            <li key={item.id} className="composer-queue__item" data-state={item.error ? 'error' : outbox.isSending(item.id) ? 'sending' : 'queued'}>
+              <span className="composer-queue__text" title={item.text}>{item.text}</span>
+              <span className="composer-queue__state">
+                {item.error ? `Not sent · ${item.error}` : outbox.isSending(item.id) ? 'Sending…' : online ? 'Queued · sending soon' : 'Queued · will send when back online'}
+              </span>
+              {item.error && <button type="button" className="link-btn" onClick={() => void outbox.retry(bot.id, item.id)}>Retry</button>}
+              <button type="button" className="composer-queue__remove" aria-label="Remove queued message" title="Remove"
+                disabled={outbox.isSending(item.id)} onClick={() => outbox.remove(bot.id, item.id)}><X size={14} /></button>
+            </li>
+          ))}
+        </ul>
+      )}
       {reply && (
         <div className="composer-reply" role="group" aria-label="Replying to">
           <span className="composer-reply__text">

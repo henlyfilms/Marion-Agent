@@ -436,6 +436,24 @@
 .composer-reply__quote { color: var(--color-text-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .composer-reply__close { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 7px; }
 .composer-reply__close:hover:not(:disabled) { background: var(--color-bg-hover); }
+/* Prompts queued while offline: one quiet line each above the composer, sent in order once Marion is reachable. */
+.composer-queue { list-style: none; display: flex; flex-direction: column; gap: 4px; max-width: 960px; max-height: 132px; margin: 0 auto 6px; padding: 0; overflow-y: auto; }
+.composer-queue__item {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 4px 4px 10px; border-radius: 10px;
+  border: 1px dashed var(--color-border-tertiary); background: var(--color-bg-elevated); font-size: 12px; line-height: 16px;
+}
+.composer-queue__item[data-state="sending"] { border-style: solid; opacity: 0.8; }
+.composer-queue__item[data-state="error"] { border-color: color-mix(in srgb, var(--color-danger, #d33) 50%, transparent); }
+.composer-queue__text { flex: 1 1 auto; min-width: 0; color: var(--color-ink); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.composer-queue__state { flex: 0 1 auto; min-width: 0; color: var(--color-text-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.composer-queue__item[data-state="error"] .composer-queue__state { color: var(--color-danger, #d33); }
+.composer-queue__remove { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 7px; }
+.composer-queue__remove:hover:not(:disabled) { background: var(--color-bg-hover); }
+/* Narrow / iPhone: the message gets the room, the state shortens to fit beside it. */
+@media (max-width: 560px) {
+  .composer-queue__state { max-width: 45%; }
+  .composer-queue__remove { width: 32px; height: 32px; }
+}
 .forward-preview {
   padding: 8px 10px; border-radius: 10px; border-left: 3px solid var(--color-border-tertiary);
   background: var(--color-bg-subtle); font-size: 13px; line-height: 18px; color: var(--color-text-secondary); overflow-wrap: anywhere;

@@ -41,14 +41,16 @@ export const api = {
   /** A message spoken on a voice call (optionally to a different model than the chat's). */
   sendCall: (id: string, text: string, call: string, model?: ChatModelSelection | null, signal?: AbortSignal) =>
     req<{ row: Row }>('POST', `/bots/${id}/messages`, { text, call, ...(model ? { model } : {}) }, signal),
-  /** `replyTo` is the seq of the message being answered; `forwardedFrom` the name of the chat a message was forwarded from. */
-  send: (id: string, text: string, files: File[] = [], extra: { replyTo?: number; forwardedFrom?: string } = {}) => {
+  /** `replyTo` is the seq of the message being answered; `forwardedFrom` the name of the chat a message was forwarded from;
+   * `clientId` lets the server drop a retried copy of the same prompt (offline queue). */
+  send: (id: string, text: string, files: File[] = [], extra: { replyTo?: number; forwardedFrom?: string; clientId?: string } = {}) => {
     const path = `/bots/${id}/messages`;
     if (!files.length) return req<{ row: Row }>('POST', path, { text, ...extra });
     const form = new FormData();
     form.set('text', text);
     if (extra.replyTo !== undefined) form.set('replyTo', String(extra.replyTo));
     if (extra.forwardedFrom) form.set('forwardedFrom', extra.forwardedFrom);
+    if (extra.clientId) form.set('clientId', extra.clientId);
     files.forEach(file => form.append('attachments', file));
     return req<{ row: Row }>('POST', path, form);
   },
