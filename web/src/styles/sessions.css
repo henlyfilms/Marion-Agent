@@ -154,3 +154,33 @@
   .session-detail { animation-name: session-detail-push; }
   @keyframes session-detail-push { from { transform: translateX(100%); } to { transform: none; } }
 }
+
+/* Sidebar bottom: Tasks / Sessions (and Update available) float over the chat list instead of sitting on a solid bar.
+   The wrapper is transparent and click-through; the list runs on behind it and keeps enough bottom padding that the
+   last chat still scrolls clear of the pills. Each pill carries its own frosted surface so it stays legible. */
+.sidebar { --sidebar-surface: var(--color-bg-sidebar); }
+.sidebar__list { position: relative; display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+.sidebar__list > .sidebar__scroll { --float-room: 64px; padding-bottom: var(--float-room); scroll-padding-bottom: var(--float-room); }
+.sidebar__list:has(.update-pill--sidebar) > .sidebar__scroll { --float-room: 114px; }
+.sidebar.is-collapsed .sidebar__list > .sidebar__scroll { --float-room: 106px; }
+.sidebar__float {
+  position: absolute; inset: auto 0 0 0; z-index: 3; display: flex; flex-direction: column;
+  background: none; border: 0; box-shadow: none; backdrop-filter: none; pointer-events: none;
+}
+.sidebar__float :is(.sidebar-island, .update-pill, button, a) { pointer-events: auto; }
+.sidebar__float .sidebar-island {
+  background: color-mix(in srgb, var(--sidebar-surface) 80%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
+}
+.sidebar__float .sidebar-island:hover { background: color-mix(in srgb, var(--color-ink) 8%, color-mix(in srgb, var(--sidebar-surface) 86%, transparent)); }
+.sidebar__float .sidebar-island.is-active { background: color-mix(in srgb, var(--color-ink) 12%, color-mix(in srgb, var(--sidebar-surface) 86%, transparent)); }
+.sidebar__float .update-pill--sidebar { background: color-mix(in srgb, var(--palette-accent) 16%, var(--sidebar-surface)); }
+.sidebar__float .update-pill--sidebar:hover:not(:disabled) { background: color-mix(in srgb, var(--palette-accent) 24%, var(--sidebar-surface)); }
+@media (max-width: 700px) {
+  .sidebar { --sidebar-surface: var(--color-bg-chrome); }
+  .sidebar__list { order: 1; }
+  .sidebar__list > .sidebar__scroll { --float-room: 68px; }
+  .sidebar__list:has(.update-pill--sidebar) > .sidebar__scroll { --float-room: 118px; }
+  .sidebar__float .sidebar__tools { padding: 6px 12px; }
+  .sidebar__bottom { justify-content: flex-end; }
+}

@@ -379,31 +379,36 @@ export function Sidebar() {
           <Icon name="search" size={15} /><span>Search</span>
         </button>
       </div></div>
-      <div className="sidebar__scroll" onScroll={() => setSwipe(null)}>
-        {featured.length > 0 && <div className="sidebar__featured" aria-label="Favorite chats">
-          {featured.map(bot => <div key={bot.id}>{renderChat(bot, 'featured')}</div>)}
-        </div>}
-        <div className="bot-list" ref={list} {...handlers}>
-          {sorted.map(bot => (
-            <div key={bot.id} data-chat-id={bot.id} data-starred={bot.pinned} data-tier={tier(bot)} className={featured.includes(bot) ? 'is-featured' : undefined}>
-              {renderChat(bot, collapsed ? 'rail' : 'row')}
-            </div>
-          ))}
-          {!bots.length && <button type="button" className="bot-list__empty" onClick={() => setModal('create')}>
-            <span className="bot-list__empty-plus"><Icon name="plus" size={16} /></span>
-            <span className="bot-row__name">Create a Bot</span>
-          </button>}
+      <div className="sidebar__list">
+        <div className="sidebar__scroll" onScroll={() => setSwipe(null)}>
+          {featured.length > 0 && <div className="sidebar__featured" aria-label="Favorite chats">
+            {featured.map(bot => <div key={bot.id}>{renderChat(bot, 'featured')}</div>)}
+          </div>}
+          <div className="bot-list" ref={list} {...handlers}>
+            {sorted.map(bot => (
+              <div key={bot.id} data-chat-id={bot.id} data-starred={bot.pinned} data-tier={tier(bot)} className={featured.includes(bot) ? 'is-featured' : undefined}>
+                {renderChat(bot, collapsed ? 'rail' : 'row')}
+              </div>
+            ))}
+            {!bots.length && <button type="button" className="bot-list__empty" onClick={() => setModal('create')}>
+              <span className="bot-list__empty-plus"><Icon name="plus" size={16} /></span>
+              <span className="bot-row__name">Create a Bot</span>
+            </button>}
+          </div>
+        </div>
+        {/* Transparent, click-through overlay: the chat list scrolls on behind it; only the pills take clicks. */}
+        <div className="sidebar__float">
+          <div className="sidebar__tools"><TasksIsland /><SessionsIsland /></div>
+          {isLocalMac && (updateAvailable(update) || updateBusy(update)) && !collapsed && (
+            <button type="button" className={`update-pill update-pill--sidebar${updateBusy(update) ? ' is-busy' : ''}`} onClick={() => useConfigUI.getState().openAppSettings('updates')}>
+              {updateBusy(update) ? <span className="update-pill__spinner" aria-hidden /> : <ArrowDownToLine size={15} />}
+              <span>{updateBusy(update) ? 'Updating…' : 'Update available'}</span>
+              {!updateBusy(update) && <small>{update!.behind} new</small>}
+            </button>
+          )}
         </div>
       </div>
       <div className="sidebar__bottom">
-        <div className="sidebar__tools"><TasksIsland /><SessionsIsland /></div>
-        {isLocalMac && (updateAvailable(update) || updateBusy(update)) && !collapsed && (
-          <button type="button" className={`update-pill update-pill--sidebar${updateBusy(update) ? ' is-busy' : ''}`} onClick={() => useConfigUI.getState().openAppSettings('updates')}>
-            {updateBusy(update) ? <span className="update-pill__spinner" aria-hidden /> : <ArrowDownToLine size={15} />}
-            <span>{updateBusy(update) ? 'Updating…' : 'Update available'}</span>
-            {!updateBusy(update) && <small>{update!.behind} new</small>}
-          </button>
-        )}
         <div className="sidebar__footer">
           {account('desktop')}
           <button type="button" className="icon-btn icon-btn--bordered" onClick={() => setModal('usage')} aria-label="Subscription usage" title="Subscription usage"><MeterIcon size={18} /></button>
