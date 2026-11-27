@@ -7,7 +7,7 @@ export default async function (page, shot) {
   execFileSync(process.execPath, [decodeURIComponent(new URL('./seed-long.mjs', import.meta.url).pathname), moose.id, '400'], { env: process.env, stdio: 'inherit' });
   await page.reload();
   await page.waitForSelector('.sidebar');
-  const row = (name) => page.locator(`.sidebar .bot-row[aria-label="${name}"]:visible`).first();
+  const row = (name) => page.locator(`.sidebar .bot-row:is([aria-label="${name}"], [aria-label="${name}, starred"]):visible`).first();
   const gaps = [];
   for (const n of ['Moose', 'Bot Builder', 'Moose', 'Barry', 'Moose']) {
     await page.evaluate(() => { window.__f = []; let l = performance.now(); const k = (t) => { window.__f.push(t - l); l = t; if (window.__f.length < 50) requestAnimationFrame(k); }; requestAnimationFrame(k); });
