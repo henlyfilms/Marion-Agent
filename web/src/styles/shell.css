@@ -147,6 +147,10 @@
 .bot-list.is-gliding .bot-row, .bot-list.is-gliding .bot-row:hover { background-color: transparent; transition: none; }
 .bot-row__avatar { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .bot-row__avatar .status-dot { right: 0; bottom: 0; top: auto; }
+/* The star badge owns the avatar's bottom-right corner, so on starred avatars the unread / attention dot and the
+   completion check move to the top-right instead of covering it. */
+.bot-row__avatar.is-starred .status-dot { top: 0; bottom: auto; }
+.bot-row__avatar.is-starred .completion-mark { top: -2px; bottom: auto; }
 .bot-row__text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
 .bot-row__name, .bot-row__preview { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bot-row__name { font-size: 14px; font-weight: 650; line-height: 20px; color: var(--color-ink); }
@@ -158,7 +162,9 @@
 .bot-row__context-bar > span { position: absolute; inset: 0 auto 0 0; min-width: 2px; border-radius: inherit; background: color-mix(in srgb, var(--palette-foreground) 45%, transparent); }
 .bot-row__context.is-mid .bot-row__context-bar > span { background: #c98a1a; }
 .bot-row__context.is-high .bot-row__context-bar > span { background: var(--color-danger); }
-.bot-row__star { display: inline-block; margin-left: 5px; color: #f2b01e; vertical-align: -1px; filter: drop-shadow(0 0 3px #f2b01e55); animation: star-pop 420ms var(--ease-spring) both; }
+.bot-row__title { display: flex; align-items: center; min-width: 0; }
+.bot-row__title > .bot-row__name { min-width: 0; }
+.bot-row__star { display: inline-block; flex: none; margin-left: 5px; color: #f2b01e; vertical-align: -1px; filter: drop-shadow(0 0 3px #f2b01e55); animation: star-pop 420ms var(--ease-spring) both; }
 @keyframes star-pop { from { transform: scale(0.2) rotate(-40deg); opacity: 0; } to { transform: none; opacity: 1; } }
 .bot-avatar__star { animation: star-pop 420ms var(--ease-spring) both; }
 /* Working: a small spinner where the time sits (rows), or a turning arc around the avatar (collapsed rail). Idle rows stay still. */
@@ -259,6 +265,7 @@
   }
   .bot-row--featured .bot-row__text { width: 100%; flex: none; }
   .bot-row--featured .bot-row__name { font-size: 12px; font-weight: 550; }
+  .bot-row--featured .bot-row__title { justify-content: center; }
   .bot-row__name { font-size: 15px; }
   .bot-row__time { font-size: 11px; }
   .sidebar__tools { order: 2; padding-inline: 12px; }

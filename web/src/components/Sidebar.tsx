@@ -126,7 +126,7 @@ function ChatAvatar({ bot, running, awaiting, size, ring, star }: { bot: Bot; ru
   }, [bot.completedAt]);
   const showCelebration = celebrate && !running && !awaiting;
   return (
-    <span className={`bot-row__avatar${showCelebration ? ' is-complete' : ''}${ring && running && !awaiting ? ' is-working' : ''}`}>
+    <span className={`bot-row__avatar${star ? ' is-starred' : ''}${showCelebration ? ' is-complete' : ''}${ring && running && !awaiting ? ' is-working' : ''}`}>
       <BotAvatarFor bot={bot} size={size} star={star} working={running && !awaiting} />
       {showCelebration && <span key={bot.completedAt} className="completion-mark" role="img" aria-label="Task completed"><Icon name="check" size={11} /></span>}
       {!showCelebration && !(running && !awaiting) && (awaiting || bot.unread > 0) && (
@@ -195,12 +195,13 @@ const BotButton = memo(function BotButton({ bot, selected, running, awaiting, va
   return (
     <button type="button" className={`bot-row bot-row--${variant}${selected ? ' is-selected' : ''}${drop.over ? ' is-drop-target' : ''}`} onClick={open}
       {...drop.handlers}
-      aria-label={displayName(bot)} aria-current={selected || undefined} title={variant === 'rail' ? displayName(bot) : undefined}
+      aria-label={bot.pinned ? `${displayName(bot)}, starred` : displayName(bot)} aria-current={selected || undefined} data-starred={bot.pinned || undefined} title={variant === 'rail' ? displayName(bot) : undefined}
       {...contextMenu(displayName(bot), () => [...botMenuItems(bot, true), ...moveItems(), { label: 'Delete chat…', danger: true, separator: true, onSelect: remove }])}
       data-running={running || undefined}>
       <ChatAvatar bot={bot} running={running} awaiting={awaiting} size={variant === 'featured' ? 62 : 40} ring={variant !== 'row'} star={bot.pinned && variant !== 'row'} />
       <span className="bot-row__text">
-        <span className="bot-row__name">{displayName(bot)}{bot.pinned && variant === 'row' && <Icon name="star" size={12} className="bot-row__star" aria-label="Starred" />}</span>
+        {/* The star sits beside the name, not inside it, so a long name's ellipsis never clips it. The button's label says "starred". */}
+        <span className="bot-row__title"><span className="bot-row__name">{displayName(bot)}</span>{bot.pinned && variant === 'row' && <Icon name="star" size={12} className="bot-row__star" />}</span>
         {variant !== 'featured' && <span className="bot-row__preview">{drop.over ? 'Drop to add to this chat' : previewFor(bot, running, awaiting)}</span>}
       </span>
       {variant !== 'featured' && (!!bot.lastPreview || !!bot.contextTokens || running || !!awaiting) && <span className="bot-row__meta">

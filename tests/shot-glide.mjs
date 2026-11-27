@@ -2,7 +2,7 @@
 // at several moments, screenshots the list, checks nothing is left behind after fast clicking, and in the
 // collapsed sidebar. Usage: npm run build && BROWSER_EXECUTABLE=... node tests/shot.mjs <outDir> tests/shot-glide.mjs
 export default async function (page, shot) {
-  const row = (name) => page.locator(`.sidebar .bot-row[aria-label="${name}"]:visible`).first();
+  const row = (name) => page.locator(`.sidebar .bot-row:is([aria-label="${name}"], [aria-label="${name}, starred"]):visible`).first();
   const problems = [];
   const listClip = async () => { const b = await page.locator('.bot-list').boundingBox(); return { x: b.x, y: b.y - 4, width: b.width, height: Math.min(b.height + 8, 300) }; };
   async function frames(tag, from, to) {
@@ -32,7 +32,7 @@ export default async function (page, shot) {
   for (const n of ['Moose', 'Barry', 'Bot Builder', 'Moose']) { await row(n).click(); await page.waitForTimeout(60); }
   await page.waitForTimeout(900);
   const after = await page.evaluate(() => ({ gliders: document.querySelectorAll('.bot-list__glider').length, gliding: !!document.querySelector('.bot-list.is-gliding'),
-    selected: document.querySelector('.bot-list .bot-row.is-selected')?.getAttribute('aria-label'),
+    selected: document.querySelector('.bot-list .bot-row.is-selected')?.getAttribute('aria-label')?.replace(/, starred$/, ''),
     bg: getComputedStyle(document.querySelector('.bot-list .bot-row.is-selected')).backgroundColor }));
   console.log('after fast clicking', JSON.stringify(after));
   if (after.gliders || after.gliding || after.selected !== 'Moose') problems.push('fast: ' + JSON.stringify(after));

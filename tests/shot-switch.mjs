@@ -2,7 +2,7 @@
 // never cut to "…" mid-morph, and measures real frame gaps while switching back and forth.
 // Usage: npm run build && BROWSER_EXECUTABLE=... node tests/shot.mjs <outDir> tests/shot-switch.mjs
 export default async function (page, shot) {
-  const row = (name) => page.locator(`.sidebar .bot-row[aria-label="${name}"]:visible`).first();
+  const row = (name) => page.locator(`.sidebar .bot-row:is([aria-label="${name}"], [aria-label="${name}, starred"]):visible`).first();
   const clip = async () => {
     const b = await page.locator('.chat__header').boundingBox();
     return { x: b.x + b.width / 2 - 160, y: b.y, width: 320, height: b.height };
