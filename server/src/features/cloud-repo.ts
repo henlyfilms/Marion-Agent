@@ -1,4 +1,4 @@
-// Strict Cloud mode: find the GitHub repository a Cloud request is about, using the GitHub CLI only.
+// Cloud mode: find the GitHub repository a Cloud request is about, using the GitHub CLI only.
 // Nothing here looks at, clones or uses a folder on this Mac. When the repository can't be used, the result names the exact
 // blocker and concrete fixes; the caller shows them as an in-app action card (see cloud-cards.ts).
 import { spawn } from 'node:child_process';
@@ -19,7 +19,7 @@ export type GhRun = (args: string[]) => Promise<string>;
 export const GH_SCOPES = ['repo', 'read:org'];
 
 /** Shared by the bot system prompts (local model and subscription-backed). */
-export const CLOUD_PROMPT_LINE = 'Cloud work (strict): when the owner asks to work in the cloud (Claude Cloud, a cloud session, --cloud), call start_cloud_session with the full task and the GitHub repository (owner/repo, URL, or the name they said). Never look for, list or use a folder or local checkout on this Mac for it, and never switch to ask_subscription or shell instead. If the repository is missing, ambiguous or needs access or sign-in, Marion puts an in-app card with concrete fixes in this chat (pick a repository, sign in to GitHub, grant access, create or fork it); relay that briefly and stop, and the owner approves it right there.';
+export const CLOUD_PROMPT_LINE = 'Cloud work: when the owner asks to run a task in Claude Cloud (a cloud or web session, --cloud), call start_cloud_session with the full task and the GitHub repository (owner/repo, URL, or the name they said). Only say a Cloud session started after start_cloud_session confirms it; if it fails, tell the owner it failed and why. If the repository is missing, ambiguous or needs access or sign-in, Marion puts an in-app card with concrete fixes in this chat; relay that briefly and the owner approves it right there. Local work is always allowed: talking about Cloud or web sessions never blocks folders on this Mac, ask_subscription with a folder (e.g. "Marion Agent"), shell or folder tools.';
 
 /** "work on this in the cloud", "use Claude Cloud", "start a cloud session", "--cloud"… */
 export function wantsCloud(text: unknown): boolean {

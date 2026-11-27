@@ -304,6 +304,10 @@ export interface WorkCardBody {
   question?: string;
   /** Choices offered with the question (also shown as a question card the owner can tap). */
   options?: string[];
+  /** Links for the run (e.g. the Claude Cloud session), shown as buttons on the card. */
+  links?: { label: string; url: string }[];
+  /** A run the card can stop by itself (only shown while it is running). */
+  stop?: { kind: 'cloud'; sessionId: string };
 }
 
 export interface EventBody {

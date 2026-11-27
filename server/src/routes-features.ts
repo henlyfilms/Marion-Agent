@@ -2,6 +2,7 @@ import { basename } from 'node:path';
 import { env } from './env.js';
 import { continueHandoff, validateFallback } from './features/handoffs.js';
 import { actOnCloudCard, launchCloudWork } from './features/cloud-cards.js';
+import { stopCloudSession } from './features/cloud-sessions.js';
 import { repoHint } from './features/cloud-repo.js';
 import { createGitHubRepo } from './features/github-repos.js';
 import { Hono } from 'hono';
@@ -354,6 +355,16 @@ featuresApi.post('/bots/:id/cloud-cards/:seq', async (c) => {
     if (typeof option !== 'string') throw new Error('Choose an option.');
     actOnCloudCard(userId, bot.id, Number(c.req.param('seq')), option, { local: localAction(c) });
     return c.json({ ok: true }, 202);
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+featuresApi.post('/bots/:id/cloud-sessions/:session/stop', async (c) => {
+  const userId = c.get('user').id;
+  const bot = ownBot(userId, c.req.param('id'));
+  if (!bot || bot.deleted_at) return c.json({ error: 'Bot not found.' }, 404);
+  try {
+    stopCloudSession(userId, bot.id, c.req.param('session'));
+    return c.json({ ok: true });
   } catch (error) { return c.json({ error: (error as Error).message }, 400); }
 });
 

@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Check, ChevronDown, CircleAlert, CircleHelp, Eye, FilePen, FileText, Search, Terminal, X } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, CircleHelp, ExternalLink, Eye, FilePen, FileText, Search, Square, Terminal, X } from 'lucide-react';
+import { featuresApi } from '../../lib/featuresApi';
 import type { WorkAgent, WorkCardBody, WorkStep } from '@shared/types';
 import { modelLabel } from '@shared/model-label';
 import { ProviderLogo } from '../ProviderLogo';
@@ -85,8 +86,15 @@ function Phases({ phases }: { phases: WorkCardBody['phases'] }) {
   );
 }
 
-export function WorkCard({ body }: { body: WorkCardBody }) {
+export function WorkCard({ body, botId }: { body: WorkCardBody; botId?: string }) {
   const running = body.status === 'running';
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState('');
+  const stop = () => {
+    if (!botId || !body.stop) return;
+    setStopping(true); setStopError('');
+    featuresApi.stopCloudSession(botId, body.stop.sessionId).catch((e: Error) => { setStopping(false); setStopError(e.message); });
+  };
   const [now, setNow] = useState(Date.now());
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -160,6 +168,17 @@ export function WorkCard({ body }: { body: WorkCardBody }) {
       )}
       {running && (body.live === false || !body.steps.length) && <p className="work-card__quiet">{body.live === false ? 'Working on it. Live steps are off (Settings → General → Bots).' : 'Starting up…'}</p>}
       {body.question && <p className="work-card__question"><CircleHelp size={14} aria-hidden="true" />{body.question}</p>}
+      {(!!body.links?.length || (running && body.stop && botId)) && (
+        <div className="work-card__actions">
+          {body.links?.map(link => (
+            <a key={link.url} className="btn btn--secondary btn--sm" href={link.url} target="_blank" rel="noreferrer"><ExternalLink size={12} aria-hidden="true" />{link.label}</a>
+          ))}
+          {running && body.stop && botId && (
+            <button type="button" className="btn btn--secondary btn--sm" disabled={stopping} onClick={stop}><Square size={11} aria-hidden="true" />{stopping ? 'Stopping…' : 'Stop'}</button>
+          )}
+          {stopError && <span className="work-card__error" role="alert">{stopError}</span>}
+        </div>
+      )}
     </div>
   );
 }

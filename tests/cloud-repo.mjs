@@ -30,6 +30,34 @@ try {
     let remote = '';
     try { remote = require('node:child_process').execFileSync('git',['remote','get-url','origin'],{encoding:'utf8'}).trim(); } catch {}
     fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({cwd:process.cwd(), remote, files:fs.readdirSync('.')})+'\\n');
+    // Like the real CLI on an account without the headless Cloud gate: stream-json is refused, a terminal launch works.
+    if (args.includes('--input-format') && fs.existsSync(${JSON.stringify(join(scratch, 'terminal-only'))})) {
+      process.stderr.write('Error: --cloud requires an interactive terminal.\\nNon-interactive runs (piped stdout, --init-only, --sdk-url) run locally and would silently ignore --cloud.\\n');
+      process.exit(1);
+    }
+    if (!args.includes('--input-format')) {
+      const goal = args[args.indexOf('--cloud') + 1];
+      const w = s => process.stdout.write(s);
+      let step = 0;
+      const create = () => {
+        if (goal.includes('TERM_FAIL')) { w('\\r\\n\\x1b[31mError: Could not create a cloud session: repository not accessible\\x1b[39m\\r\\n'); process.exit(1); }
+        w('Created cloud session: Fix it\\r\\nSession ID: session_term_1\\r\\nView: https://claude.ai/code/session_term_1?from=cli&m=0\\r\\nResume with: claude --teleport session_term_1\\r\\n');
+        if (goal.includes('ATTACH')) { let n = 0; const t = setInterval(() => { w('\\x1b[2K\\x1b[G✻ Working… (1s · esc to interrupt)\\r\\n● Edited README.md part ' + (n++) + '\\r\\n'); if (n > 3) clearInterval(t); }, 40); return; }
+        setTimeout(() => process.exit(0), 20);
+      };
+      const next = () => {
+        if (!goal.includes('ASK_OWNER')) return create();
+        step = 2;
+        w('\\x1b[2K\\x1b[1ADo you want to grant Claude access to octo/widget?\\r\\n\\x1b[36m❯\\x1b[39m 1. Yes\\r\\n  2. No\\r\\n');
+      };
+      w('\\x1b[?25l\\x1b[2J\\x1b[H╭──────╮\\r\\n│ \\x1b[1mDo you trust the files in this folder?\\x1b[22m │\\r\\n❯ 1. Yes, proceed\\r\\n  2. No, exit\\r\\n');
+      process.stdin.on('data', d => {
+        const key = String(d);
+        if (step === 0) { if (key !== '\\r') { w('Error: folder not trusted\\r\\n'); process.exit(1); } step = 1; return next(); }
+        if (step === 2) { if (key === '\\r') { step = 3; return create(); } w('\\r\\nError: The owner declined GitHub access.\\r\\n'); process.exit(1); }
+      });
+      return;
+    }
     require('node:readline').createInterface({input:process.stdin}).on('line', line => {
       const frame = JSON.parse(line);
       if (frame.type === 'user') {
@@ -74,7 +102,8 @@ try {
   const sample = [{ nameWithOwner: 'octo/marion-agent', url: 'u' }, { nameWithOwner: 'octo/widget', url: 'u' }, { nameWithOwner: 'acme/widget', url: 'u' }, { nameWithOwner: 'octo/widgets-old', url: 'u' }];
   assert.deepEqual(matchRepos(sample, 'Marion Agent').map(r => r.nameWithOwner), ['octo/marion-agent']);
   assert.deepEqual(matchRepos(sample, 'widget').map(r => r.nameWithOwner), ['octo/widget', 'acme/widget']);
-  assert.match(CLOUD_PROMPT_LINE, /start_cloud_session/); assert.match(CLOUD_PROMPT_LINE, /Never look for, list or use a folder/);
+  assert.match(CLOUD_PROMPT_LINE, /start_cloud_session/); assert.match(CLOUD_PROMPT_LINE, /Local work is always allowed/);
+  assert.doesNotMatch(CLOUD_PROMPT_LINE, /Never look for, list or use a folder|never switch to ask_subscription/, 'no strict local-folder ban in the prompt');
   console.log('PASS cloud helpers: cloud intent, exact/URL repos, repo hints, token scopes, fuzzy ranking, prompt rule');
 
   // ---------- fake GitHub ----------
@@ -155,19 +184,20 @@ try {
   assertNoLocal();
   console.log('PASS strict Cloud launch: name, URL and in-prompt repo resolved on GitHub; Claude starts in an empty pointer with only the GitHub remote');
 
-  // ---------- 2. Local fallbacks are refused when Cloud was asked for ----------
+  // ---------- 2. Talking about Cloud never blocks local work ----------
   const ask = TOOLS.find(t => t.name === 'ask_subscription');
-  await assert.rejects(ask.impl({ provider: 'claude', prompt: 'Fix it', folder: 'Marion Agent' }, ctx), /start_cloud_session/);
-  await assert.rejects(ask.impl({ provider: 'claude', prompt: 'Fix it in the cloud' }, { ...ctx, turn: undefined }), /Never use a folder/);
-  await assert.rejects(TOOLS.find(t => t.name === 'folder_list').impl({ folder: 'Marion Agent' }, ctx), /start_cloud_session/);
-  await assert.rejects(TOOLS.find(t => t.name === 'orchestrate').impl({ goal: 'x', orchestrator: 'a', workers: ['b'], folder: 'Marion Agent' }, ctx), /start_cloud_session/);
-  console.log('PASS no local fallback: ask_subscription, folder_list and orchestrate with a folder refuse Cloud requests');
+  const localFolderCheck = async (run) => { try { await run(); } catch (error) { assert.doesNotMatch(String(error.message), /The owner asked for|Never use a folder or local copy on this Mac|start_cloud_session/); } };
+  await localFolderCheck(() => ask.impl({ provider: 'claude', prompt: 'Fix it', folder: 'Marion Agent' }, ctx));
+  await localFolderCheck(() => ask.impl({ provider: 'claude', prompt: 'Fix it locally, we talked about the cloud earlier' }, { ...ctx, turn: undefined }));
+  await localFolderCheck(() => TOOLS.find(t => t.name === 'folder_list').impl({ folder: 'Marion Agent' }, ctx));
+  await localFolderCheck(() => TOOLS.find(t => t.name === 'orchestrate').impl({ goal: 'x', orchestrator: 'a', workers: ['b'], folder: 'Marion Agent' }, ctx));
+  console.log('PASS local work allowed: ask_subscription, folder_list and orchestrate are never refused because Cloud or web sessions came up');
 
   // ---------- 3. Missing repo → card with fixes, nothing local; approving creates it and continues in the Cloud ----------
   const before = launches.length;
   const missing = await tool.impl({ prompt: 'Build the landing page', repo: 'shiny-new-site' }, ctx);
   assert.equal(missing.endTurn, true);
-  assert.match(missing.output, /in-app card/); assert.match(missing.output, /never fall back to a local folder/);
+  assert.match(missing.output, /in-app card/); assert.match(missing.output, /do not say the session started/);
   assert.equal(launches.length, before);
   const missingSeq = db.prepare("SELECT seq FROM rows WHERE bot_id=? AND json_extract(body,'$.card')='cloud' ORDER BY seq DESC").get(botId).seq;
   let body = card(missingSeq);
@@ -280,8 +310,8 @@ try {
 
   // ---------- 6. Claude Cloud's own GitHub connection, and mid-run permissions ----------
   gh.repos.push(repo('octo/unlinked'));
-  const unlinked = await launchCloudWork({ userId, botId, generation, goal: 'Try', query: 'octo/unlinked' });
-  assert.equal(unlinked.started, true);
+  // It never started: the launch rejects (no "started" result) and the fix card is already up.
+  await assert.rejects(launchCloudWork({ userId, botId, generation, goal: 'Try', query: 'octo/unlinked' }), error => error.cardShown === true && /not installed/.test(error.message));
   const connectSeq = await waitFor(() => db.prepare("SELECT seq FROM rows WHERE bot_id=? AND json_extract(body,'$.blocker')='cloud-connect'").get(botId)?.seq, 'the Claude GitHub connection card');
   assert.ok(card(connectSeq).options.some(o => o.kind === 'open' && /github\.com\/apps\/claude/.test(o.url)));
   assert.ok(card(connectSeq).options.some(o => o.kind === 'repo' && o.repo === 'octo/unlinked'));
@@ -303,6 +333,59 @@ try {
   assert.equal(unresolved.ok, false); assert.equal(unresolved.blocker, 'not-found'); assert.ok(unresolved.options.some(o => o.kind === 'repo'));
   assert.ok(!ghCalls.some(call => /repo clone|--clone(?!=false)/.test(call)), 'never clones');
   console.log('PASS gh device flow: one-time code parsed and confirmed; unnamed repo asks which one; nothing is cloned');
+
+  // ---------- 8. Headless refused → pseudo-terminal launch; failures are failures ----------
+  const CS = await import('../server/dist/features/cloud-sessions.js');
+  assert.equal(CS.terminalCloudUrl('View: https://claude.ai/code/session_ab12?from=cli&m=0'), 'https://claude.ai/code/session_ab12');
+  assert.equal(CS.terminalCloudUrl('Session ID: cse_x9'), 'https://claude.ai/code/cse_x9');
+  assert.equal(CS.terminalCloudUrl('https://evil.test/code/session_x'), null);
+  assert.equal(CS.cleanTerminal('\x1b[1mHi\x1b[22m\x1b[3Cthere\r\n\x1b]0;title\x07ok'), 'Hi   there\nok');
+  const [shell, shellArgs] = CS.ptyCommand('/x/claude', ['--cloud', "it's"]);
+  assert.equal(shell, '/bin/sh'); assert.match(shellArgs[1], /mkfifo -m 600/); assert.match(shellArgs[1], process.platform === 'darwin' ? /\/usr\/bin\/script -q \/dev\/null/ : /script -qfec/);
+  assert.deepEqual(CS.cloudTerminalArgs('Fix it').slice(0, 2), ['--cloud', 'Fix it']);
+  // This sandbox cannot open a pseudo-terminal, so the fake CLI runs directly; the real wrapper is checked above.
+  CS.setCloudTerminal((program, args) => [program, args]);
+  writeFileSync(join(scratch, 'terminal-only'), '');
+  const workCards = () => db.prepare("SELECT body FROM rows WHERE bot_id=? AND json_extract(body,'$.card')='work' ORDER BY seq").all(botId).map(r => JSON.parse(r.body));
+  const term = await tool.impl({ prompt: 'Fix the README', repo: 'octo/widget' }, ctx);
+  assert.match(term.output, /confirmed/);
+  const termRow = await waitFor(() => listSessions(userId, { type: 'builders' }).find(s => s.cloudUrl === 'https://claude.ai/code/session_term_1' && s.status === 'completed'), 'the terminal-launched session in Sessions → Builders');
+  assert.equal(termRow.kind, 'cloud');
+  const termCard = await waitFor(() => workCards().find(c => c.links?.some(l => l.url === 'https://claude.ai/code/session_term_1') && c.status === 'done'), 'a finished builder card with the session link');
+  assert.equal(termCard.agents[0].label, 'Claude Cloud'); assert.equal(termCard.stop.kind, 'cloud');
+  console.log('PASS terminal launch: stream-json refused → pseudo-terminal, trust prompt answered, session URL parsed, builder card + Sessions (Builders) updated');
+
+  // A failed launch is a failed tool result, never "started".
+  await assert.rejects(tool.impl({ prompt: 'TERM_FAIL fix', repo: 'octo/widget' }, ctx), error => /did NOT start/.test(error.message) && /repository not accessible/.test(error.message));
+  await waitFor(() => listSessions(userId, { kind: 'cloud' }).find(s => s.status === 'failed' && /repository not accessible/.test(s.error ?? '')), 'the failed record');
+  await waitFor(() => workCards().find(c => c.status === 'failed' && c.steps.some(s => /repository not accessible/.test(s.text))), 'a failed builder card');
+  console.log('PASS launch failure: tool result fails with the CLI error, Sessions and the card say failed');
+
+  // A question the CLI asks while launching becomes an in-app approval card; approving continues, declining fails.
+  const asked = launchCloudWork({ userId, botId, generation, goal: 'ASK_OWNER fix', query: 'octo/widget' });
+  const askSeq = await waitFor(() => db.prepare("SELECT seq FROM rows WHERE bot_id=? AND json_extract(body,'$.mode')='permission' AND json_extract(body,'$.status')='pending'").get(botId)?.seq, 'the launch question card');
+  assert.match(card(askSeq).problem, /Claude Code is asking/); assert.match(card(askSeq).solution, /grant Claude access to octo\/widget/);
+  await actOnCloudCard(userId, botId, askSeq, 'allow', { local: false }).done;
+  assert.equal((await asked).started, true);
+  const declined = launchCloudWork({ userId, botId, generation, goal: 'ASK_OWNER again', query: 'octo/widget' });
+  const denySeq = await waitFor(() => db.prepare("SELECT seq FROM rows WHERE bot_id=? AND json_extract(body,'$.mode')='permission' AND json_extract(body,'$.status')='pending'").get(botId)?.seq, 'the second question card');
+  await actOnCloudCard(userId, botId, denySeq, 'deny', { local: false }).done;
+  await assert.rejects(declined, /declined/);
+  console.log('PASS launch questions: approvable in-app; approve → started, decline → failed (not started)');
+
+  // Stays attached (live terminal view): progress streams to the card, then Marion detaches when it goes quiet.
+  const steps = [];
+  const pointerDir = mkdtempSync(join(tmpdir(), 'marion-cloud-test-'));
+  const attached = await CS.relayCloudTerminal('claude', pointerDir, 'ATTACH work', new AbortController().signal,
+    { onUrl: () => {}, onProgress: line => steps.push(line) }, { idleMs: 400 });
+  rmSync(pointerDir, { recursive: true, force: true });
+  assert.equal(attached.url, 'https://claude.ai/code/session_term_1'); assert.equal(attached.attached, true);
+  assert.ok(steps.some(s => /Edited README\.md part 2/.test(s))); assert.ok(!steps.some(s => /esc to interrupt/.test(s)), 'spinner lines filtered');
+  console.log('PASS attached terminal: progress lines stream, spinner noise dropped, detaches when idle');
+
+  // Stop from the work card ends exactly that run.
+  assert.throws(() => CS.stopCloudSession(userId, botId, 'nope'), /no longer running/);
+  CS.setCloudTerminal();
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

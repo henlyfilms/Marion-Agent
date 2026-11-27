@@ -113,6 +113,8 @@ export const featuresApi = {
   setFullAccess: (botId: string, enabled: boolean, confirm?: string) => req<{ fullAccess: boolean }>('PUT', `/bots/${botId}/full-access`, { enabled, confirm }),
   continueHandoff: (botId: string, id: string, seq: number, selection: ChatModelSelection) =>
     req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/handoffs/${encodeURIComponent(id)}/continue`, { seq, selection }),
+  stopCloudSession: (botId: string, sessionId: string) =>
+    req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-sessions/${encodeURIComponent(sessionId)}/stop`),
   cloudCardAction: (botId: string, seq: number, option: string) =>
     req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-cards/${seq}`, { option }),
   createGitHubRepo: (body: { name: string; description: string; visibility: 'private' | 'public'; folder?: string; confirmPush: boolean }) =>

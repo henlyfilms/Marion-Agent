@@ -88,6 +88,19 @@ export class WorkCard {
     return (usage: WorkUsage) => this.setUsage(agentId, usage);
   }
 
+  /** A link for this run (e.g. "Open in Claude" for a Cloud session); one per label. */
+  setLink(label: string, url: string) {
+    if (!/^https:\/\//.test(url)) return;
+    this.body.links = [...(this.body.links ?? []).filter(link => link.label !== label), { label: label.slice(0, 40), url }];
+    this.schedule();
+  }
+
+  /** What the card's Stop button ends while the run is going. */
+  setStop(stop: WorkCardBody['stop']) {
+    this.body.stop = stop;
+    this.schedule();
+  }
+
   finish(status: WorkCardBody['status'], question?: string, options?: string[]) {
     this.body.status = status;
     // The finished card keeps the final numbers, no longer marked live.
@@ -109,7 +122,8 @@ export class WorkCard {
     // The chat was cleared meanwhile: nothing to update.
     const row = getRow(this.botId, this.seq);
     if (!row || row.generation !== getBotRow(this.botId)?.generation) return;
-    updateRow(this.botId, this.seq, { ...this.body, agents: this.body.agents.map(a => ({ ...a })), steps: [...this.body.steps], phases: this.body.phases.map(p => ({ ...p })) });
+    updateRow(this.botId, this.seq, { ...this.body, agents: this.body.agents.map(a => ({ ...a })), steps: [...this.body.steps], phases: this.body.phases.map(p => ({ ...p })),
+      ...(this.body.links ? { links: this.body.links.map(link => ({ ...link })) } : {}) });
   }
 }
 

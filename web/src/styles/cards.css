@@ -161,4 +161,7 @@
 .work-card__quiet { margin: 0; font-size: 12px; color: var(--color-text-tertiary); }
 .work-card__question { display: flex; gap: 8px; margin: 0; padding: 9px 11px; border-radius: 10px; background: var(--color-warn-bg); color: var(--color-ink); font-size: 13px; line-height: 18px; }
 .work-card__question svg { flex: none; margin-top: 2px; color: var(--color-warn-text); }
+.work-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.work-card__actions .btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; font-size: 12.5px; line-height: 16px; text-decoration: none; }
+.work-card__error { font-size: 12px; color: var(--color-error-text, #c0392b); }
 @media (max-width: 700px) { .work-step { grid-template-columns: auto 14px minmax(0, 1fr); font-size: 12px; } }

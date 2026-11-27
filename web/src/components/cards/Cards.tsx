@@ -258,7 +258,7 @@ export function CardRow({ row }: { row: Row }) {
     case 'connect': return <ConnectCard row={row} body={b} />;
     case 'draft': return <DraftCard body={b} />;
     case 'handoff': return <UsageHandoffCard row={row} body={b} />;
-    case 'work': return <WorkCard body={b} />;
+    case 'work': return <WorkCard body={b} botId={row.botId} />;
     case 'cloud': return <CloudCard row={row} body={b} />;
     default: return null;
   }

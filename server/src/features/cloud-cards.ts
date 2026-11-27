@@ -9,7 +9,7 @@ import { appendRow, getBotRow, getRow, updateRow } from '../store.js';
 import { executable } from '../agent/subscriptions.js';
 import { notify } from './notify.js';
 import { createGitHubRepo } from './github-repos.js';
-import { startCloudSession, type CloudLaunchHooks } from './cloud-sessions.js';
+import { CloudLaunchError, startCloudSession, type CloudLaunchHooks } from './cloud-sessions.js';
 import { recordCloudRequest, settleCloudRequest } from './agent-sessions.js';
 import type { CloudCardBody } from '../types.js';
 import {
@@ -25,7 +25,8 @@ export interface CloudDeps {
   installGh: () => Promise<void>;
   createRepo: (fullName: string) => Promise<void>;
   claudeInstalled: () => boolean;
-  launch: (userId: string, botId: string, generation: number, goal: string, repo: CloudRepo, hooks: CloudLaunchHooks, sessionId?: string) => string;
+  /** Resolves with the Sessions id once Claude confirmed the Cloud session; rejects (CloudLaunchError) if it did not start. */
+  launch: (userId: string, botId: string, generation: number, goal: string, repo: CloudRepo, hooks: CloudLaunchHooks, sessionId?: string) => Promise<string>;
   /** Public repositories looked up without the GitHub CLI (owner/repo or a URL). */
   publicRepo: PublicRepoLookup;
 }
@@ -59,9 +60,13 @@ function hooksFor(userId: string, botId: string, generation: number, goal: strin
     onPermission: ({ tool, detail }) => new Promise<boolean>(resolve => {
       if (!current(botId, generation)) return resolve(false);
       const id = randomUUID();
+      // 'Claude Code' = a question the CLI asks while launching (access, auth, repository); anything else is a tool in the Cloud sandbox.
+      const problem = tool === 'Claude Code'
+        ? `Claude Code is asking before it starts Cloud work on ${repo.nameWithOwner}.`
+        : `Claude Cloud wants to use ${tool} in its cloud sandbox for ${repo.nameWithOwner}.`;
       const card: CloudCardBody = {
         type: 'card', card: 'cloud', id, mode: 'permission', goal, title, query: repo.nameWithOwner, generation, repo: repo.nameWithOwner,
-        problem: `Claude Cloud wants to use ${tool} in its cloud sandbox for ${repo.nameWithOwner}.`, solution: detail,
+        problem, solution: detail,
         options: [{ id: 'allow', kind: 'retry', label: 'Allow' }, { id: 'deny', kind: 'cancel', label: "Don't allow" }], status: 'pending',
       };
       appendRow(botId, 'card', card);
@@ -109,6 +114,12 @@ export type CloudLaunchResult =
   | { started: true; repo: CloudRepo; sessionId: string }
   | { started: false; seq: number; blocker: CloudBlocker; problem: string; solution: string; options: CloudOption[] };
 
+/** Launch and wait for Claude to confirm the Cloud session; a launch that fails throws (CloudLaunchError) with the reason. */
+async function launchConfirmed(userId: string, botId: string, generation: number, goal: string, title: string | undefined, repo: CloudRepo, sessionId?: string) {
+  try { return await deps.launch(userId, botId, generation, goal, repo, hooksFor(userId, botId, generation, goal, title, repo), sessionId); }
+  catch (error) { throw error instanceof CloudLaunchError ? error : new CloudLaunchError(String((error as Error)?.message ?? error)); }
+}
+
 /**
  * Start Cloud work for a request. `query` names the repository (owner/repo, URL, or a name to search for).
  * Resolves on GitHub only; on any blocker an in-app card with concrete fixes goes into the chat instead.
@@ -130,7 +141,7 @@ export async function launchCloudWork(input: { userId: string; botId: string; ge
   }
   const resolution = await resolveCloudRepo(query, deps.gh, deps.publicRepo);
   if (resolution.ok) {
-    const started = deps.launch(userId, botId, generation, goal, resolution.repo, hooksFor(userId, botId, generation, goal, title, resolution.repo), sessionId);
+    const started = await launchConfirmed(userId, botId, generation, goal, title, resolution.repo, sessionId);
     return { started: true, repo: resolution.repo, sessionId: started };
   }
   waiting(resolution.problem);
@@ -226,6 +237,6 @@ async function launchFollowUp(userId: string, botId: string, body: CloudCardBody
     solution: 'Install Claude Code, sign in, then check again.', options: body.options };
   const resolution = await resolveCloudRepo(query, deps.gh, deps.publicRepo);
   if (!resolution.ok) return { started: false, seq: -1, blocker: resolution.blocker, problem: resolution.problem, solution: resolution.solution, options: resolution.options };
-  const sessionId = deps.launch(userId, botId, body.generation, body.goal, resolution.repo, hooksFor(userId, botId, body.generation, body.goal, body.title, resolution.repo), body.sessionId);
+  const sessionId = await launchConfirmed(userId, botId, body.generation, body.goal, body.title, resolution.repo, body.sessionId);
   return { started: true, repo: resolution.repo, sessionId };
 }

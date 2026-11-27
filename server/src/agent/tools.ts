@@ -1,6 +1,6 @@
 import { createGitHubRepo } from '../features/github-repos.js';
 import { launchCloudWork } from '../features/cloud-cards.js';
-import { exactRepo, repoHint, wantsCloud } from '../features/cloud-repo.js';
+import { exactRepo, repoHint } from '../features/cloud-repo.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
@@ -119,10 +119,6 @@ export const backgroundScript = (job: string, command: string) => {
   return `mkdir -p /workspace/.jobs && cd /workspace || exit 1\n( $(command -v setsid || true) bash -c ${quoted} > /workspace/.jobs/${job}.log 2>&1 < /dev/null; echo $? > /workspace/.jobs/${job}.exit ) > /dev/null 2>&1 & echo $!`;
 };
 
-/** Strict Cloud mode: once the owner asked for Cloud work, no tool may reach for a folder or checkout on this Mac instead. */
-export function cloudRequested(ctx: Pick<ToolCtx, 'turn'>, ...texts: unknown[]) {
-  return wantsCloud(ctx.turn?.request) || texts.some(wantsCloud);
-}
 /** "owner/repo" or a GitHub URL from a tool argument; anything else is refused with a clear message. */
 export function githubRepoArg(value: unknown): string | null {
   if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null;
@@ -136,8 +132,6 @@ export async function repoScratch(repo: string) {
   const path = await mkdtemp(joinPath(tmpdir(), 'marion-repo-'));
   return { path, label: `GitHub ${repo}`, write: true };
 }
-
-const LOCAL_IN_CLOUD = 'The owner asked for Cloud work: call start_cloud_session with the GitHub repository (owner/repo or its name) instead. Never use a folder or local copy on this Mac for Cloud work; if the repository can\'t be found or reached, start_cloud_session shows the owner an in-app card with fixes.';
 
 export const TOOLS: ToolDef[] = [
   {
@@ -272,7 +266,6 @@ export const TOOLS: ToolDef[] = [
     activity: 'working',
     label: 'Looking in a folder',
     impl: async (args, ctx) => {
-      if (cloudRequested(ctx)) throw new Error(LOCAL_IN_CLOUD);
       const result = await listFolder(ctx.botId, args);
       return { output: JSON.stringify(result), summary: `${result.total} items in ${result.folder}` };
     },
@@ -318,14 +311,22 @@ export const TOOLS: ToolDef[] = [
       const prompt = args.prompt;
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a Cloud task of up to 20,000 characters.');
       const query = typeof args.repo === 'string' && args.repo.trim() ? args.repo.trim().slice(0, 300) : repoHint(prompt) ?? repoHint(ctx.turn?.request);
-      const result = await launchCloudWork({ userId: ctx.userId, botId: ctx.botId, generation: getBotRow(ctx.botId)?.generation ?? 0,
-        goal: prompt.trim(), title: miniTitle(prompt, args.title), query });
+      let result: Awaited<ReturnType<typeof launchCloudWork>>;
+      try {
+        result = await launchCloudWork({ userId: ctx.userId, botId: ctx.botId, generation: getBotRow(ctx.botId)?.generation ?? 0,
+          goal: prompt.trim(), title: miniTitle(prompt, args.title), query });
+      } catch (error) {
+        // The session did not start: a failed tool result, never a "started" message.
+        const reason = String((error as Error)?.message ?? error).slice(0, 800);
+        const card = (error as { cardShown?: boolean })?.cardShown ? ' An in-app card with the fix is already showing in the chat; the owner can approve it there.' : '';
+        throw new Error(`Claude Cloud did NOT start: ${reason}${card} Tell the owner it failed and why; do not say a session started.`);
+      }
       if (result.started) return {
-        output: `Claude Cloud started on GitHub ${result.repo.nameWithOwner} (${result.repo.url}). It runs remotely; its result posts in this chat when it finishes. Tell the owner in one line and end your turn. Do not also work on this locally.`,
+        output: `Claude Cloud started on GitHub ${result.repo.nameWithOwner} (${result.repo.url}); Claude confirmed the session. Its live work card is in the chat and in Sessions; updates post here. Tell the owner in one line and end your turn.`,
         summary: `Started Claude Cloud on ${result.repo.nameWithOwner}`,
       };
       return {
-        output: `Cloud work is waiting on the owner. Problem: ${result.problem} Fix: ${result.solution} An in-app card with these choices is already showing in the chat: ${result.options.map(o => `"${o.label}"`).join(', ')}. The owner picks or approves there and Marion continues in the Cloud automatically. Relay this in one or two lines and stop. Do not call ask_user, ask_subscription, shell or folder tools, and never fall back to a local folder.`,
+        output: `Cloud work is waiting on the owner. Problem: ${result.problem} Fix: ${result.solution} An in-app card with these choices is already showing in the chat: ${result.options.map(o => `"${o.label}"`).join(', ')}. The owner picks or approves there and Marion continues in the Cloud automatically. Relay this in one or two lines and stop; do not say the session started.`,
         summary: `Cloud needs the owner: ${result.blocker}`,
         endTurn: true,
       };
@@ -348,7 +349,6 @@ export const TOOLS: ToolDef[] = [
       const { provider, prompt } = args;
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
-      if (cloudRequested(ctx, prompt)) throw new Error(LOCAL_IN_CLOUD);
       const repo = githubRepoArg(args.repo);
       // A named repository without a folder: a fresh scratch folder (nothing of the owner's) to clone it into.
       const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : repo ? await repoScratch(repo) : undefined;
@@ -424,7 +424,6 @@ export const TOOLS: ToolDef[] = [
     activity: 'messaging_named',
     label: 'Orchestrating a team',
     impl: async (args, ctx) => {
-      if (args.folder && cloudRequested(ctx, args.goal)) throw new Error(LOCAL_IN_CLOUD);
       const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
       // The whole team run holds the folder, so no other relayed session edits it meanwhile.
       return withFolder(folder, ctx.signal, () => appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Waiting for another session in ${folder?.label} to finish first.` }), () => orchestrate(ctx, args, folder));
