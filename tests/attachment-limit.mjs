@@ -40,9 +40,15 @@ assert.match(relayed.note, /20 screenshots/);
 
 // The app uses the same limit everywhere it adds files (picker, drag and drop, paste, screenshot picker).
 const composer = readFileSync(new URL('../web/src/components/Composer.tsx', import.meta.url), 'utf8');
+const fileDrafts = readFileSync(new URL('../web/src/lib/fileDrafts.ts', import.meta.url), 'utf8');
 const picker = readFileSync(new URL('../web/src/components/modals/ScreenshotPicker.tsx', import.meta.url), 'utf8');
-assert.match(composer, /combined\.length > MAX_ATTACHMENTS/);
-assert.match(picker, /up to \$\{MAX_ATTACHMENTS\} attachments/);
+const sidebar = readFileSync(new URL('../web/src/components/Sidebar.tsx', import.meta.url), 'utf8');
+// One check for every way in: the chat box, the screenshot picker and drops on a sidebar chat.
+assert.match(fileDrafts, /current\.length \+ added\.length > MAX_ATTACHMENTS\) return TOO_MANY_ATTACHMENTS/);
+assert.match(composer, /addDraftFiles\(bot\.id, added\)/);
+assert.match(picker, /addDraftFiles\(botId, \[file\]\)/);
+assert.match(picker, /already has \{MAX_ATTACHMENTS\} attachments/);
+assert.match(sidebar, /dropFilesOnChat\(botId, /);
 for (const source of [composer, picker]) assert.doesNotMatch(source, /four attachments|length > 4\b/);
 const css = readFileSync(new URL('../web/src/styles/chat.css', import.meta.url), 'utf8');
 assert.match(css, /\.composer-files \{[^}]*overflow-y: auto/, 'many attachments scroll inside the strip');

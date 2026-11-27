@@ -483,6 +483,8 @@ export interface StatsSummary {
   /** First and last day of `days` (YYYY-MM-DD, local). */
   from: string;
   to: string;
+  /** First day with any counted activity in the whole history (YYYY-MM-DD), or null when there is none. */
+  since: string | null;
   streak: { current: number; longest: number; activeDays: number; activeToday: boolean; lastActiveDate: string | null };
   totals: {
     userMessages: number; totalMessages: number; chats: number; relayedRuns: number; completedRuns: number;

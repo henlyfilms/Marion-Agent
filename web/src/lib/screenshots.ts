@@ -1,18 +1,36 @@
 // Recent-screenshots picker: server calls, the keyboard shortcut, and getting a picture ready to attach.
 
-/** Window event the picker uses to hand files to the open chat box (Composer). */
-export const ATTACH_EVENT = 'marion-agent:attach-files';
-
-const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 /** ⇧⌘S on a Mac, Ctrl+Shift+S elsewhere. Command/Control is the "mod" key like ⌘K and ⌘B. */
 export const SCREENSHOT_SHORTCUT_LABEL = isMac ? '⇧⌘S' : 'Ctrl+Shift+S';
 
-export function isScreenshotShortcut(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'code'>) {
-  return event.code === 'KeyS' && event.shiftKey && !event.altKey && (isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
+export function isScreenshotShortcut(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'code' | 'key'>) {
+  // The letter S wherever the layout puts it (Dvorak, AZERTY…); the physical S key for non-Latin layouts.
+  const letter = event.key?.toLowerCase() ?? '';
+  return (/^[a-z]$/.test(letter) ? letter === 's' : event.code === 'KeyS') && event.shiftKey && !event.altKey && (isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
 }
 
 export interface ScreenshotEntry { name: string; at: number; size: number }
-export interface ScreenshotPage { folder: string; items: ScreenshotEntry[]; total: number }
+/** `total` counts what the query matches; `pastHour` counts every screenshot from the last 60 minutes. */
+export interface ScreenshotPage { folder: string; items: ScreenshotEntry[]; total: number; pastHour: number }
+
+/** The shortcut shows this many newest screenshots; "Past hour" lists the rest from the last 60 minutes. */
+export const RECENT_SHOTS = 3;
+export const PAST_HOUR_MS = 60 * 60 * 1000;
+
+export interface ScreenshotQuery { limit: number; offset?: number; since?: number }
+export const screenshotsPath = ({ limit, offset = 0, since }: ScreenshotQuery) =>
+  `/api/screenshots?limit=${limit}&offset=${offset}${since === undefined ? '' : `&since=${Math.floor(since)}`}`;
+/** The quick view: the three newest, however old. */
+export const recentQuery = (): ScreenshotQuery => ({ limit: RECENT_SHOTS });
+/** Past hour: the screenshots from the last 60 minutes after the three the quick view already shows. */
+export const pastHourQuery = (now = Date.now(), limit = 60, offset = 0): ScreenshotQuery =>
+  ({ limit, offset: RECENT_SHOTS + offset, since: now - PAST_HOUR_MS });
+/** How many past-hour screenshots the quick view is not showing (they are always its newest ones). */
+export const moreInPastHour = (page: Pick<ScreenshotPage, 'pastHour'>) => Math.max(0, page.pastHour - RECENT_SHOTS);
+/** How many screenshots a view pages through. The server's past-hour `total` includes the three the quick view shows. */
+export const listedTotal = (page: Pick<ScreenshotPage, 'total'>, pastHourView: boolean) =>
+  pastHourView ? Math.max(0, page.total - RECENT_SHOTS) : page.total;
 
 async function fail(res: Response): Promise<never> {
   let message = res.statusText;
@@ -20,8 +38,8 @@ async function fail(res: Response): Promise<never> {
   throw new Error(message);
 }
 
-export async function listScreenshots(limit: number, offset: number, signal?: AbortSignal): Promise<ScreenshotPage> {
-  const res = await fetch(`/api/screenshots?limit=${limit}&offset=${offset}`, { credentials: 'include', cache: 'no-store', signal });
+export async function listScreenshots(query: ScreenshotQuery, signal?: AbortSignal): Promise<ScreenshotPage> {
+  const res = await fetch(screenshotsPath(query), { credentials: 'include', cache: 'no-store', signal });
   return res.ok ? res.json() : fail(res);
 }
 
@@ -52,9 +70,4 @@ export async function screenshotFile(entry: ScreenshotEntry, signal?: AbortSigna
   }
   bitmap.close();
   throw new Error('That screenshot is too large to attach.');
-}
-
-export function attachFiles(botId: string, files: File[]) {
-  // A Composer acknowledges it only after adding the files to its draft.
-  return !window.dispatchEvent(new CustomEvent(ATTACH_EVENT, { cancelable: true, detail: { botId, files } }));
 }

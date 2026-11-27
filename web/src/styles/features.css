@@ -166,6 +166,18 @@
 /* ---------- settings ---------- */
 .quiet-hours { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-text-tertiary); }
 .quiet-hours .text-input { width: 112px; }
+/* Narrow settings pane: the time pickers (~250px) drop below the label instead of clipping it.
+   Keyed to the settings pane width (container on .app-settings__page), not the viewport, because the
+   settings sidebar eats 180-290px of the window at mid widths. The media query is a fallback for
+   any render outside that container. */
+@container settings-page (max-width: 520px) {
+  .cfg-row:has(.quiet-hours) { flex-wrap: wrap; }
+  .quiet-hours { flex-basis: 100%; }
+}
+@media (max-width: 520px) {
+  .cfg-row:has(.quiet-hours) { flex-wrap: wrap; }
+  .quiet-hours { flex-basis: 100%; }
+}
 .cfg-note { margin: 10px 0 0; font-size: 13px; color: var(--color-text-secondary); }
 .cfg-card--form { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
 .cfg-actions { display: flex; flex-wrap: wrap; gap: 8px; }

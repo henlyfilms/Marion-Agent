@@ -29,8 +29,10 @@
 .cfg-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .cfg-field__label { font-size: 13px; font-weight: 500; line-height: 18px; color: var(--color-text-primary); }
 .cfg-field__hint { font-size: 12px; line-height: 16px; letter-spacing: 0.12px; color: var(--color-text-tertiary); }
-.cfg-textarea { height: auto; min-height: 56px; resize: vertical; line-height: 19px; padding: 8px 10px; font-family: inherit; }
-.cfg-textarea--tall { min-height: 132px; }
+/* .text-input.cfg-textarea outranks base.css .text-input (height: 35px; line-height: 18px) whatever order the CSS chunks load in. */
+.text-input.cfg-textarea { height: auto; min-height: 56px; resize: vertical; line-height: 19px; padding: 8px 10px; font-family: inherit; }
+/* Same specificity as .text-input.cfg-textarea and declared after it, so the tall floor wins (no resizing down to 56px). */
+.text-input.cfg-textarea--tall { min-height: 132px; }
 .text-input[aria-invalid='true'] { border-color: var(--color-danger); }
 .cfg-seg { display: inline-flex; align-self: flex-start; padding: 2px; gap: 2px; border-radius: var(--radius-full); background: var(--color-bg-tertiary); box-shadow: var(--color-border-tertiary) 0 0 0 0.5px inset; flex-wrap: wrap; }
 .cfg-seg button { height: 26px; padding: 0 12px; border-radius: var(--radius-full); font-size: 13px; line-height: 18px; color: var(--color-text-secondary); transition: background-color 120ms, color 120ms; }
@@ -182,7 +184,7 @@
 .app-settings__main { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; background: var(--color-bg-pane); }
 .app-settings__scroll { height: 100%; overflow-y: auto; scrollbar-width: thin; scrollbar-gutter: stable; }
 .app-settings__close { position: absolute; z-index: 2; top: 14px; right: 16px; }
-.app-settings__page { display: flex; flex-direction: column; gap: 28px; max-width: 680px; margin: 0 auto; padding: 48px 32px 64px; }
+.app-settings__page { display: flex; flex-direction: column; gap: 28px; max-width: 680px; margin: 0 auto; padding: 48px 32px 64px; container: settings-page / inline-size; }
 .app-settings__page, .cfg-content > .cfg-page { animation: settings-section-in 180ms var(--ease-out); }
 @keyframes settings-section-in { from { opacity: 0; translate: 0 4px; } to { opacity: 1; translate: 0 0; } }
 .app-settings__head h1 { margin: 0; font-size: 22px; font-weight: 600; line-height: 28px; letter-spacing: -0.2px; color: var(--color-text-primary); }
@@ -269,7 +271,8 @@
 .custom-theme__picker { display: grid; justify-items: center; padding: 4px 0 8px; }
 .custom-theme__picker .color-picker { width: 280px; box-shadow: none; background: var(--color-bg-pane); }
 .custom-theme__foot { display: flex; justify-content: flex-end; padding: 6px 4px 2px; }
-.cfg-select { flex: none; width: auto; min-width: 104px; height: 32px; padding-block: 0; }
+/* Beats base.css .text-input (width: 100%) regardless of load order, so the select hugs its value instead of covering the row text. */
+.cfg-row > .cfg-select, .text-input.cfg-select { flex: 0 0 auto; width: auto; max-width: 50%; min-width: 104px; height: 32px; padding-block: 0; }
 .full-access.is-on { box-shadow: color-mix(in srgb, var(--color-danger) 45%, transparent) 0 0 0 1px inset; }
 .full-access__confirm { display: flex; flex-direction: column; gap: 10px; margin: 0 12px 12px; padding: 12px; border-radius: 12px; background: var(--color-danger-bg); font-size: 13px; line-height: 18px; animation: rise 260ms var(--ease-ios) both; }
 .full-access__confirm p { margin: 0; color: var(--color-ink); }

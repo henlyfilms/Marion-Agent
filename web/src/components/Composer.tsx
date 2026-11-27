@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
-import { MAX_ATTACHMENTS, TOO_MANY_ATTACHMENTS } from '@shared/attachment-limits';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent, type ReactNode } from 'react';
+import { MAX_ATTACHMENTS } from '@shared/attachment-limits';
 import { Activity, BarChart3, Brain, Eraser, FileText, Film, Images, Mic, MicOff, PanelRight, Paperclip, Phone, PhoneOff, Settings, Shrink, Sliders, Square, SquareSlash, Users, X } from 'lucide-react';
 import { featuresApi, formatTokens, useFeatureUI } from '../lib/featuresApi';
 import { MicSolid, PhoneSolid, ScreenRecordGlyph } from './SolidGlyphs';
@@ -22,26 +22,13 @@ import { useConfigUI } from '../configStore';
 import { setDetailsOpen, useCompactLayout, useDetailsOpen } from '../lib/layout';
 import { getDraft, onDraftChange, setDraft } from '../lib/drafts';
 import { useMessageActions } from '../lib/messageActions';
-import { ATTACH_EVENT, SCREENSHOT_SHORTCUT_LABEL } from '../lib/screenshots';
+import { SCREENSHOT_SHORTCUT_LABEL } from '../lib/screenshots';
+import { ACCEPT, addDraftFiles, carriesFiles, getFileDraft, isPhoto, isVideo, setFileDraft, subscribeFileDrafts, takeFileDraftProblem } from '../lib/fileDrafts';
 import { isOfflineError, newClientId, outbox, useOnline, useQueuedPrompts } from '../lib/offlineQueue';
 import { insertMention, matchMentionBots, mentionAt } from '../lib/mentions';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 
 const MAX_H = 200;
-const fileDrafts = new Map<string, File[]>();
-const photoTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-const textFiles = '.txt,.md,.markdown,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.htm,.css,.js,.mjs,.cjs,.jsx,.ts,.mts,.cts,.tsx,.py,.sh,.sql';
-const isPhoto = (file: File) => photoTypes.includes(file.type) || /\.(?:png|jpe?g|webp|gif)$/i.test(file.name);
-const isTextFile = (file: File) => file.type.startsWith('text/') || textFiles.split(',').some(ext => file.name.toLowerCase().endsWith(ext));
-const videoTypes = ['video/quicktime', 'video/mp4', 'video/webm'];
-/** Screen recordings (macOS saves .mov); the server turns them into frames for Claude, Codex and Gemini. */
-const isVideo = (file: File) => file.type.startsWith('video/') || /\.(?:mov|mp4|m4v|webm)$/i.test(file.name);
-/** Matches the server: a few minutes of retina screen recording is far over 64 MB. */
-const MAX_VIDEO = 256 * 1024 * 1024;
-/** One message carries at most two recordings (the server's request size limit is two of them). */
-const MAX_VIDEOS = 2;
-const MAX_PHOTO = 4 * 1024 * 1024;
-const MAX_TEXT = 256 * 1024;
 /** Pasted screenshots arrive as "image.png"; give them a readable, unique name. */
 const named = (file: File, index: number) => {
   if (file.name && file.name !== 'image.png') return file;
@@ -118,7 +105,10 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const allBots = useStore(s => s.bots);
   const [roomMemberIds, setRoomMemberIds] = useState<Set<string> | null>(null);
   const [menu, setMenu] = useState<'attachments' | 'commands' | null>(null);
-  const [files, setFiles] = useState(() => fileDrafts.get(bot.id) ?? []);
+  // Attachments live in a shared per-bot store, so a drop on this bot in the sidebar lands here even before it opens.
+  const files = useSyncExternalStore(subscribeFileDrafts, () => getFileDraft(bot.id));
+  const setFiles = (next: readonly File[] | ((current: readonly File[]) => readonly File[])) =>
+    setFileDraft(bot.id, typeof next === 'function' ? next(getFileDraft(bot.id)) : next);
   const fileInput = useRef<HTMLInputElement>(null);
   const plusButton = useRef<HTMLButtonElement>(null);
   const [audioMenu, setAudioMenu] = useState(false);
@@ -152,11 +142,12 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     else setError('Set up a speech provider in Settings → Audio.');
   };
 
-  // Per-bot drafts.
+  // Files added from outside this box (dropped on the chat in the sidebar) that did not fit say why here.
   useEffect(() => {
-    if (files.length) fileDrafts.set(bot.id, files);
-    else fileDrafts.delete(bot.id);
-  }, [bot.id, files]);
+    const show = () => { const problem = takeFileDraftProblem(bot.id); if (problem) setError(problem); };
+    show();
+    return subscribeFileDrafts(show);
+  }, [bot.id]);
   useEffect(() => { if (!compact) ref.current?.focus(); }, [compact]);
   // Choosing Reply puts the cursor straight into the box.
   const replySeq = reply?.seq;
@@ -179,7 +170,6 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     const sent = () => {
       useMessageActions.getState().setReply(bot.id, null);
       setFiles([]);
-      fileDrafts.delete(bot.id);
       setText('');
     };
     // Offline, or earlier prompts in this chat are still waiting: queue it behind them so the order holds.
@@ -192,7 +182,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     setSending(true); setError(null);
     const clientId = newClientId();
     try {
-      await api.send(bot.id, t, files, { ...replyTo, clientId });
+      await api.send(bot.id, t, [...files], { ...replyTo, clientId });
       sent();
     } catch (e) {
       if (isOfflineError(e) && !files.length) {
@@ -210,41 +200,10 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   const stop = () => api.interrupt(bot.id).catch((e) => setError(e.message));
   const chooseFiles = () => fileInput.current?.click();
   const addFiles = (added: File[]) => {
-    const combined = [...files, ...added];
-    if (combined.length > MAX_ATTACHMENTS) { setError(TOO_MANY_ATTACHMENTS); return false; }
-    if (combined.filter(isVideo).length > MAX_VIDEOS) { setError(`Add up to ${MAX_VIDEOS} screen recordings per message.`); return false; }
-    const unsupported = added.find(file => !isPhoto(file) && !isVideo(file) && !isTextFile(file));
-    if (unsupported) {
-      setError(/\.pdf$/i.test(unsupported.name)
-        ? 'PDFs can’t be read yet. Copy the text into a .txt file, or take a screenshot of the page.'
-        : `${unsupported.name} isn’t supported. Add screenshots (PNG, JPEG, WebP, GIF), screen recordings (MOV, MP4, WebM) or text files.`);
-      return false;
-    }
-    const limit = (file: File) => isVideo(file) ? MAX_VIDEO : isPhoto(file) ? MAX_PHOTO : MAX_TEXT;
-    const invalid = added.find(file => !file.size || file.size > limit(file));
-    if (invalid) {
-      setError(!invalid.size ? 'Choose a file with content.' : isVideo(invalid) ? 'Screen recordings must be 256 MB or smaller.' : isPhoto(invalid) ? 'Photos must be 4 MB or smaller.' : 'Text files must be 256 KB or smaller.');
-      return false;
-    }
-    setFiles(combined);
-    setError(null);
-    return true;
+    const problem = addDraftFiles(bot.id, added);
+    setError(problem);
+    return !problem;
   };
-
-  // The screenshot picker (⇧⌘S) hands its choice to the chat box that is open.
-  const attach = useRef(addFiles);
-  attach.current = addFiles;
-  useLayoutEffect(() => {
-    const onAttach = (event: Event) => {
-      const detail = (event as CustomEvent<{ botId: string; files: File[] }>).detail;
-      if (detail.botId !== bot.id) return;
-      if (!attach.current(detail.files)) return;
-      event.preventDefault();
-      if (!compact) ref.current?.focus();
-    };
-    window.addEventListener(ATTACH_EVENT, onAttach);
-    return () => window.removeEventListener(ATTACH_EVENT, onAttach);
-  }, [bot.id, compact]);
 
   // Server transcription goes where the caret was when recording began (kept in step with the user's edits by
   // composerDictation.noteEdit) and never replaces text that was edited since.
@@ -530,12 +489,12 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   return (
     <div ref={measureArea} className={`composer-area${dropping ? ' is-dropping' : ''}`}
       onDragEnter={event => {
-        if (!event.dataTransfer.types.includes('Files')) return;
+        if (!carriesFiles(event.dataTransfer)) return;
         event.preventDefault();
         dragDepth.current++;
         setDropping(true);
       }}
-      onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+      onDragOver={event => { if (carriesFiles(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
       onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDropping(false); }}
       onDrop={event => {
         if (!event.dataTransfer.files.length) return;
@@ -630,7 +589,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
       <div className={`composer${multiline ? ' is-multiline' : ''}`}>
         <div className="composer__left">
           <span className="composer__plus-anchor">
-            <input ref={fileInput} type="file" multiple hidden accept={[...photoTypes, ...videoTypes, '.mov,.mp4,.m4v,.webm', textFiles].join(',')} onChange={event => {
+            <input ref={fileInput} type="file" multiple hidden accept={ACCEPT} onChange={event => {
               addFiles(Array.from(event.currentTarget.files ?? []));
               event.currentTarget.value = '';
               ref.current?.focus();

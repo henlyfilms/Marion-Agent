@@ -34,7 +34,20 @@
   border-top: 0.5px solid var(--color-border-secondary); flex-shrink: 0; font-size: 12.5px; color: var(--color-text-secondary);
 }
 .shots__footer .cfg-btn { display: inline-flex; align-items: center; gap: 7px; }
+.shots__message--inline { padding: 0 4px 14px; font-size: 13px; }
+.shots__count {
+  min-width: 18px; padding: 0 5px; border-radius: 9px; font-size: 11.5px; font-weight: 600; line-height: 18px; text-align: center;
+  color: var(--color-text-secondary); background: var(--color-bg-tertiary);
+}
+/* Half-screen windows: hide the key hints; on a narrow one the three recent shots become compact rows. */
 @media (max-width: 700px) {
-  .shots__grid { grid-template-columns: 1fr; }
   .shots__footer > span { display: none; }
+  .shots__footer { justify-content: flex-end; }
+  .shots__grid.is-all { grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); }
+}
+@media (max-width: 520px) {
+  .shots__body { padding: 12px; }
+  .shots__grid:not(.is-all) { grid-template-columns: 1fr; gap: 6px; }
+  .shots__grid:not(.is-all) .shot { flex-direction: row; align-items: center; gap: 12px; }
+  .shots__grid:not(.is-all) .shot__frame { width: 132px; flex: none; }
 }

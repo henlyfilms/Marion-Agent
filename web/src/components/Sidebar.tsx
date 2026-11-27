@@ -1,5 +1,5 @@
 import { ArrowDownToLine, BarChart3 } from 'lucide-react';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent, type ReactNode } from 'react';
 import type { Bot, ChatSort } from '@shared/types';
 import { orderChats, tier } from '@shared/chat-order';
 import { BotAvatarFor } from '../avatar/BotAvatar';
@@ -22,6 +22,7 @@ import { useChatReorder, type ChatMove } from './useChatReorder';
 import { useSelectionGlide } from '../lib/selectionGlide';
 import { formatTokens } from '../lib/featuresApi';
 import { contextFraction, contextTone } from './features/ContextCard';
+import { carriesFiles, dropFilesOnChat } from '../lib/fileDrafts';
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -140,17 +141,67 @@ interface BotButtonProps {
   variant: 'row' | 'rail' | 'featured'; open: () => void; remove: () => void; moveItems: () => MenuItem[];
 }
 
+/**
+ * Screenshots or files dragged from Finder, the Desktop or a screenshot thumbnail onto a chat: the row lights up,
+ * and dropping adds them to that chat's draft and opens it. Entering and leaving child elements is counted, so the
+ * highlight does not flicker; it also clears if the drag ends anywhere else.
+ */
+function useFileDropTarget(botId: string) {
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  useEffect(() => {
+    if (!over) return;
+    const reset = () => { depth.current = 0; setOver(false); };
+    window.addEventListener('drop', reset);
+    window.addEventListener('dragend', reset);
+    window.addEventListener('blur', reset);
+    return () => {
+      window.removeEventListener('drop', reset);
+      window.removeEventListener('dragend', reset);
+      window.removeEventListener('blur', reset);
+    };
+  }, [over]);
+  const handlers = {
+    onDragEnter: (event: DragEvent<HTMLElement>) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      depth.current++;
+      setOver(true);
+    },
+    onDragOver: (event: DragEvent<HTMLElement>) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    },
+    onDragLeave: (event: DragEvent<HTMLElement>) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      depth.current = Math.max(0, depth.current - 1);
+      if (!depth.current) setOver(false);
+    },
+    onDrop: (event: DragEvent<HTMLElement>) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      depth.current = 0;
+      setOver(false);
+      dropFilesOnChat(botId, Array.from(event.dataTransfer.files), openBotChat);
+    },
+  };
+  return { over, handlers };
+}
+
 const BotButton = memo(function BotButton({ bot, selected, running, awaiting, variant, open, remove, moveItems }: BotButtonProps) {
   const contextMenu = useContextMenu();
+  const drop = useFileDropTarget(bot.id);
   return (
-    <button type="button" className={`bot-row bot-row--${variant}${selected ? ' is-selected' : ''}`} onClick={open}
+    <button type="button" className={`bot-row bot-row--${variant}${selected ? ' is-selected' : ''}${drop.over ? ' is-drop-target' : ''}`} onClick={open}
+      {...drop.handlers}
       aria-label={displayName(bot)} aria-current={selected || undefined} title={variant === 'rail' ? displayName(bot) : undefined}
       {...contextMenu(displayName(bot), () => [...botMenuItems(bot, true), ...moveItems(), { label: 'Delete chat…', danger: true, separator: true, onSelect: remove }])}
       data-running={running || undefined}>
       <ChatAvatar bot={bot} running={running} awaiting={awaiting} size={variant === 'featured' ? 62 : 40} ring={variant !== 'row'} star={bot.pinned && variant !== 'row'} />
       <span className="bot-row__text">
         <span className="bot-row__name">{displayName(bot)}{bot.pinned && variant === 'row' && <Icon name="star" size={12} className="bot-row__star" aria-label="Starred" />}</span>
-        {variant !== 'featured' && <span className="bot-row__preview">{previewFor(bot, running, awaiting)}</span>}
+        {variant !== 'featured' && <span className="bot-row__preview">{drop.over ? 'Drop to add to this chat' : previewFor(bot, running, awaiting)}</span>}
       </span>
       {variant !== 'featured' && (!!bot.lastPreview || !!bot.contextTokens || running || !!awaiting) && <span className="bot-row__meta">
         {awaiting

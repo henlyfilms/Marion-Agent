@@ -425,7 +425,8 @@ const MAC_ONLY = 'Screenshots are only available in the Marion Agent Mac app, on
 
 featuresApi.get('/screenshots', async (c) => {
   if (!localOnly(c)) return c.json({ error: MAC_ONLY }, 403);
-  try { return c.json(await listScreenshots(Number(c.req.query('limit') ?? 3), Number(c.req.query('offset') ?? 0))); }
+  const since = c.req.query('since');
+  try { return c.json(await listScreenshots(Number(c.req.query('limit') ?? 3), Number(c.req.query('offset') ?? 0), since ? Number(since) : undefined)); }
   catch (error) {
     const block = macBlock(error, 'Read your Mac’s screenshots folder');
     if (block) { notifyMacBlocked(c.get('user').id, block); return c.json({ error: `${block.doing}: macOS blocked ${block.blocked}. To allow it: ${block.fix}.`, macBlock: block }, 403); }

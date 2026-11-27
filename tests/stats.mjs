@@ -60,6 +60,7 @@ const stats = (range = '30d', owner = userId, atTime = NOW) => computeStats(owne
   assert.equal(empty.days.length, 30);
   assert.ok(empty.days.every(day => day.messages === 0 && day.runs === 0 && day.tokens === 0));
   assert.equal(stats('all').days.length, 7, 'an empty all-time chart still draws a week');
+  assert.equal(stats('all').since, null, 'no history: no start date');
   assert.equal(computeStats('nobody', { range: 'all', now: NOW, tzOffset: TZ }).totals.relayedRuns, 0);
 }
 
@@ -199,8 +200,15 @@ assert.equal(stats('30d', userId, NOW + 2 * DAY).streak.current, 0, 'two quiet d
   assert.equal(week.totals.tokens.total, 150 * 4 + 1200 + 500 + 75, 'Quinn days 0,1,2,6 + Rowan claude chat + codex + gemini');
   assert.deepEqual(week.bots.map(b => b.id), ['bot_quinn', 'bot_rowan']);
 
-  // 'all' reaches back to the 40-day-old chat and draws up to 365 days
+  // 'all' reaches back to the 40-day-old chat, and its chart adds up to exactly its totals
   const all = stats('all');
+  assert.equal(all.since, '2026-10-16'); assert.equal(all.from, '2026-10-16'); assert.equal(all.to, '2026-11-25');
+  const sum = (key) => all.days.reduce((n, day) => n + day[key], 0);
+  assert.equal(sum('messages'), all.totals.userMessages, 'every sent message is on the chart');
+  assert.equal(sum('runs'), all.totals.relayedRuns);
+  assert.equal(sum('tokens'), all.totals.tokens.total);
+  assert.ok(all.days.every(day => Number.isFinite(day.messages + day.runs + day.tokens)), 'no NaN in the chart');
+  assert.equal(new Set(all.days.map(day => day.date)).size, all.days.length, 'one entry per calendar day');
   assert.deepEqual(all.bots.map(b => b.id), ['bot_quinn', 'bot_rowan', 'bot_old']);
   assert.equal(all.totals.userMessages, 12);
   assert.equal(all.days.length, 41, 'from the first active day (40 days ago) to today');
@@ -215,6 +223,34 @@ assert.equal(stats('30d', userId, NOW + 2 * DAY).streak.current, 0, 'two quiet d
   assert.equal(west.days.at(-2).messages, 1, 'the 09:00 UTC message from today now sits on yesterday evening');
 }
 
+// ---- 5b. "All time" over more than a year: the chart is not cut at 365 days, so it always matches the totals
+{
+  addBot('bot_years', 'Years');
+  // A forwarded message (not "sent by you") 800 days ago still counts toward the totals, so the chart starts there.
+  user('bot_years', 1, at(800, 12), { from: { kind: 'bot', id: 'b', name: 'Rowan' } });
+  reply('bot_years', 1, at(800, 12), [{ provider: 'local', model: 'qwen', label: 'Qwen', input: 7, output: 3, estimated: false }]);
+  user('bot_years', 1, at(500, 12));
+  const all = stats('all');
+  assert.equal(all.days.length, 801, 'every day from the first activity, 800 days ago, to today');
+  assert.equal(all.since, all.from); assert.equal(all.days[0].date, all.from);
+  assert.equal(all.days[0].tokens, 10, 'the oldest day is drawn, not dropped');
+  const total = all.days.reduce((n, day) => n + day.messages, 0);
+  assert.equal(total, all.totals.userMessages, '500-day-old message is on the chart and in the totals');
+  assert.equal(all.days.reduce((n, day) => n + day.tokens, 0), all.totals.tokens.total);
+  assert.equal(all.bots.find(b => b.id === 'bot_years').totalMessages, 3);
+  // shorter ranges are unaffected
+  assert.equal(stats('30d').days.length, 30);
+  assert.equal(stats('7d').totals.userMessages, 7);
+  // a timestamp from a broken clock (1970) cannot blow the chart up
+  user('bot_years', 1, 1000);
+  const broken = stats('all');
+  assert.ok(broken.days.length <= 10 * 366 && broken.days.length > 801);
+  assert.equal(broken.totals.userMessages, all.totals.userMessages + 1, 'still counted in the totals');
+  db.prepare("DELETE FROM rows WHERE bot_id='bot_years'").run();
+  db.prepare("UPDATE bots SET deleted_at=? WHERE id='bot_years'").run(NOW);
+  assert.equal(stats('all').days.length, 41, 'back to the 40-day history');
+}
+
 // ---- 6. range parsing and robustness
 {
   assert.equal(parseStatsRange('7d'), '7d'); assert.equal(parseStatsRange('all'), 'all');
@@ -225,6 +261,37 @@ assert.equal(stats('30d', userId, NOW + 2 * DAY).streak.current, 0, 'two quiet d
   const live = stats('7d');
   assert.equal(live.totals.agentTimeMs, 165_000 + 90_000);
   assert.equal(live.totals.relayedRuns, 5);
+  // a run waiting on the user is still going too (same rule as the Sessions view)
+  db.prepare("UPDATE agent_sessions SET status='waiting' WHERE status='running'").run();
+  assert.equal(stats('7d').totals.agentTimeMs, 165_000 + 90_000);
+  assert.equal(stats('all').totals.agentTimeMs, live.totals.agentTimeMs + 0, 'all time includes it as well');
+}
+
+// ---- 7. the dialog's All-time heatmap layout and date labels (web/src/lib/statsView.ts)
+{
+  const { heatmapLayout, rangeLabel } = await import('../web/src/lib/statsView.ts');
+  const days = (from, count) => Array.from({ length: count }, (_, i) => ({ date: new Date(Date.parse(`${from}T00:00:00Z`) + i * DAY).toISOString().slice(0, 10), messages: i % 3, runs: 0, tokens: 0 }));
+  assert.deepEqual(heatmapLayout([]), { cells: [], weeks: 0, months: [] }, 'no days: nothing to draw, no crash');
+  // A week starting on a Wednesday: three empty cells first, then one cell per day in two week columns.
+  const week = heatmapLayout(days('2026-11-18', 8), 'en-US');
+  assert.equal(week.cells.length, 3 + 8); assert.equal(week.cells.slice(0, 3).filter(Boolean).length, 0);
+  assert.equal(week.weeks, 2);
+  assert.deepEqual(week.months, [{ column: 0, label: 'Nov' }]);
+  // 800 days: a label where each month starts, never two within three columns, years on January
+  const long = heatmapLayout(days('2024-09-17', 801), 'en-US');
+  assert.equal(long.cells.filter(Boolean).length, 801);
+  assert.equal(long.weeks, Math.ceil(long.cells.length / 7));
+  assert.ok(long.months.every((m, i) => i === 0 || m.column - long.months[i - 1].column >= 3));
+  assert.equal(long.months[0].label, 'Oct 2024', 'Oct 1 is two columns in, so it takes over from the partial September');
+  assert.ok(long.months.some(m => m.label === 'Jan 2025') && long.months.some(m => m.label === 'Jan 2026'));
+  assert.equal(long.months.length, 26, 'Oct 2024 through Nov 2026');
+  // A month that starts in the second column replaces the first column's label instead of crowding it.
+  assert.deepEqual(heatmapLayout(days('2026-10-28', 30), 'en-US').months.map(m => m.label), ['Nov']);
+  // Toolbar: All time says since when (with the year); ranges across New Year carry years.
+  assert.equal(rangeLabel({ range: 'all', from: '2024-09-17', to: '2026-11-25', since: '2024-09-17' }, 'en-US'), 'Since Sep 17, 2024');
+  assert.equal(rangeLabel({ range: 'all', from: '2026-11-19', to: '2026-11-25', since: null }, 'en-US'), 'No activity yet');
+  assert.equal(rangeLabel({ range: '7d', from: '2026-11-19', to: '2026-11-25', since: null }, 'en-US'), 'Nov 19 – Nov 25');
+  assert.equal(rangeLabel({ range: '30d', from: '2025-12-10', to: '2026-01-08', since: null }, 'en-US'), 'Dec 10, 2025 – Jan 8, 2026');
 }
 
 rmSync(work, { recursive: true, force: true });

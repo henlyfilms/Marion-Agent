@@ -29,8 +29,11 @@ export interface StatsOptions {
 }
 
 const DAY_MS = 86_400_000;
-/** The "All time" chart never draws more than this many days. */
-const MAX_ALL_DAYS = 365;
+/**
+ * "All time" draws every day from the first activity to today. This bound only protects against a wildly wrong
+ * timestamp (a clock set to 1970); real histories are never cut, so the chart always matches the totals.
+ */
+const MAX_ALL_DAYS = 10 * 366;
 const TOP_FOLDERS = 5;
 const TOP_MODELS = 8;
 
@@ -111,21 +114,27 @@ export function computeStats(userId: string, options: StatsOptions = {}): StatsS
   // ---- the whole history: which days were active (for the streak) and when each bot was last used
   const allActive = new Set<number>();
   const lastActive = new Map<string, number>();
+  // The first day anything counted happened (a reply or a forwarded message also counts toward the totals).
+  let firstSeen = Infinity;
   const touch = (botId: string, at: number) => { if (at > (lastActive.get(botId) ?? 0)) lastActive.set(botId, at); };
   const isSent = (row: MessageRow) => row.role === 'user' && row.from_kind !== 'bot' && row.from_kind !== 'routine';
   for (const row of messages) {
     touch(row.bot_id, row.created_at);
-    if (isSent(row)) allActive.add(whenOf(row.created_at, tz).day);
+    const day = whenOf(row.created_at, tz).day;
+    if (day <= today && day < firstSeen) firstSeen = day;
+    if (isSent(row)) allActive.add(day);
   }
   for (const row of sessions) {
     touch(row.bot_id, row.ended_at ?? row.started_at);
-    allActive.add(whenOf(row.started_at, tz).day);
+    const day = whenOf(row.started_at, tz).day;
+    if (day <= today && day < firstSeen) firstSeen = day;
+    allActive.add(day);
   }
   const streak = streaks(allActive, today);
 
-  // ---- the chart window
-  const firstActive = allActive.size ? Math.min(...allActive) : today;
-  const length = range === '7d' ? 7 : range === '30d' ? 30 : Math.min(MAX_ALL_DAYS, Math.max(7, today - firstActive + 1));
+  // ---- the chart window: "All time" runs from the first activity to today (at least a week), one entry per day
+  const firstDay = Number.isFinite(firstSeen) ? firstSeen : today;
+  const length = range === '7d' ? 7 : range === '30d' ? 30 : Math.min(MAX_ALL_DAYS, Math.max(7, today - firstDay + 1));
   const fromDay = today - length + 1;
   const dayRows = new Map<number, StatsDay>();
   for (let day = fromDay; day <= today; day++) dayRows.set(day, { date: dateKey(day), messages: 0, runs: 0, tokens: 0 });
@@ -210,7 +219,8 @@ export function computeStats(userId: string, options: StatsOptions = {}): StatsS
     const provider = (['claude', 'codex', 'gemini'].includes(row.provider) ? row.provider : 'claude') as ChatProvider;
     const input = num(row.tokens_in);
     const output = num(row.tokens_out);
-    const duration = row.status === 'running' ? Math.max(0, nowTs - row.started_at) : num(row.duration_ms);
+    // Same rule as the Sessions view: a run that is still going (or waiting on the user) counts up to now.
+    const duration = row.status === 'running' || row.status === 'waiting' ? Math.max(0, nowTs - row.started_at) : num(row.duration_ms);
     const bot = statFor(row.bot_id);
     const day = dayRows.get(when.day);
     bot.relayedRuns++;
@@ -267,6 +277,7 @@ export function computeStats(userId: string, options: StatsOptions = {}): StatsS
     generatedAt: nowTs,
     from: dateKey(fromDay),
     to: dateKey(today),
+    since: Number.isFinite(firstSeen) ? dateKey(firstSeen) : null,
     streak: { current: streak.current, longest: streak.longest, activeDays: streak.activeDays, activeToday: streak.activeToday, lastActiveDate: streak.lastActiveDay === null ? null : dateKey(streak.lastActiveDay) },
     totals: {
       userMessages: totals.userMessages, totalMessages: totals.totalMessages,

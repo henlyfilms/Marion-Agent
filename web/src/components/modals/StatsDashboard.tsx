@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { BarChart3, CircleAlert, Clock, Cpu, Flame, FolderOpen, MessageSquare, Sparkles, Trophy, X } from 'lucide-react';
 import type { ChatProvider, StatsBot, StatsDay, StatsRange, StatsSummary, StatsTokens } from '@shared/types';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { featuresApi, formatTokens } from '../../lib/featuresApi';
 import { botVars } from '../../lib/colors';
 import { relativeShort } from '../../lib/time';
+import { heatmapLayout, parseDay, rangeLabel } from '../../lib/statsView';
 import { useStore } from '../../store';
 import { openBotChat } from '../botMenuItems';
 import { ProviderLogo } from '../ProviderLogo';
@@ -22,7 +23,8 @@ const number = new Intl.NumberFormat();
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 const shortDay = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const percent = (value: number) => `${Math.round(value * 100)}%`;
-const parseDay = (date: string) => new Date(`${date}T00:00:00Z`);
+/** The heatmap can span years, so its day names carry the year. */
+const yearDay = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 
 function readRange(): StatsRange {
   try { const saved = localStorage.getItem(RANGE_PREF); return RANGES.some(r => r.id === saved) ? saved as StatsRange : '30d'; } catch { return '30d'; }
@@ -106,32 +108,44 @@ function BarChart({ days }: { days: StatsDay[] }) {
   );
 }
 
-/** All time: a contribution heatmap, one column per week. */
+/** All time: a contribution heatmap, one column per week (Sunday on top). */
 function Heatmap({ days }: { days: StatsDay[] }) {
-  const { cells, weeks } = useMemo(() => {
-    const lead = parseDay(days[0].date).getUTCDay();
-    const padded: (StatsDay | null)[] = [...Array<null>(lead).fill(null), ...days];
-    return { cells: padded, weeks: Math.ceil(padded.length / 7) };
-  }, [days]);
-  const max = Math.max(1, ...days.map(activityOf));
+  const scroller = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<StatsDay | null>(null);
+  const { cells, weeks, months } = useMemo(() => heatmapLayout(days), [days]);
+  const max = useMemo(() => days.reduce((best, day) => Math.max(best, activityOf(day)), 1), [days]);
   const level = (day: StatsDay) => {
     const value = activityOf(day);
     return value === 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((value / max) * 4)));
   };
+  // A long history scrolls sideways: start at today, like the bar charts.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [days]);
+  const show = (day: StatsDay) => setHover(day);
+  const hide = () => setHover(null);
   return (
-    <div className="stats-heat" role="img" aria-label={`Daily activity, ${days.length} days`}>
-      <div className="stats-heat__grid" style={{ '--weeks': weeks } as CSSProperties}>
-        {cells.map((day, index) => day
-          ? (
-            <button type="button" key={day.date} className={`stats-cell stats-cell--${level(day)}`}
-              aria-label={`${dayFormat.format(parseDay(day.date))}: ${tipText(day).join(', ')}`}>
-              <Tip day={day} edge={Math.floor(index / 7) < 3 ? 'start' : Math.floor(index / 7) > weeks - 4 ? 'end' : 'mid'} />
-            </button>
-          )
-          : <span key={`pad${index}`} className="stats-cell stats-cell--pad" />)}
+    <div className="stats-heat" role="img" aria-label={`Daily activity, ${plural(days.length, 'day')}`}>
+      <div className="stats-heat__scroll" ref={scroller}>
+        <div className="stats-heat__months" style={{ '--weeks': weeks } as CSSProperties} aria-hidden>
+          {months.map(month => <span key={month.column} style={{ gridColumn: month.column + 1 }}>{month.label}</span>)}
+        </div>
+        <div className="stats-heat__grid" style={{ '--weeks': weeks } as CSSProperties} onMouseLeave={hide}>
+          {cells.map((day, index) => day
+            ? <button type="button" key={day.date} className={`stats-cell stats-cell--${level(day)}`} onMouseEnter={() => show(day)} onFocus={() => show(day)} onBlur={hide}
+                aria-label={`${yearDay.format(parseDay(day.date))}: ${tipText(day).join(', ')}`} />
+            : <span key={`pad${index}`} className="stats-cell stats-cell--pad" />)}
+        </div>
       </div>
-      <div className="stats-heat__legend" aria-hidden>
-        <span>Less</span>{[0, 1, 2, 3, 4].map(n => <i key={n} className={`stats-cell stats-cell--${n}`} />)}<span>More</span>
+      <div className="stats-heat__foot">
+        {/* Details sit under the grid instead of in a popover, so the scroll area never clips them. */}
+        <span className="stats-heat__caption" aria-live="polite">
+          {hover ? <><strong>{yearDay.format(parseDay(hover.date))}</strong> · {tipText(hover).join(' · ')}</> : 'Point at a day for its numbers'}
+        </span>
+        <span className="stats-heat__legend" aria-hidden>
+          <span>Less</span>{[0, 1, 2, 3, 4].map(n => <i key={n} className={`stats-cell stats-cell--${n}`} />)}<span>More</span>
+        </span>
       </div>
     </div>
   );
@@ -209,7 +223,8 @@ export function StatsDashboard() {
     const request = new AbortController();
     setLoading(true);
     setError(false);
-    setData(remembered.get(range));
+    // Keep the last numbers on screen (dimmed) until the new range arrives, so switching never flashes a skeleton.
+    setData(current => remembered.get(range) ?? current);
     featuresApi.stats(range, request.signal)
       .then(next => { remembered.set(range, next); setData(next); })
       .catch(() => { if (!request.signal.aborted) setError(true); })
@@ -244,7 +259,7 @@ export function StatsDashboard() {
         <div className="stats-toolbar">
           <FilterBar value={range} onChange={choose} counts={{ '7d': 0, '30d': 0, all: 0 }} options={RANGES} label="Timeframe" />
           <span className="stats-toolbar__status" role="status">
-            {loading ? 'Updating…' : data ? `${shortDay.format(parseDay(data.from))} – ${shortDay.format(parseDay(data.to))}` : ''}
+            {loading ? 'Updating…' : data ? rangeLabel(data) : ''}
           </span>
         </div>
         {error && (
@@ -291,7 +306,8 @@ export function StatsDashboard() {
                 <h2>Daily activity</h2>
                 <span>{plural(data.totals.activeDays, 'active day')} · {insights.avgMessagesPerActiveDay} messages per active day</span>
               </header>
-              {range === 'all' ? <Heatmap days={data.days} /> : <BarChart days={data.days} />}
+              {/* Drawn from the data's own range: while another range loads, the old chart stays as it was. */}
+              {data.range === 'all' ? <Heatmap days={data.days} /> : <BarChart days={data.days} />}
             </section>
 
             <section className="stats-card" aria-label="Bots">
