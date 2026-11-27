@@ -17,7 +17,7 @@ import { openBotChat } from '../botMenuItems';
 import { useStore } from '../../store';
 import { computerStatusText } from '../DetailsPanel';
 import { ToolkitLogo } from '../ToolkitLogo';
-import { AudioSettings, ComposioSettings, LocalModelSettings, SubscriptionSettings } from './LocalSettings';
+import { AudioSettings, ComposioSettings, LocalModelSettings, ProviderDefaultsSettings, SubscriptionSettings } from './LocalSettings';
 import { ConfirmButton, Switch } from './ui';
 import { LifeLinkSection, NotificationsSection } from '../features/FeatureSettings';
 import { featuresApi, type AgentSettings } from '../../lib/featuresApi';
@@ -148,7 +148,7 @@ export function AppSettings() {
             <div className="settings-page" key={section}>
               <div className="app-settings__page">
                 {section === 'general' && <GeneralSection />}
-                {section === 'models' && <><PageHead title="Models" />{localWorkspace && !mobilePaired && <HandoffSettings />}{localWorkspace && <SubscriptionSettings />}<LocalModelSettings /></>}
+                {section === 'models' && <><PageHead title="Models" />{localWorkspace && !mobilePaired && <HandoffSettings />}{localWorkspace && <SubscriptionSettings />}{localWorkspace && <ProviderDefaultsSettings />}<LocalModelSettings /></>}
                 {section === 'audio' && <><PageHead title="Audio" /><AudioSettings /></>}
                 {section === 'shortcuts' && <><PageHead title="Shortcuts" /><ShortcutsSection /></>}
                 {section === 'computer' && <ComputerSection />}

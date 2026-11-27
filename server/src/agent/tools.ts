@@ -4,7 +4,8 @@ import { repoHint } from '../features/cloud-repo.js';
 import { githubRepoArg, prepareRepoCheckout, type RepoCheckout } from './github-checkout.js';
 import { isDesktop } from '../lib/desktop-access.js';
 import { grok } from './models.js';
-import { modelLabel, subscriptionReply, subscriptionSelection } from './subscriptions.js';
+import { modelLabel, subscriptionModels, subscriptionReply, subscriptionSelection } from './subscriptions.js';
+import { resolveRunSelection } from './provider-defaults.js';
 import { env } from '../env.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
@@ -327,6 +328,8 @@ export const TOOLS: ToolDef[] = [
       folder: { type: 'string', description: 'Optional: a folder on this Mac to work in, by name (e.g. "Marion Agent") or full path. It does not need to be shared with you; the owner approves it' },
       repo: { type: 'string', description: 'Optional: a GitHub repository to inspect or use (owner/repo or a github.com URL; public ones always work, on Claude, Codex and Gemini alike). Without a folder, Marion clones it into a scratch folder the assistant works in; nothing on this Mac needs sharing' },
       title: { type: 'string', description: 'Optional: a mini title of 3-8 words for the work card (e.g. "Fix login redirect"). Derived from the prompt if omitted' },
+      model: { type: 'string', description: 'Optional: only when the owner names a model (e.g. "Sonnet", "6.2 Astra"). Omit it to use this provider\'s default model from Settings' },
+      effort: { type: 'string', description: 'Optional: only when the owner names an effort level (e.g. "low", "high"). Omit it to use this provider\'s default effort from Settings' },
       new_session: { type: 'boolean', description: 'Optional: true to start this provider from a fresh session. Marion also does that by itself when the folder changes, the topic is clearly different, or the session has grown large' },
     }, ['provider', 'prompt']),
     activity: 'working',
@@ -335,12 +338,17 @@ export const TOOLS: ToolDef[] = [
       const { provider, prompt } = args;
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
+      // The provider's default model and effort from Settings, unless the request names its own (validated against the catalog).
+      const saved = subscriptionSelection(ctx.userId, provider);
+      const named = (typeof args.model === 'string' && args.model.trim()) || (typeof args.effort === 'string' && args.effort.trim());
+      const selection = named
+        ? resolveRunSelection(provider, (await subscriptionModels(provider).catch(() => ({ models: [] }))).models, saved, { model: args.model, effort: args.effort })
+        : saved;
       const repo = githubRepoArg(args.repo);
       // A named repository without a folder: Marion clones it into a fresh scratch folder (nothing of the owner's) that
       // the assistant works in, the same way for every provider.
       const checkout: RepoCheckout | undefined = !args.folder && repo ? await prepareRepoCheckout(repo, ctx.signal) : undefined;
       const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : checkout?.folder;
-      const selection = subscriptionSelection(ctx.userId, provider);
       const name = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[provider as 'claude' | 'codex' | 'gemini'];
       const generation = getBotRow(ctx.botId)?.generation ?? 0;
       // Continue this chat's session with the provider, or start a fresh one (asked for, new folder, big, or a new topic).

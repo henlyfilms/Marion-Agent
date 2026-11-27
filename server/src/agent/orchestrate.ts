@@ -1,7 +1,8 @@
 import { isUsageLimitError } from './usage-limit.js';
 import { availableLocalModels } from './models.js';
 import { modelReply } from './orchestration.js';
-import { modelLabel, subscriptionModels, subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
+import { modelLabel, subscriptionModels, subscriptionReply, subscriptionSelection, type SubscriptionSelection } from './subscriptions.js';
+import { defaultEffortFor, pickModel, type ProviderDefaults } from './provider-defaults.js';
 import { ASK_OWNER_LINE, miniTitle, ownerRequest, showQuestionCard, WorkCard } from './work-feed.js';
 import { leanLine, relayMedia } from './relay.js';
 import type { SessionTrack } from '../features/life-outbox.js';
@@ -26,8 +27,6 @@ const providerNames: Record<ChatProvider, string> = { local: 'Local', codex: 'Co
 type Folder = { path: string; label: string; write: boolean };
 type Agent = WorkAgent & { selection: ChatModelSelection };
 
-const words = (value: string) => value.toLowerCase().replace(/[^a-z0-9.]+/g, ' ').split(' ').filter(Boolean);
-
 async function catalog(allowSubscriptions: boolean): Promise<ChatModel[]> {
   const local = availableLocalModels().catch((): string[] => []).then(models =>
     [...new Set([env.localModelName, ...models])].map((id): ChatModel => ({ provider: 'local', id, label: id, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' })));
@@ -35,27 +34,19 @@ async function catalog(allowSubscriptions: boolean): Promise<ChatModel[]> {
   return (await Promise.all([local, ...subs])).flat();
 }
 
-/** "6.2 Astra", "gemini 4 neon", "claude", "codex" → the best matching model. */
-export function matchModel(models: ChatModel[], query: string): ChatModel | undefined {
-  const wanted = words(query);
-  if (!wanted.length) return undefined;
-  const provider = (['codex', 'gemini', 'claude', 'local'] as const).find(p => wanted.length === 1 && (wanted[0] === p || (p === 'codex' && ['chatgpt', 'openai', 'gpt'].includes(wanted[0]))));
-  if (provider) return models.find(m => m.provider === provider && m.defaultEffort) ?? models.find(m => m.provider === provider);
-  let best: { model: ChatModel; score: number } | undefined;
-  for (const model of models) {
-    const hay = words(`${providerNames[model.provider]} ${model.label} ${model.id}`).join(' ');
-    const hits = wanted.filter(word => hay.includes(word)).length;
-    const score = hits / wanted.length + (hay.includes(wanted.join(' ')) ? 0.5 : 0);
-    if (hits && (!best || score > best.score)) best = { model, score };
-  }
-  return best && best.score >= 0.6 ? best.model : undefined;
+export { matchModel } from './provider-defaults.js';
+
+/** Each subscription provider's Settings default (model + effort), used when the owner names only a provider or no effort. */
+function savedDefaults(userId: string): ProviderDefaults {
+  return Object.fromEntries((['claude', 'codex', 'gemini'] as const).map(p => [p, subscriptionSelection(userId, p)]));
 }
 
-function toAgent(model: ChatModel, role: WorkAgent['role'], index: number, taken: Set<string>): Agent {
+function toAgent(model: ChatModel, role: WorkAgent['role'], index: number, taken: Set<string>, defaults: ProviderDefaults = {}): Agent {
   let label = model.label.trim();
   for (let n = 2; taken.has(label); n++) label = `${model.label} ${n}`;
   taken.add(label);
-  const effort = model.defaultEffort ?? null;
+  // No effort is ever named here: the provider's Settings default effort when this model offers it.
+  const effort = defaultEffortFor(model, defaults[model.provider]);
   return {
     id: `${role}-${index}`, label, provider: model.provider, model: model.id, role, modelLabel: modelLabel(model.provider, model.id, model.label), effort,
     selection: { provider: model.provider, model: model.id, effort, label: model.label },
@@ -81,19 +72,20 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
   const goal = String(args?.goal ?? '').trim().slice(0, 20_000);
   if (!goal) throw new Error('Describe the work for the team.');
   const models = await catalog(ctx.allowSubscriptionTeam !== false);
-  const leadModel = matchModel(models, String(args?.orchestrator ?? ''));
+  const defaults = savedDefaults(ctx.userId);
+  const leadModel = pickModel(models, String(args?.orchestrator ?? ''), defaults);
   if (!leadModel) throw new Error(`No model matches "${args?.orchestrator}". Available: ${models.map(m => m.label).slice(0, 20).join(', ')}.`);
   const workerNames: string[] = (Array.isArray(args?.workers) ? args.workers : [args?.workers]).map(String).filter(Boolean).slice(0, MAX_TASKS);
   if (!workerNames.length) throw new Error('Name at least one subagent model.');
   const count = Math.max(1, Math.min(MAX_TASKS, Number(args?.worker_count) || workerNames.length));
   const taken = new Set<string>();
-  const lead = toAgent(leadModel, 'orchestrator', 0, taken);
+  const lead = toAgent(leadModel, 'orchestrator', 0, taken, defaults);
   const workers: Agent[] = [];
   for (let i = 0; i < Math.max(count, workerNames.length); i++) {
     const name = workerNames[i % workerNames.length];
-    const model = matchModel(models, name);
+    const model = pickModel(models, name, defaults);
     if (!model) throw new Error(`No model matches "${name}". Available: ${models.map(m => m.label).slice(0, 20).join(', ')}.`);
-    workers.push(toAgent(model, 'worker', i, taken));
+    workers.push(toAgent(model, 'worker', i, taken, defaults));
   }
   const signal = ctx.signal ?? new AbortController().signal;
   const bot = getBotRow(ctx.botId);

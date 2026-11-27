@@ -36,8 +36,7 @@ export function SubscriptionSettings() {
         </select>
         <button type="button" className="cfg-btn cfg-btn--secondary" disabled={busy} onClick={() => void update()}>Refresh providers</button>
       </div>
-      <p className="cfg-field__hint">Bots without a model override use these chat defaults.</p>
-      {data?.provider && data.provider !== 'local' && <SubscriptionModel key={data.provider} provider={data.provider} />}
+      <p className="cfg-field__hint">Bots without a model override use this provider with its default model and effort below.</p>
       {data?.provider === 'codex' && <p className="cfg-field__hint">Run <code>codex login</code> in Terminal and choose your ChatGPT account.</p>}
       {data?.provider === 'gemini' && <p className="cfg-field__hint">Run <code>agy acp --login</code> in Terminal and choose your personal Google account. If Terminal cannot find it, use <code>~/.local/bin/agy acp --login</code>.</p>}
       {data && !data.installed.codex && <p className="cfg-field__hint"><a href="https://learn.chatgpt.com/docs/codex-cli" target="_blank" rel="noreferrer">Install Codex CLI</a></p>}
@@ -49,16 +48,47 @@ export function SubscriptionSettings() {
   );
 }
 
-function SubscriptionModel({ provider }: { provider: Exclude<ChatProvider, 'local'> }) {
+type BuilderProvider = Exclude<ChatProvider, 'local'>;
+const BUILDER_PROVIDERS: Array<{ provider: BuilderProvider; name: string }> = [
+  { provider: 'claude', name: 'Claude' }, { provider: 'codex', name: 'Codex' }, { provider: 'gemini', name: 'Gemini' },
+];
+const effortLabel = (effort: string) => effort[0].toUpperCase() + effort.slice(1);
+
+/**
+ * Default model and effort for each coding/builder provider. Chat, ask, team (orchestrate) and builder runs use these
+ * whenever a request does not name a model or effort itself.
+ */
+export function ProviderDefaultsSettings() {
+  const [installed, setInstalled] = useState<ChatProviderSettings['installed']>();
+  useEffect(() => {
+    let mounted = true;
+    configApi.chatProvider().then(result => { if (mounted) setInstalled(result.installed); }).catch(() => { if (mounted) setInstalled(undefined); });
+    return () => { mounted = false; };
+  }, []);
+  return (
+    <section className="cfg-section" aria-labelledby="provider-defaults-label">
+      <span id="provider-defaults-label" className="cfg-section__label">Default model &amp; effort</span>
+      <p className="cfg-field__hint">Used for chat, builder, team and Ask runs whenever a request doesn’t name a model or effort.</p>
+      <div className="provider-defaults">
+        {BUILDER_PROVIDERS.map(({ provider, name }) => (
+          <ProviderDefaultRow key={provider} provider={provider} name={name} installed={installed?.[provider]} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProviderDefaultRow({ provider, name, installed }: { provider: BuilderProvider; name: string; installed?: boolean }) {
   const [data, setData] = useState<SubscriptionModelSettings>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
+    if (!installed) return;
     let active = true;
     configApi.subscriptionModel(provider).then(result => { if (active) setData(result); })
       .catch(error => { if (active) setError(error.message); });
     return () => { active = false; };
-  }, [provider]);
+  }, [provider, installed]);
   const save = async (selection: ChatModelSelection) => {
     setBusy(true);
     setError('');
@@ -67,28 +97,31 @@ function SubscriptionModel({ provider }: { provider: Exclude<ChatProvider, 'loca
     finally { setBusy(false); }
   };
   const active = data?.models.find(model => model.id === data.selection.model);
+  const modelId = `default-model-${provider}`;
+  const effortId = `default-effort-${provider}`;
   return (
-    <>
-      <div className="local-settings__controls">
-        <label htmlFor="default-chat-model">Default chat model</label>
-        <select id="default-chat-model" className="text-input" disabled={busy || !data?.models.length}
+    <div className="provider-defaults__row">
+      <span className="provider-defaults__name">{name}</span>
+      {installed === false ? <span className="provider-defaults__missing">Not installed</span> : <>
+        <select id={modelId} aria-label={`${name} default model`} className="text-input" disabled={busy || !data?.models.length}
           value={data?.selection.model ?? ''} onChange={event => {
             const model = data?.models.find(option => option.id === event.target.value);
-            if (model) void save({ provider, model: model.id, effort: model.defaultEffort });
+            // Keep the chosen effort when the new model offers it.
+            const effort = model && data?.selection.effort && model.efforts.includes(data.selection.effort) ? data.selection.effort : model?.defaultEffort ?? null;
+            if (model) void save({ provider, model: model.id, effort });
           }}>
-          {!active && <option value={data?.selection.model ?? ''}>{data?.selection.model || (data ? 'Choose a model' : 'Checking models…')}</option>}
+          {!active && <option value={data?.selection.model ?? ''}>{data?.selection.model || (data || installed === undefined ? 'Checking models…' : 'Choose a model')}</option>}
           {data?.models.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
         </select>
-      </div>
-      {!!active?.efforts.length && data && <div className="local-settings__controls">
-        <label htmlFor="default-chat-effort">Default reasoning effort</label>
-        <select id="default-chat-effort" className="text-input" disabled={busy} value={data.selection.effort ?? ''}
-          onChange={event => void save({ ...data.selection, effort: event.target.value })}>
-          {active.efforts.map(effort => <option key={effort} value={effort}>{effort[0].toUpperCase() + effort.slice(1)}</option>)}
+        <select id={effortId} aria-label={`${name} default effort`} className="text-input provider-defaults__effort"
+          disabled={busy || !active?.efforts.length} value={data?.selection.effort ?? ''}
+          onChange={event => data && void save({ ...data.selection, provider, effort: event.target.value })}>
+          {!active?.efforts.length && <option value="">{active ? 'No effort' : '—'}</option>}
+          {active?.efforts.map(effort => <option key={effort} value={effort}>{effortLabel(effort)}</option>)}
         </select>
-      </div>}
-      {(error || data?.error) && <p className="cfg-error" role="alert">{error || data?.error}</p>}
-    </>
+      </>}
+      {(error || data?.error) && <p className="cfg-error provider-defaults__error" role="alert">{error || data?.error}</p>}
+    </div>
   );
 }
 

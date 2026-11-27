@@ -259,8 +259,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     setText(placed.value);
     if (caret !== undefined) requestAnimationFrame(() => { if (el && document.activeElement === el) el.setSelectionRange(placed.caret, placed.caret); });
   };
-  // Dictation runs in a host that outlives this chat box (see voice/composerDictation). This box registers as
-  // the place its words go; switching chats hands that role to the next chat box without stopping the recording.
+  // Dictation runs in a host that outlives this chat box (see voice/composerDictation) and stays locked to the chat it
+  // was started in. This box registers so that chat's words land here while it is on screen; other chats never get them.
   useLayoutEffect(() => registerDictationSink({
     botId: bot.id,
     insert: insertText,
@@ -275,7 +275,12 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   }), [bot.id]);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
   const state = useComposerDictation(s => s.state);
-  const heardNow = useComposerDictation(s => s.interim);
+  // The one running dictation belongs to a single chat: only that chat's box shows the words being heard.
+  const dictationOwner = useComposerDictation(s => s.owner);
+  const ownsDictation = dictationOwner === bot.id;
+  const dictatingElsewhere = state !== 'idle' && !!dictationOwner && !ownsDictation;
+  const ownerName = useStore(s => (dictationOwner ? s.bots.find(b => b.id === dictationOwner)?.name : undefined));
+  const heardNow = useComposerDictation(s => (s.owner === bot.id ? s.interim : ''));
   // While an IME composition is open the box must not be rewritten under it (that cancels the composition), so the words
   // being heard are held until it ends; typed text and final words still go in as usual.
   const [composing, setComposing] = useState(false);
@@ -333,7 +338,14 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
   };
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && state !== 'idle') { discardDictation(); return; }
+      // Esc cancels only from this chat's own box with nothing else open: closing Settings, a drawer or a modal with
+      // Esc never cancels dictation, and another chat's box never cancels it.
+      if (event.key === 'Escape' && state !== 'idle' && ownsDictation) {
+        const ui = useConfigUI.getState();
+        const here = event.target === ref.current || event.target === document.body;
+        if (!event.defaultPrevented && here && !ui.appSettings && !ui.botSettings && !useStore.getState().modal) discardDictation();
+        return;
+      }
       if (event.defaultPrevented || event.isComposing || event.repeat || shortcutFor(event) !== dictationShortcut()) return;
       const ui = useConfigUI.getState();
       if (ui.appSettings || ui.botSettings || ui.view !== 'chat' || useStore.getState().modal || (compact && !mobileChatOpen)) return;
@@ -495,7 +507,8 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     return () => window.clearTimeout(timer);
   }, [micError]);
   // The mic pill keeps its last words while it fades out, so closing is as smooth as opening.
-  const micText = state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…' : micError;
+  const micText = dictatingElsewhere ? `Dictating in ${ownerName ?? 'another chat'}…`
+    : state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…' : micError;
   const lastMicText = useRef(micText);
   if (micText) lastMicText.current = micText;
   const micTone = state !== 'idle' ? 'live' : 'error';
@@ -699,9 +712,9 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
           <span className="composer__mic-anchor"><button
             type="button"
             className={`composer__btn composer__mic${state === 'recording' ? ' is-recording' : state === 'transcribing' ? ' is-transcribing' : ''}`}
-            aria-label={state === 'recording' ? 'Stop dictation' : 'Dictate'}
+            aria-label={dictatingElsewhere ? `Stop dictation in ${ownerName ?? 'another chat'}` : state === 'recording' ? 'Stop dictation' : 'Dictate'}
             aria-pressed={state === 'recording'} aria-keyshortcuts={dictationShortcut()}
-            title={state === 'recording' ? 'Tap to stop · Esc cancels' : `Dictate (${shortcutLabel(dictationShortcut())}) · Right-click for audio input`}
+            title={dictatingElsewhere ? `Dictating into ${ownerName ?? 'another chat'} · Tap to stop` : state === 'recording' ? 'Tap to stop · Esc cancels' : `Dictate (${shortcutLabel(dictationShortcut())}) · Right-click for audio input`}
             disabled={state === 'transcribing'}
             onPointerDown={pressMic}
             onPointerUp={releaseMic}

@@ -233,6 +233,17 @@
 
 .local-settings__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .local-settings__controls .text-input { flex: 1 1 240px; min-width: 0; }
+/* Default model & effort: one quiet row per builder provider (name · model · effort), stacking in narrow windows. */
+.provider-defaults { display: grid; gap: 8px; }
+.provider-defaults__row { display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(96px, 128px); align-items: center; gap: 10px; }
+.provider-defaults__name { font-weight: 550; font-size: 13px; }
+.provider-defaults__missing { grid-column: 2 / -1; font-size: 12.5px; opacity: .6; }
+.provider-defaults__row .text-input { min-width: 0; width: 100%; }
+.provider-defaults__error { grid-column: 1 / -1; margin: 0; }
+@media (max-width: 520px) {
+  .provider-defaults__row { grid-template-columns: minmax(0, 1fr) minmax(88px, 112px); }
+  .provider-defaults__name { grid-column: 1 / -1; }
+}
 
 /* Bot settings → Access */
 .access-add { gap: 8px; }

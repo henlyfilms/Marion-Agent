@@ -1,5 +1,6 @@
 // Claude / Codex / Gemini relays: default models (Opus 5.5, 6.2 Sol, Gemini 4 Neon), high effort by default,
-// auto mode CLI args, fresh sessions, action cards for questions, and the exact model on work cards.
+// auto mode CLI args, fresh sessions, action cards for questions, the exact model on work cards, and the per-provider
+// default model & effort from Settings used whenever a request names none (explicit model/effort win).
 // Drives fake claude/codex/agy executables: no listener, no network, no model calls.
 // Usage: npm run build && node tests/provider-defaults.mjs
 import assert from 'node:assert/strict';
@@ -193,7 +194,40 @@ try {
     assert.equal(work.agents[0].modelLabel, label, `${provider} card shows ${label}`);
     assert.equal(work.agents[0].effort, 'high');
   }
-  console.log('PASS default models (claude-opus-5-5, gpt-6.2-sol, gemini-4-neon) on high, auto-mode args, fresh sessions, action cards, model on work cards');
+  // ---- 8. Settings defaults per provider: used whenever a request names no model/effort; explicit ones win ----
+  const savePref = (provider, model, effort) => db.prepare(`INSERT INTO subscription_model_preferences(user_id,provider,model,effort) VALUES (?,?,?,?)
+    ON CONFLICT(user_id,provider) DO UPDATE SET model=excluded.model,effort=excluded.effort`).run(user, provider, model, effort);
+  savePref('claude', 'claude-sonnet-5-5', 'medium');
+  savePref('codex', 'gpt-6.2-astra', 'low');
+  savePref('gemini', 'gemini-4-neon', 'medium');
+  writeFileSync(join(bin, 'claude.reply'), 'Done.');
+  await toolMap.get('ask_subscription').impl({ provider: 'claude', prompt: 'Use the default', new_session: true }, ctx);
+  assert.equal(flag(lines('claude').at(-1), '--model'), 'claude-sonnet-5-5', 'Claude uses its Settings default model');
+  assert.equal(flag(lines('claude').at(-1), '--effort'), 'medium', 'Claude uses its Settings default effort');
+  await toolMap.get('ask_subscription').impl({ provider: 'codex', prompt: 'Use the default', new_session: true }, ctx);
+  assert.equal(lines('codex').filter((l) => l.method === 'thread/start').at(-1).params.model, 'gpt-6.2-astra', 'Codex uses its Settings default model');
+  assert.equal(lines('codex').at(-1).params.effort, 'low', 'Codex uses its Settings default effort');
+  await toolMap.get('ask_subscription').impl({ provider: 'gemini', prompt: 'Use the default', new_session: true }, ctx);
+  assert.equal(flag(lines('agy').at(-1), '--effort'), 'medium', 'Gemini uses its Settings default effort');
+  // Only the effort named: the default model stays; only the model named: the default effort carries over when offered.
+  await toolMap.get('ask_subscription').impl({ provider: 'claude', prompt: 'Think hard', effort: 'high', new_session: true }, ctx);
+  assert.equal(flag(lines('claude').at(-1), '--model'), 'claude-sonnet-5-5');
+  assert.equal(flag(lines('claude').at(-1), '--effort'), 'high', 'explicit effort wins');
+  await toolMap.get('ask_subscription').impl({ provider: 'claude', prompt: 'Use Opus', model: 'Opus', new_session: true }, ctx);
+  assert.equal(flag(lines('claude').at(-1), '--model'), 'claude-opus-5-5', 'explicit model wins (matched by name)');
+  assert.equal(flag(lines('claude').at(-1), '--effort'), 'medium', 'default effort carries to the named model');
+  await assert.rejects(toolMap.get('ask_subscription').impl({ provider: 'claude', prompt: 'x', model: 'nonexistent-zzz' }, ctx), /No Claude model matches/);
+  assert.ok(toolMap.get('ask_subscription').parameters.properties.model && toolMap.get('ask_subscription').parameters.properties.effort);
+  // orchestrate: a bare provider name means its Settings default, and every agent gets the provider's default effort.
+  const O = await import('../server/dist/agent/provider-defaults.js');
+  const team = [...claudeCatalog.models, ...codexCatalog.models];
+  const defaults = { claude: S.subscriptionSelection(user, 'claude'), codex: S.subscriptionSelection(user, 'codex') };
+  assert.equal(O.pickModel(team, 'claude', defaults).id, 'claude-sonnet-5-5');
+  assert.equal(O.pickModel(team, 'codex', defaults).id, 'gpt-6.2-astra');
+  assert.equal(O.pickModel(team, '6.2 Sol', defaults).id, 'gpt-6.2-sol', 'a named model is kept');
+  assert.equal(O.defaultEffortFor(team.find((m) => m.id === 'gpt-6.2-sol'), defaults.codex), 'low');
+
+  console.log('PASS default models (claude-opus-5-5, gpt-6.2-sol, gemini-4-neon) on high, auto-mode args, fresh sessions, action cards, model on work cards, Settings defaults per provider');
 } finally {
   rmSync(bin, { recursive: true, force: true });
 }

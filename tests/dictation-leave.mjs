@@ -1,5 +1,5 @@
-// Clicking out of the chat while dictating keeps every word: finished words and the ones still being heard are saved
-// into that chat's draft (localStorage) the moment the chat is left, and are back when you return.
+// Opening Settings while dictating never pauses or stops it: words keep landing in the chat dictation was started in
+// (saved into its draft while the box is off screen), Esc that closes Settings does not cancel it, and the mic stays on.
 // Uses a fake browser speech engine, no speech server and no microphone.
 // Usage: npm run build && BROWSER_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node tests/dictation-leave.mjs
 import assert from 'node:assert/strict';
@@ -50,15 +50,18 @@ try {
   await page.waitForFunction(() => !!window.__recognition);
   await page.evaluate(() => window.__say('first words', 'and still being heard'));
   await page.waitForFunction(() => /still being heard/.test(document.querySelector('.composer__input').value));
-  // Click out of the chat while the last words are still unfinished.
+  // Open Settings while the last words are still unfinished: dictation keeps going.
   await page.locator('.account__btn[aria-label="Settings"]').first().click();
   await page.waitForTimeout(300);
-  assert.equal(await drafts(), 'First words and still being heard', 'the saved draft holds finished and unfinished words');
+  assert.equal(!!(await page.evaluate(() => window.__recognition)), true, 'the speech engine is still running');
+  await page.evaluate(() => window.__say('and still being heard plus more from settings'));
+  await page.waitForTimeout(200);
+  assert.match(await drafts(), /First words and still being heard plus more from settings/, 'words said in Settings land in the original chat draft');
   await page.keyboard.press('Escape');
   await input.waitFor();
-  assert.equal(await input.inputValue(), 'First words and still being heard', 'returning shows the full dictated text');
-  assert.equal(await page.locator('.composer__mic-anchor button').getAttribute('aria-pressed'), 'false', 'the mic is released');
-  console.log('PASS: leaving the chat mid-dictation saves finished and still-being-heard words into the chat draft.');
+  assert.match(await input.inputValue(), /First words and still being heard plus more from settings/, 'returning shows the full dictated text');
+  assert.equal(await page.locator('.composer__mic-anchor button').getAttribute('aria-pressed'), 'true', 'the mic is still on after closing Settings');
+  console.log('PASS: Settings never pauses dictation; its words land in the chat it was started in.');
 } finally {
   await browser?.close();
   child.kill();
