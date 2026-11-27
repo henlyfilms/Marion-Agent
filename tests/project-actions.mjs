@@ -132,11 +132,12 @@ try {
   console.log('PASS handoffs: all three CLI error paths, private ignored file, Git snapshot, ownership, repeat protection, auto fallback');
 
   saveAgentSettings(userId,{autoHandoff:false});
-  const ok = startCloudSession(userId,botId,1,'Review Cloud changes',folder);
+  const cloudRepo = { nameWithOwner: 'owner/repo', url: 'https://github.com/owner/repo' };
+  const ok = startCloudSession(userId,botId,1,'Review Cloud changes',cloudRepo);
   assert.equal(listSessions(userId,{kind:'cloud',botId})[0].status,'running');
   const done = await waitFor(() => listSessions(userId,{kind:'cloud'}).find(s => s.id === 'relay:'+ok && s.status === 'completed'));
   assert.equal(done.cloudUrl,'https://claude.ai/code/cse_test_123');
-  const failed = startCloudSession(userId,botId,1,'Cloud LIMIT',folder);
+  const failed = startCloudSession(userId,botId,1,'Cloud LIMIT',cloudRepo);
   const cloudHandoff = await waitFor(() => records().find(r => r.source.id === failed));
   assert.equal(cloudHandoff.source.cloudUrl,done.cloudUrl);
   assert.match(cloudHandoff.progress.join(' '), /Reviewed src\/example\.ts/);

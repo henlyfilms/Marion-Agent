@@ -118,7 +118,7 @@ function Details({ s, onOpenBot }: { s: MarionSession; onOpenBot?: (botId: strin
         {relay && (s.modelLabel || s.model) && <Detail label="Model">{s.modelLabel || s.model}{s.effort ? ` · ${s.effort}` : ''}</Detail>}
         {s.kind === 'cloud' && <Detail label="Runs on">Claude Cloud</Detail>}
         {s.cloudUrl && <Detail label="Cloud session"><a href={s.cloudUrl} target="_blank" rel="noreferrer">Open in Claude ↗</a></Detail>}
-        {s.folder && <Detail label="Folder"><span title={s.folder.path}>{s.folder.name}</span></Detail>}
+        {s.folder && <Detail label={s.kind === 'cloud' ? 'Repository' : 'Folder'}><span title={s.folder.path}>{s.folder.name}</span></Detail>}
         <Detail label="Started">{dividerLabel(s.startedAt)}</Detail>
         {s.status !== 'running' && s.endedAt && <Detail label="Ended">{dividerLabel(s.endedAt)}</Detail>}
         <Detail label="Duration">{elapsed(durationOf(s))}</Detail>

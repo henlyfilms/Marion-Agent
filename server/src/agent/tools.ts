@@ -1,4 +1,6 @@
 import { createGitHubRepo } from '../features/github-repos.js';
+import { launchCloudWork } from '../features/cloud-cards.js';
+import { repoHint, wantsCloud } from '../features/cloud-repo.js';
 import { isDesktop } from '../lib/desktop-access.js';
 import { grok } from './models.js';
 import { modelLabel, subscriptionReply, subscriptionSelection } from './subscriptions.js';
@@ -113,6 +115,12 @@ export const backgroundScript = (job: string, command: string) => {
   const quoted = `'${`trap '' HUP\n${command}`.replace(/'/g, `'\\''`)}'`;
   return `mkdir -p /workspace/.jobs && cd /workspace || exit 1\n( $(command -v setsid || true) bash -c ${quoted} > /workspace/.jobs/${job}.log 2>&1 < /dev/null; echo $? > /workspace/.jobs/${job}.exit ) > /dev/null 2>&1 & echo $!`;
 };
+
+/** Strict Cloud mode: once the owner asked for Cloud work, no tool may reach for a folder or checkout on this Mac instead. */
+export function cloudRequested(ctx: Pick<ToolCtx, 'turn'>, ...texts: unknown[]) {
+  return wantsCloud(ctx.turn?.request) || texts.some(wantsCloud);
+}
+const LOCAL_IN_CLOUD = 'The owner asked for Cloud work: call start_cloud_session with the GitHub repository (owner/repo or its name) instead. Never use a folder or local copy on this Mac for Cloud work; if the repository can\'t be found or reached, start_cloud_session shows the owner an in-app card with fixes.';
 
 export const TOOLS: ToolDef[] = [
   {
@@ -247,6 +255,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'working',
     label: 'Looking in a folder',
     impl: async (args, ctx) => {
+      if (cloudRequested(ctx)) throw new Error(LOCAL_IN_CLOUD);
       const result = await listFolder(ctx.botId, args);
       return { output: JSON.stringify(result), summary: `${result.total} items in ${result.folder}` };
     },
@@ -279,6 +288,33 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'start_cloud_session',
+    description: 'Run work in Claude Cloud on a GitHub repository. Use it whenever the owner asks to work in the cloud (Claude Cloud, a cloud session, --cloud). Marion finds the repository on GitHub from owner/repo, a GitHub URL, or just its name, then starts the Cloud session; it never uses a folder or checkout on this Mac. If the repository is missing, ambiguous or not accessible, Marion shows the owner an in-app card with concrete fixes and continues in the Cloud once they approve.',
+    parameters: obj({
+      prompt: { type: 'string', description: 'The full task for Claude Cloud. It knows nothing else, so include every detail it needs' },
+      repo: { type: 'string', description: 'The GitHub repository: owner/repo, a github.com URL, or the repository name as the owner said it (e.g. "Marion Agent"). Omit only when the owner did not name one' },
+      title: { type: 'string', description: 'Optional: a mini title of 3-8 words' },
+    }, ['prompt']),
+    activity: 'working',
+    label: 'Starting Claude Cloud',
+    impl: async (args, ctx) => {
+      const prompt = args.prompt;
+      if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a Cloud task of up to 20,000 characters.');
+      const query = typeof args.repo === 'string' && args.repo.trim() ? args.repo.trim().slice(0, 300) : repoHint(prompt) ?? repoHint(ctx.turn?.request);
+      const result = await launchCloudWork({ userId: ctx.userId, botId: ctx.botId, generation: getBotRow(ctx.botId)?.generation ?? 0,
+        goal: prompt.trim(), title: miniTitle(prompt, args.title), query });
+      if (result.started) return {
+        output: `Claude Cloud started on GitHub ${result.repo.nameWithOwner} (${result.repo.url}). It runs remotely; its result posts in this chat when it finishes. Tell the owner in one line and end your turn. Do not also work on this locally.`,
+        summary: `Started Claude Cloud on ${result.repo.nameWithOwner}`,
+      };
+      return {
+        output: `Cloud work is waiting on the owner. Problem: ${result.problem} Fix: ${result.solution} An in-app card with these choices is already showing in the chat: ${result.options.map(o => `"${o.label}"`).join(', ')}. The owner picks or approves there and Marion continues in the Cloud automatically. Relay this in one or two lines and stop. Do not call ask_user, ask_subscription, shell or folder tools, and never fall back to a local folder.`,
+        summary: `Cloud needs the owner: ${result.blocker}`,
+        endTurn: true,
+      };
+    },
+  },
+  {
     name: 'ask_subscription',
     description: 'Send a specific request to Claude Code, Codex, or Gemini when the user asks to use that assistant. Returns its response to this chat.',
     parameters: obj({
@@ -294,6 +330,7 @@ export const TOOLS: ToolDef[] = [
       const { provider, prompt } = args;
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
+      if (cloudRequested(ctx, prompt)) throw new Error(LOCAL_IN_CLOUD);
       const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
       const selection = subscriptionSelection(ctx.userId, provider);
       const name = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[provider as 'claude' | 'codex' | 'gemini'];
@@ -363,6 +400,7 @@ export const TOOLS: ToolDef[] = [
     activity: 'messaging_named',
     label: 'Orchestrating a team',
     impl: async (args, ctx) => {
+      if (args.folder && cloudRequested(ctx, args.goal)) throw new Error(LOCAL_IN_CLOUD);
       const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
       // The whole team run holds the folder, so no other relayed session edits it meanwhile.
       return withFolder(folder, ctx.signal, () => appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Waiting for another session in ${folder?.label} to finish first.` }), () => orchestrate(ctx, args, folder));
@@ -849,7 +887,7 @@ const DISCOVERY_META_TOOLS = new Set(['COMPOSIO_SEARCH_TOOLS', 'COMPOSIO_GET_TOO
 
 export function policyFor(userId: string, toolName: string, args: any, botId?: string): { decision: Decision; key: string; toolkit?: string; title: string } {
   // A bot with full access (confirmed twice by the owner) hands work to the CLIs without asking each time.
-  if (botId && (toolName === 'ask_subscription' || toolName === 'orchestrate') && hasFullAccess(botId)) return { decision: 'allow', key: toolName, title: toolName };
+  if (botId && (toolName === 'ask_subscription' || toolName === 'orchestrate' || toolName === 'start_cloud_session') && hasFullAccess(botId)) return { decision: 'allow', key: toolName, title: toolName };
   if (toolName === 'orchestrate') {
     const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, 'orchestrate') as any;
     return { decision: p?.mode === 'always_allow' ? 'allow' : p?.mode === 'blocked' ? 'block' : 'ask', key: 'orchestrate', title: 'Run a model team (orchestrator and subagents)' };
@@ -863,6 +901,12 @@ export function policyFor(userId: string, toolName: string, args: any, botId?: s
   }
   if (toolName === 'ask_subscription') return { decision: 'ask', key: toolName, title: 'Assistant: send this request to another provider' };
   if (toolName === 'github_create_repo') return { decision: 'ask', key: toolName, title: 'create a GitHub repository' };
+  // One in-app approval covers the GitHub lookup (gh, read-only) and starting the Cloud session; nothing runs on local files.
+  if (toolName === 'start_cloud_session') {
+    const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, toolName) as any;
+    return { decision: p?.mode === 'always_allow' ? 'allow' : p?.mode === 'blocked' ? 'block' : 'ask', key: toolName,
+      title: `Claude Cloud: find ${args?.repo ? `“${String(args.repo).slice(0, 80)}”` : 'the repository'} on GitHub and start Cloud work` };
+  }
   if (toolName === 'ask_grok') return grok
     ? { decision: 'ask', key: toolName, title: 'send this prompt to Grok' }
     : { decision: 'block', key: toolName, title: 'Grok connector is disabled' };

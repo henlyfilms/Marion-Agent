@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { copyText } from '../../lib/clipboard';
 import type { CardBody, Row } from '@shared/types';
 import { api, openPopup } from '../../lib/api';
+import { featuresApi } from '../../lib/featuresApi';
 import { useStore } from '../../store';
 import { Icon } from '../Icon';
 import { ToolkitLogo } from '../ToolkitLogo';
@@ -48,7 +49,7 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
         <>
           <div className="card__actions">
             <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>
-            {!['ask_grok', 'ask_subscription', 'github_create_repo'].includes(body.tool) && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>}
+            {!['ask_grok', 'ask_subscription', 'github_create_repo', 'start_cloud_session'].includes(body.tool) && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('always')}>Always allow</button>}
             <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('allow')}>Allow</button>
           </div>
           {error && <div className="card__error">{error}</div>}
@@ -150,6 +151,56 @@ export function ConnectCard({ row, body }: { row: Row; body: Card<'connect'> }) 
   );
 }
 
+// ---------------- Claude Cloud (strict: GitHub only, fixes approved right here) ----------------
+
+const CLOUD_OUTCOME: Record<string, string> = { started: 'Cloud work started', cancelled: 'Cancelled', allowed: 'Allowed', denied: 'Not allowed' };
+
+export function CloudCard({ row, body }: { row: Row; body: Card<'cloud'> }) {
+  const { busy, error, run } = useBusy();
+  const pending = body.status === 'pending';
+  const working = body.status === 'working';
+  const pick = (id: string) => run(id, () => featuresApi.cloudCardAction(row.botId, row.seq, id));
+  const permission = body.mode === 'permission';
+  return (
+    <div className={`card approval-card cloud-card${pending || working ? '' : ' is-resolved'}`}>
+      <div className="card__head">
+        <ToolkitLogo name="GitHub" logo="https://logos.composio.dev/api/github" size={44} />
+        <div className="card__titles">
+          <div className="card__title">{permission ? 'Allow Claude Cloud?' : body.status === 'started' ? `Claude Cloud on ${body.repo}` : 'Claude Cloud needs one step'}</div>
+          <div className="card__sub">{body.title || body.query || 'Cloud work'}</div>
+        </div>
+      </div>
+      <div className="card__body">
+        {body.problem}
+        {body.solution && <><br /><br />{permission ? <code>{body.solution}</code> : body.solution}</>}
+      </div>
+      {body.device && working && (
+        <div className="card__body" role="status">
+          One-time GitHub code: <strong style={{ userSelect: 'all' }}>{body.device.code}</strong>{' '}
+          <button type="button" className="link-btn" onClick={() => { void copyText(body.device!.code); openPopup(body.device!.url); }}>Copy code and open GitHub</button>
+        </div>
+      )}
+      {body.note && <div className="card__body" role="status">{body.note}</div>}
+      {pending ? (
+        <div className="question-card__options">
+          {body.options.map(option => option.kind === 'open'
+            ? <a key={option.id} className="question-option" href={option.url} target="_blank" rel="noreferrer">
+                <span className="question-option__label">{option.label} ↗{option.hint ? <><br /><small>{option.hint}</small></> : null}</span></a>
+            : <button key={option.id} type="button" className="question-option" disabled={!!busy} onClick={() => pick(option.id)}>
+                <span className="question-option__label">{busy === option.id ? 'Working…' : option.label}{option.hint ? <><br /><small>{option.hint}</small></> : null}</span>
+              </button>)}
+        </div>
+      ) : working ? null : (
+        <div className={`card__outcome is-${body.status === 'started' || body.status === 'allowed' ? 'allowed' : 'denied'}`}>
+          <Icon name={body.status === 'started' || body.status === 'allowed' ? 'check' : 'close'} size={12} opacity={0.7} />
+          {CLOUD_OUTCOME[body.status] ?? body.status}
+        </div>
+      )}
+      {error && <div className="card__error">{error}</div>}
+    </div>
+  );
+}
+
 // ---------------- draft (screen 02) ----------------
 
 const CHANNEL_LABEL: Record<string, string> = { email: 'Email', slack: 'Slack', message: 'Chat' };
@@ -208,6 +259,7 @@ export function CardRow({ row }: { row: Row }) {
     case 'draft': return <DraftCard body={b} />;
     case 'handoff': return <UsageHandoffCard row={row} body={b} />;
     case 'work': return <WorkCard body={b} />;
+    case 'cloud': return <CloudCard row={row} body={b} />;
     default: return null;
   }
 }

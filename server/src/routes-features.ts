@@ -1,7 +1,8 @@
 import { basename } from 'node:path';
 import { env } from './env.js';
 import { continueHandoff, validateFallback } from './features/handoffs.js';
-import { startCloudSession } from './features/cloud-sessions.js';
+import { actOnCloudCard, launchCloudWork } from './features/cloud-cards.js';
+import { repoHint } from './features/cloud-repo.js';
 import { createGitHubRepo } from './features/github-repos.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -335,14 +336,24 @@ featuresApi.post('/bots/:id/cloud-session', async (c) => {
   const bot = ownBot(userId, c.req.param('id'));
   if (!bot || bot.deleted_at || bot.kind === 'room') return c.json({ error: 'Bot not found.' }, 404);
   try {
-    const { goal, folder, allowLocalEdits } = await c.req.json();
+    const { goal, repo } = await c.req.json();
     if (typeof goal !== 'string' || !goal.trim() || goal.length > 20_000) throw new Error('Enter a Cloud task of up to 20,000 characters.');
-    if (typeof folder !== 'string') throw new Error('Enter the path of your local project folder.');
-    const path = await checkFolder(folder);
-    const current = ownBot(userId, bot.id);
-    if (!current || current.deleted_at || current.generation !== bot.generation) throw new Error('The conversation changed. Open the Cloud form again.');
-    const id = startCloudSession(userId, bot.id, bot.generation, goal.trim(), { path, label: basename(path), write: allowLocalEdits === true });
-    return c.json({ id }, 202);
+    if (repo != null && (typeof repo !== 'string' || repo.length > 300)) throw new Error('Enter a GitHub repository as owner/name or a name to search for.');
+    // Strict Cloud mode: the repository is found on GitHub; a local folder is never used. Blockers become an in-app card.
+    const result = await launchCloudWork({ userId, botId: bot.id, generation: bot.generation, goal: goal.trim(), query: repo || repoHint(goal) });
+    return c.json(result.started ? { id: result.sessionId, repo: result.repo.nameWithOwner } : { card: result.seq, blocker: result.blocker }, 202);
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+featuresApi.post('/bots/:id/cloud-cards/:seq', async (c) => {
+  const userId = c.get('user').id;
+  const bot = ownBot(userId, c.req.param('id'));
+  if (!bot || bot.deleted_at) return c.json({ error: 'Bot not found.' }, 404);
+  try {
+    const { option } = await c.req.json();
+    if (typeof option !== 'string') throw new Error('Choose an option.');
+    actOnCloudCard(userId, bot.id, Number(c.req.param('seq')), option, { local: localAction(c) });
+    return c.json({ ok: true }, 202);
   } catch (error) { return c.json({ error: (error as Error).message }, 400); }
 });
 

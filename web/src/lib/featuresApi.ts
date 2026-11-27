@@ -113,8 +113,10 @@ export const featuresApi = {
   setFullAccess: (botId: string, enabled: boolean, confirm?: string) => req<{ fullAccess: boolean }>('PUT', `/bots/${botId}/full-access`, { enabled, confirm }),
   continueHandoff: (botId: string, id: string, seq: number, selection: ChatModelSelection) =>
     req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/handoffs/${encodeURIComponent(id)}/continue`, { seq, selection }),
-  startCloudSession: (botId: string, body: { goal: string; folder: string; allowLocalEdits: boolean }) =>
-    req<{ id: string }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-session`, body),
+  startCloudSession: (botId: string, body: { goal: string; repo: string }) =>
+    req<{ id?: string; repo?: string; card?: number; blocker?: string }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-session`, body),
+  cloudCardAction: (botId: string, seq: number, option: string) =>
+    req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-cards/${seq}`, { option }),
   createGitHubRepo: (body: { name: string; description: string; visibility: 'private' | 'public'; folder?: string; confirmPush: boolean }) =>
     req<{ url: string; pushed: boolean; warning?: string }>('POST', '/github/repos', body),
   agentSettings: () => req<{ settings: AgentSettings; recordingDayOptions: number[] }>('GET', '/agent-settings'),

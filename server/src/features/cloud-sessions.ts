@@ -1,6 +1,10 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { promisify } from 'node:util';
 import { cliEnvironment, executable, parseLine, requireClaudeSubscription } from '../agent/subscriptions.js';
 import { checkUsageLimit, isUsageLimitError } from '../agent/usage-limit.js';
 import { appendRow, getBotRow } from '../store.js';
@@ -8,7 +12,7 @@ import { runExternalSession } from '../agent/loop.js';
 import { beginAgentSession, finishAgentSession, linkCloudSession } from './agent-sessions.js';
 import { offerHandoff, reportHandoffError } from './handoffs.js';
 import type { SessionTrack } from './life-outbox.js';
-import type { BotFolder } from './folders.js';
+import type { CloudRepo } from './cloud-repo.js';
 
 export const cloudArgs = [
   '--cloud', '--input-format', 'stream-json', '--output-format', 'stream-json',
@@ -30,8 +34,11 @@ type CloudFrame = {
   message?: { content?: { type?: string; text?: string; name?: string }[] };
 };
 
+/** A permission the Cloud session asks for mid-run; answered from an in-app card in the chat (true = allow). */
+export type CloudPermission = (request: { tool: string; input: unknown; detail: string }) => Promise<boolean>;
+
 export async function relayCloud(program: string, folder: string, goal: string, signal: AbortSignal,
-  onUrl: (url: string) => void, onProgress: (line: string) => void) {
+  onUrl: (url: string) => void, onProgress: (line: string) => void, onPermission?: CloudPermission) {
   const env = { ...cliEnvironment(), GIT_OPTIONAL_LOCKS: '0' };
   const child = spawn(program, cloudArgs, { cwd: folder, env, signal, stdio: ['pipe', 'pipe', 'pipe'] });
   let diagnostic = '';
@@ -63,8 +70,17 @@ export async function relayCloud(program: string, folder: string, goal: string, 
       const id = frame.cloud_session?.id ?? frame.session_id ?? frame.response?.response?.session_id;
       if (/^(?:session|cse)_[a-z\d_-]+$/i.test(id ?? '')) link('https://claude.ai/code/' + id);
       if (frame.type === 'control_request' && frame.request_id) {
+        const request = frame.request as { subtype?: string; tool_name?: string; input?: unknown } | undefined;
+        if (request?.subtype === 'can_use_tool' && onPermission) {
+          // The Cloud session wants a tool in its own cloud sandbox: ask the owner in the Marion chat, not in another app.
+          const input = request.input ?? {};
+          const allowed = await onPermission({ tool: String(request.tool_name ?? 'a tool'), input, detail: JSON.stringify(input).slice(0, 1500) }).catch(() => false);
+          send({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id,
+            response: allowed ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'The owner declined this in Marion Agent.' } } });
+          continue;
+        }
         send({ type: 'control_response', response: { subtype: 'error', request_id: frame.request_id,
-          error: 'Marion cannot authorize a Cloud request to use this Mac. Open the session in Claude if it needs input.' } });
+          error: 'This Cloud session runs on GitHub, not on this Mac: Marion does not hand it local access.' } });
         continue;
       }
       if (frame.type === 'control_response' && frame.response?.error) {
@@ -102,14 +118,49 @@ export async function relayCloud(program: string, folder: string, goal: string, 
   }
 }
 
-export function startCloudSession(userId: string, botId: string, generation: number, goal: string, folder: BotFolder) {
+const git = promisify(execFile);
+
+/**
+ * Claude Code picks the Cloud repository from the Git remote of the folder it starts in. Marion starts it in an empty
+ * temporary folder of its own whose only content is a Git remote naming the GitHub repository: no project files, no
+ * clone, and never one of the owner's local folders. Claude Cloud clones the repository on its side.
+ */
+export async function cloudPointer(repo: CloudRepo) {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo.nameWithOwner)) throw new Error('Unexpected GitHub repository name.');
+  const dir = await mkdtemp(join(tmpdir(), 'marion-cloud-'));
+  try {
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    await git('git', ['init', '-q'], { cwd: dir, env });
+    await git('git', ['remote', 'add', 'origin', `https://github.com/${repo.nameWithOwner}.git`], { cwd: dir, env });
+    return dir;
+  } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
+}
+
+export function cloudGoal(goal: string, repo: CloudRepo) {
+  return `GitHub repository: ${repo.nameWithOwner} (${repo.url})\nWork only in the Cloud checkout of this repository. Commit to a new branch, push it, and open a pull request when you changed files. Finish with a short summary and the PR link.\n\n${goal}`;
+}
+
+/** Recognises Cloud launch failures that mean Claude Cloud itself can't reach the repository yet (GitHub app / connection). */
+export const needsCloudConnection = (message: string) =>
+  /github/i.test(message) && /(?:not\s+)?(?:install|connect|authori[sz]|access|permission|link)/i.test(message)
+  || /repositor(?:y|ies).*(?:not\s+(?:found|accessible|available|connected)|no access|access denied)/i.test(message);
+
+export interface CloudLaunchHooks {
+  /** Ask the owner (in-app card) before the Cloud session uses a tool that needs permission. */
+  onPermission?: CloudPermission;
+  /** The launch failed because Claude Cloud cannot reach the repository: show the in-app fix card. */
+  onConnectionNeeded?: (message: string) => void;
+}
+
+export function startCloudSession(userId: string, botId: string, generation: number, goal: string, repo: CloudRepo, hooks: CloudLaunchHooks = {}) {
   const program = executable('claude');
   if (!program) throw new Error('Install Claude Code and run claude auth login --claudeai first.');
-  const track: SessionTrack = { id: randomUUID(), kind: 'cloud', userId, botId, request: goal, folder };
+  // The session record names the GitHub repository; there is no local folder in strict Cloud mode.
+  const track: SessionTrack = { id: randomUUID(), kind: 'cloud', userId, botId, request: goal, folder: { path: repo.url, label: repo.nameWithOwner } };
   const startedAt = Date.now();
   beginAgentSession(track, 'claude', startedAt);
   appendRow(botId, 'notice', { type: 'notice', tone: 'info',
-    text: `Starting Claude Cloud in ${folder.label}: ${goal.replace(/\s+/g, ' ').slice(0, 160)}` });
+    text: `Starting Claude Cloud on GitHub ${repo.nameWithOwner}: ${goal.replace(/\s+/g, ' ').slice(0, 160)}` });
   const inChat = () => {
     const bot = getBotRow(botId);
     return bot && !bot.deleted_at && bot.generation === generation;
@@ -118,12 +169,14 @@ export function startCloudSession(userId: string, botId: string, generation: num
     let cloudUrl: string | null = null;
     const progress: string[] = [];
     const saveProgress = (line: string) => { progress.push(line.slice(0, 2000)); if (progress.length > 40) progress.shift(); };
+    let pointer: string | undefined;
     try {
-      await requireClaudeSubscription(program, folder.path, signal);
-      const reply = await relayCloud(program, folder.path, goal, signal, url => {
+      pointer = await cloudPointer(repo);
+      await requireClaudeSubscription(program, pointer, signal);
+      const reply = await relayCloud(program, pointer, cloudGoal(goal, repo), signal, url => {
         cloudUrl = url;
         linkCloudSession(track, url);
-      }, saveProgress);
+      }, saveProgress, hooks.onPermission);
       finishAgentSession(track, 'claude', { status: 'completed', reply, startedAt, endedAt: Date.now() });
       if (reply && inChat()) appendRow(botId, 'message', { type: 'message', role: 'assistant', text: reply });
     } catch (error) {
@@ -131,11 +184,15 @@ export function startCloudSession(userId: string, botId: string, generation: num
         ? 'Marion disconnected; the Cloud session may still be running on Claude.'
         : (error as Error).message;
       finishAgentSession(track, 'claude', { status: signal.aborted ? 'stopped' : 'failed', error: message, startedAt, endedAt: Date.now() });
-      if (inChat()) appendRow(botId, 'notice', { type: 'notice', tone: signal.aborted ? 'info' : 'warn', text: `Claude Cloud: ${message}` });
+      if (!signal.aborted && !cloudUrl && needsCloudConnection(message) && hooks.onConnectionNeeded && inChat()) hooks.onConnectionNeeded(message);
+      else if (inChat()) appendRow(botId, 'notice', { type: 'notice', tone: signal.aborted ? 'info' : 'warn', text: `Claude Cloud: ${message}` });
       if (!signal.aborted && isUsageLimitError(error)) {
-        await offerHandoff({ track, generation, cloudUrl, progress, folder,
+        // Strict Cloud mode: the handoff never gets a local folder; it inspects the Cloud session and the GitHub repository.
+        await offerHandoff({ track, generation, cloudUrl, progress,
           selection: { provider: 'claude', model: '', effort: null }, error, signal }).catch(failure => reportHandoffError(botId, generation, failure));
       }
+    } finally {
+      if (pointer) await rm(pointer, { recursive: true, force: true }).catch(() => {});
     }
   }).catch(error => reportHandoffError(botId, generation, error));
   return track.id;
