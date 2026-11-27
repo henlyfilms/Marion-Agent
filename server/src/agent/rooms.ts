@@ -1,4 +1,5 @@
-import type { UploadedAttachment } from '../attachments.js';
+import { getAttachment, MAX_ATTACHMENTS, photos, type UploadedAttachment } from '../attachments.js';
+import type { ChatAttachment } from '../types.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
@@ -54,13 +55,16 @@ export function dispatchRoomMessage(roomId: string, text: string, enqueue: (botI
     .reverse()
     .map((r) => {
       const b = JSON.parse(r.body);
-      return `${b.from?.name ?? (b.role === 'user' ? 'User' : 'Bot')}: ${String(b.text).slice(0, 600)}`;
+      const files = (b.attachments ?? []).length;
+      return `${b.from?.name ?? (b.role === 'user' ? 'User' : 'Bot')}: ${String(b.text).slice(0, 600)}${files ? ` [${files} attachment${files === 1 ? '' : 's'}]` : ''}`;
     })
     .join('\n');
+  // Images Bots posted since the user's previous message ride along, so members can see what the others shared.
+  const shared = [...(attachments ?? []), ...photos(botImagesSinceUser(roomId, room.generation))].slice(0, MAX_ATTACHMENTS);
   for (const m of responders) {
     enqueue(m.id, {
       type: 'system',
-      attachments,
+      attachments: shared.length ? shared : undefined,
       local: { model, effort: m.effort },
       text:
         `[Group chat "${room.name}"] Members: ${members.map((x) => x.name).join(', ')}. ` +
@@ -72,13 +76,43 @@ export function dispatchRoomMessage(roomId: string, text: string, enqueue: (botI
   }
 }
 
-export function postToRoom(fromBotId: string, roomName: string, text: string) {
+/** Files on Bot posts after the user's previous message in the room (the newest user message is the one being dispatched). */
+export function botImagesSinceUser(roomId: string, generation: number): UploadedAttachment[] {
+  const rows = db.prepare("SELECT body FROM rows WHERE bot_id=? AND generation=? AND kind='message' ORDER BY seq DESC LIMIT 40").all(roomId, generation) as { body: string }[];
+  const found: UploadedAttachment[] = [];
+  let users = 0;
+  for (const { body } of rows) {
+    const message = JSON.parse(body);
+    if (message.role === 'user' && message.from?.kind !== 'bot' && ++users > 1) break;
+    if (message.from?.kind !== 'bot') continue;
+    const files = ((message.attachments ?? []) as ChatAttachment[]).flatMap(file => {
+      const saved = getAttachment(roomId, generation, file.id);
+      return saved ? [{ id: file.id, name: saved.name, mime: saved.mime, size: saved.data.length, data: saved.data }] : [];
+    });
+    found.unshift(...files);
+  }
+  return found;
+}
+
+/** The group chat `fromBotId` may post to under this name, or the reason it can't (checked before any images are collected). */
+export function roomForPost(fromBotId: string, roomName: string): { id: string; name: string } | string {
   const from = db.prepare('SELECT id, user_id, name FROM bots WHERE id=?').get(fromBotId) as any;
+  if (!from) return 'You no longer exist.';
   const room = db.prepare("SELECT * FROM bots WHERE user_id=? AND kind='room' AND lower(name)=lower(?)").get(from.user_id, roomName.trim()) as any;
   if (!room) return `No group named "${roomName}".`;
   const members: string[] = room.members ? JSON.parse(room.members) : [];
   if (!members.includes(fromBotId)) return `You're not a member of "${room.name}".`;
-  appendRow(room.id, 'message', { type: 'message', role: 'assistant', text, from: { kind: 'bot', id: from.id, name: from.name } });
-  db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(room.id);
+  return { id: room.id, name: room.name };
+}
+
+export function postToRoom(fromBotId: string, roomName: string, text: string, attachments: UploadedAttachment[] = []) {
+  const target = roomForPost(fromBotId, roomName);
+  if (typeof target === 'string') return target;
+  const from = db.prepare('SELECT id, name FROM bots WHERE id=?').get(fromBotId) as any;
+  appendRow(target.id, 'message', {
+    type: 'message', role: 'assistant', text, from: { kind: 'bot', id: from.id, name: from.name },
+    ...(attachments.length ? { attachments: attachments.map(({ data, ...meta }) => meta) } : {}),
+  }, attachments);
+  db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(target.id);
   return 'Posted to the group.';
 }

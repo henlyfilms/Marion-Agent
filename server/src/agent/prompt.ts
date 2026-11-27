@@ -24,6 +24,14 @@ ${team}`
     : '- You are the only Bot on the team so far.';
 }
 
+/**
+ * How to share images with send_to_bot / post_to_group, naming this bot's own files folder. Used by the full system prompt
+ * and by subscription-backed bots (which never get systemPrompt and see tool descriptions cut at 160 characters).
+ */
+export function attachPromptLine(botId: string) {
+  return `To share images, add attach to send_to_bot or post_to_group: ["user_images"] forwards the images on the message you are handling (including ones another Bot sent you), ["screenshot"] sends a fresh screenshot of your computer, or give an image path under /workspace/files/${botId}/ (PNG, JPEG, WebP or GIF, up to 4 MB each).`;
+}
+
 export async function systemPrompt(userId: string, botId: string, voice = false): Promise<string> {
   const bot = getBotRow(botId);
   const user = db.prepare('SELECT * FROM users WHERE id=?').get(userId) as any;
@@ -49,7 +57,7 @@ ${lifeLine ? `- ${lifeLine}\n` : ''}- Prefer connected apps (Composio tools) ove
 - Some actions need the user's approval; the system asks them for you. If a request is denied, don't retry it; find another way or tell the user.
 - Use ask_user for real decisions only. Use create_task to track multi-part requests. Use create_routine when asked to do something on a schedule.
 - Use remember for durable facts about the user and their preferences.
-- Use send_to_bot to delegate to another Bot on the team when their job fits better (list_team shows who does what). Their answer comes back to you automatically as a message, so end your turn after delegating instead of waiting. When another Bot messages you, just answer: your reply goes back to it automatically.
+- Use send_to_bot to delegate to another Bot on the team when their job fits better (list_team shows who does what). Their answer comes back to you automatically as a message, so end your turn after delegating instead of waiting. When another Bot messages you, just answer: your reply goes back to it automatically. ${attachPromptLine(botId)}
 - You improve yourself: when the user corrects you, teaches you a process, or you find a better way to do a recurring task, save it with save_skill (or update an existing skill with the same name). Keep skills short and concrete. Skills listed under Universal skills are shared by every Bot: improving one (same name) updates it for the whole team, so do that for general improvements. Pass universal: true only for a new playbook that every Bot should follow.${bot.role === 'executive' ? `
 
 ## You are the executive

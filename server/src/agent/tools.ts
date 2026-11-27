@@ -10,10 +10,10 @@ import { env } from '../env.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { desktop } from '../desktop.js';
+import { desktop, isDockerEngineDown } from '../desktop.js';
 import { BOX_ROOT, screenFor } from '../computer.js';
 import { appendRow, emitBot, getBotRow, getLive, listRoutines, toRoutine, describeCron } from '../store.js';
-import { teamRoster } from '../features/coordination.js';
+import { botMessageBlock, teamRoster } from '../features/coordination.js';
 import { createBotRecord } from '../features/bots.js';
 import { AVATAR_SHAPE_IDS, normalizeAvatarShape } from '../avatarShapes.js';
 import { saveLearnedSkill } from '../features/improve.js';
@@ -23,7 +23,7 @@ import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
 import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes } from '../triggers.js';
 import { setCheckins } from '../proactive.js';
 import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
-import { createRoom, postToRoom } from './rooms.js';
+import { createRoom, postToRoom, roomForPost } from './rooms.js';
 import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
 import { teamDelegate, teamDiscuss } from './orchestration.js';
 import { withFolder } from './folder-lock.js';
@@ -35,12 +35,20 @@ import { ASK_OWNER_LINE, miniTitle, ownerRequest, showQuestionCard, WorkCard } f
 import { leanLine, planRelaySession, recordRelayTurn, relayMedia } from './relay.js';
 import { lifePlannerTools, lifeToolsEnabled, runLifePlannerTool, type LifePlannerTool } from '../features/life-link.js';
 import type { ActivityKind } from '../types.js';
+import { MAX_ATTACHMENTS, imageType, latestUserAttachments, maxPhoto, photos, type UploadedAttachment } from '../attachments.js';
+import { posix } from 'node:path';
 import { Cron } from 'croner';
 
 export interface ToolCtx {
   userId: string;
   botId: string;
-  enqueueBotMessage: (fromBotId: string, toBotId: string, text: string, depth: number, opts?: { autoReply?: boolean }) => void;
+  enqueueBotMessage: (fromBotId: string, toBotId: string, text: string, depth: number, opts?: { autoReply?: boolean; attachments?: UploadedAttachment[] }) => void;
+  /**
+   * Files on the message that started this turn (a user message, a bot-to-bot message, or a group-chat dispatch, which is not
+   * stored in this bot's own chat). When set, `attach: ["user_images"]` and relayed agents use these instead of the newest user
+   * message in the bot's chat, which may be a later message than the one being handled.
+   */
+  triggerAttachments?: UploadedAttachment[];
   depth: number;
   /** Bots this turn already messaged (so the automatic reply isn't sent twice). */
   messaged?: Set<string>;
@@ -76,6 +84,104 @@ interface ToolDef {
 }
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
+
+// ---------- images a bot sends to another bot or a group ----------
+
+/** What `attach` accepts, with the bot's own files folder spelled out (errors are read by the model). */
+const attachHelp = (botId: string) => `Use "user_images", "screenshot", or an image path under ${BOX_ROOT}/files/${botId}/.`;
+
+/**
+ * Kept under 160 characters: subscription-backed bots see argument descriptions cut at 160 (compactTools), and the file
+ * path option must survive that. The system prompts also name the bot's concrete /workspace/files/<bot-id>/ folder.
+ */
+export const ATTACH_DESCRIPTION = 'Images to send: "user_images" (on the message you are handling), "screenshot", or a path under /workspace/files/<bot-id>/ (PNG/JPEG/WebP/GIF, max 4 MB).';
+
+const attachSchema = {
+  type: 'array',
+  items: { type: 'string' },
+  description: ATTACH_DESCRIPTION,
+};
+
+function checkedImage(label: string, name: string, data: Buffer): UploadedAttachment {
+  if (!data.length) throw new Error(`${label} is empty.`);
+  if (data.length > maxPhoto) throw new Error(`${label} is larger than 4 MB. Images must be 4 MB or smaller.`);
+  const mime = imageType(data);
+  if (!mime) throw new Error(`${label} is not an image. Attach a PNG, JPEG, WebP, or GIF.`);
+  return { id: newId('att'), name, mime, size: data.length, data };
+}
+
+/** One attach reference in canonical form, so "/workspace/files/x/a.png" and "/workspace/files/x/./a.png" count once. */
+const attachKey = (ref: unknown) => {
+  const value = typeof ref === 'string' ? ref.trim() : '';
+  return value.startsWith('/') ? posix.normalize(value) : value;
+};
+
+/**
+ * Why reading an attach path from the bot's computer failed, in words the model can act on. Only the copy script's own
+ * failure (a non-zero exit with no Docker error) means the file is missing; an engine that is down (Colima / Docker
+ * Desktop), a computer that would not start, or any other Docker error is reported as it is.
+ */
+export function attachDownloadError(error: unknown): string {
+  const failure = error as { code?: unknown; stderr?: Buffer | string; message?: string } | undefined;
+  const message = String(failure?.message ?? error ?? '').trim();
+  if (/16 MiB/.test(message)) return 'it is larger than 4 MB';
+  if (isDockerEngineDown(error)) return message;
+  const stderr = failure?.stderr?.toString() ?? '';
+  const dockerSide = /error response from daemon|docker daemon|docker api|\.sock|no such container|is not running|colima/i;
+  if (typeof failure?.code === 'number' && !dockerSide.test(stderr)) return 'no such file';
+  const detail = (stderr.trim() || message).split('\n').map(line => line.trim()).find(line => line && !/^Command failed:/.test(line)) ?? message;
+  return `the computer could not read it (${(detail || 'unknown error').slice(0, 300)})`;
+}
+
+/**
+ * The images a bot asked to send with `attach` (send_to_bot, post_to_group). Every file gets a fresh id, because saved
+ * attachments are keyed by id and the copy will belong to another chat. Throws a short, model-readable error when any
+ * reference is invalid, empty, too large or not an image, or when there would be more than MAX_ATTACHMENTS files.
+ * Callers validate the recipient first: this may take a screenshot or start the bot's computer.
+ */
+export async function collectBotAttachments(ctx: ToolCtx, refs: unknown): Promise<UploadedAttachment[]> {
+  if (refs === undefined || refs === null) return [];
+  const help = attachHelp(ctx.botId);
+  if (!Array.isArray(refs)) throw new Error(`attach must be a list. ${help}`);
+  const wanted = [...new Set(refs.map(attachKey))];
+  const out: UploadedAttachment[] = [];
+  const add = (files: UploadedAttachment[]) => {
+    out.push(...files);
+    if (out.length > MAX_ATTACHMENTS) throw new Error(`Attach up to ${MAX_ATTACHMENTS} images per message.`);
+  };
+  const root = `${BOX_ROOT}/files/${ctx.botId}/`;
+  // Check every reference before touching the computer, so a bad one never boots a container or takes a screenshot.
+  for (const ref of wanted) {
+    if (!ref) throw new Error(`An attach value is empty. ${help}`);
+    if (ref.startsWith('/')) {
+      if (!ref.startsWith(root) || ref.length === root.length) throw new Error(`"${ref}" is outside your files folder. Attach images saved under ${root}.`);
+    } else if (ref !== 'user_images' && ref !== 'screenshot') throw new Error(`Unknown attach value "${ref}". ${help}`);
+  }
+  for (const ref of wanted) {
+    if (ref === 'user_images') {
+      const generation = getBotRow(ctx.botId)?.generation;
+      const source = ctx.triggerAttachments ?? (generation === undefined ? [] : latestUserAttachments(ctx.botId, generation));
+      const images = photos(source);
+      if (!images.length) throw new Error('The message you are handling has no images to forward.');
+      add(images.map(file => checkedImage(`"${file.name}"`, file.name, file.data)));
+    } else if (ref === 'screenshot') {
+      const shot = await desktop.screenshot(await screenFor(ctx.userId, ctx.botId));
+      ctx.signal?.throwIfAborted();
+      const data = Buffer.from(shot.image.replace(/^data:[^,]*,/, ''), 'base64');
+      const ext = shot.mime_type === 'image/png' ? 'png' : 'jpg';
+      add([checkedImage('The screenshot', `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`, data)]);
+    } else {
+      const name = posix.basename(ref);
+      let data: Buffer;
+      try { data = await desktop.download(await screenFor(ctx.userId, ctx.botId), ref); }
+      catch (e: any) { throw new Error(`Could not read "${ref}": ${attachDownloadError(e)}.`); }
+      add([checkedImage(`"${name}"`, name, data)]);
+    }
+  }
+  return out;
+}
+
+const imageCount = (files: UploadedAttachment[]) => files.length ? ` with ${files.length} image${files.length === 1 ? '' : 's'}` : '';
 
 async function shot(ctx: ToolCtx, caption: string): Promise<ToolResult> {
   const desktopId = await screenFor(ctx.userId, ctx.botId);
@@ -354,7 +460,7 @@ export const TOOLS: ToolDef[] = [
       // Continue this chat's session with the provider, or start a fresh one (asked for, new folder, big, or a new topic).
       const plan = planRelaySession({ botId: ctx.botId, generation, provider, prompt, folder: folder?.path, newSession: args.new_session === true });
       // The user's screenshots and screen recordings (as frames) go along with the request.
-      const media = await relayMedia(ctx.botId);
+      const media = await relayMedia(ctx.botId, ctx.triggerAttachments);
       const task = [
         plan.carried,
         prompt,
@@ -493,7 +599,7 @@ export const TOOLS: ToolDef[] = [
     }, ['assignments', 'mode']),
     activity: 'messaging_named',
     label: 'Working with the team',
-    impl: async (args, ctx) => teamDelegate(ctx.botId, args, ctx.signal ?? new AbortController().signal),
+    impl: async (args, ctx) => teamDelegate(ctx.botId, args, ctx.signal ?? new AbortController().signal, ctx.triggerAttachments),
   },
   {
     name: 'team_discuss',
@@ -505,7 +611,7 @@ export const TOOLS: ToolDef[] = [
     }, ['topic']),
     activity: 'messaging_named',
     label: 'Team discussion',
-    impl: async (args, ctx) => teamDiscuss(ctx.botId, args, ctx.signal ?? new AbortController().signal),
+    impl: async (args, ctx) => teamDiscuss(ctx.botId, args, ctx.signal ?? new AbortController().signal, ctx.triggerAttachments),
   },
   {
     name: 'remember',
@@ -728,7 +834,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'send_to_bot',
     description: "Send a message to another Bot on the user's team (by name) to delegate work or ask a question. Their reply will arrive later as a new message to you.",
-    parameters: obj({ bot_name: { type: 'string' }, message: { type: 'string' } }, ['bot_name', 'message']),
+    parameters: obj({ bot_name: { type: 'string' }, message: { type: 'string' }, attach: attachSchema }, ['bot_name', 'message']),
     activity: 'messaging_named',
     label: 'Messaging a Bot',
     impl: async (a, ctx) => {
@@ -738,13 +844,19 @@ export const TOOLS: ToolDef[] = [
       if (target.kind === 'room') return { output: `"${target.name}" is a group chat; use post_to_group instead.` };
       if (target.hidden && target.parent_bot_id !== ctx.botId && target.id !== ctx.replyTo) return { output: `"${target.name}" is another Bot's helper. Message its parent instead.` };
       const replying = target.id === ctx.replyTo;
+      // Refuse before collecting images: a screenshot or file path would otherwise start the computer for nothing.
+      const blocked = botMessageBlock(ctx.botId, target.id, ctx.depth + 1);
+      if (blocked) return { output: `Not sent: ${blocked}. Answer the user directly instead.` };
+      let attachments: UploadedAttachment[];
+      try { attachments = await collectBotAttachments(ctx, a.attach); }
+      catch (e: any) { return { output: `Not sent: ${e?.message ?? e}` }; }
       try {
-        ctx.enqueueBotMessage(ctx.botId, target.id, String(a.message), ctx.depth + 1, { autoReply: replying });
+        ctx.enqueueBotMessage(ctx.botId, target.id, String(a.message), ctx.depth + 1, { autoReply: replying, attachments });
       } catch (e: any) {
         return { output: `Not sent: ${e?.message ?? e}. Answer the user directly instead.` };
       }
       ctx.messaged?.add(target.id);
-      return { output: replying ? `Replied to ${target.name}.` : `Sent to ${target.name}. Their reply will come back to you as a message; end your turn now unless you have other work.`, summary: `Messaged ${target.name}` };
+      return { output: replying ? `Replied to ${target.name}${imageCount(attachments)}.` : `Sent to ${target.name}${imageCount(attachments)}. Their reply will come back to you as a message; end your turn now unless you have other work.`, summary: `Messaged ${target.name}` };
     },
   },
   {
@@ -822,11 +934,17 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'post_to_group',
     description: 'Post a message into a group chat you are a member of.',
-    parameters: obj({ group_name: { type: 'string' }, text: { type: 'string' } }, ['group_name', 'text']),
+    parameters: obj({ group_name: { type: 'string' }, text: { type: 'string' }, attach: attachSchema }, ['group_name', 'text']),
     activity: 'messaging_named',
     label: 'Posting to the group',
     impl: async (a, ctx) => {
-      const out = postToRoom(ctx.botId, String(a.group_name), String(a.text));
+      // Unknown group or not a member: refuse before collecting images (no screenshot, no computer start-up).
+      const room = roomForPost(ctx.botId, String(a.group_name));
+      if (typeof room === 'string') return { output: room };
+      let attachments: UploadedAttachment[];
+      try { attachments = await collectBotAttachments(ctx, a.attach); }
+      catch (e: any) { return { output: `Not posted: ${e?.message ?? e}` }; }
+      const out = postToRoom(ctx.botId, String(a.group_name), String(a.text), attachments);
       return { output: out, summary: `Posted to ${a.group_name}`, endTurn: out === 'Posted to the group.' };
     },
   },

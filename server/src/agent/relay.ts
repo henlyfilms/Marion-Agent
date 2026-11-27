@@ -12,13 +12,15 @@ import { tokenOptimizerFor } from './skills.js';
 // ---------- screenshots and screen recordings ----------
 
 /**
- * The screenshots (and frames of screen recordings) in the user's latest message, for a relayed agent.
+ * The screenshots (and frames of screen recordings) on the message being handled, for a relayed agent.
  * A relay only sees what the chat model writes in `prompt`, so without this the pictures never arrive.
+ * Pass the turn's `triggerAttachments` when known: the newest stored message may be a later one than the turn's own.
  */
-export async function relayMedia(botId: string): Promise<{ images: UploadedAttachment[]; note: string }> {
+export async function relayMedia(botId: string, triggerAttachments?: UploadedAttachment[]): Promise<{ images: UploadedAttachment[]; note: string }> {
   const bot = getBotRow(botId);
   if (!bot) return { images: [], note: '' };
-  const files = latestUserAttachments(botId, bot.generation).filter(file => file.mime.startsWith('image/') || isVideoMime(file.mime));
+  const source = triggerAttachments ?? latestUserAttachments(botId, bot.generation);
+  const files = source.filter(file => file.mime.startsWith('image/') || isVideoMime(file.mime));
   return files.length ? lookableMedia(files) : { images: [], note: '' };
 }
 

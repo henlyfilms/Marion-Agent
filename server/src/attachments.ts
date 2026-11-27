@@ -9,7 +9,7 @@ export { MAX_ATTACHMENTS } from './attachment-limits.js';
 const photoTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const textExtensions = /\.(?:txt|md|markdown|csv|tsv|json|xml|ya?ml|log|html?|css|[cm]?js|tsx?|py|sh|sql)$/i;
 const videoExtensions = /\.(?:mov|mp4|m4v|webm)$/i;
-const maxPhoto = 4 * 1024 * 1024;
+export const maxPhoto = 4 * 1024 * 1024;
 const maxText = 256 * 1024;
 /**
  * A screen recording (QuickTime .mov, MP4, WebM). Models see sampled frames; the original stays in the chat.
@@ -21,7 +21,8 @@ export const attachmentBodyLimit = 2 * maxVideo + MAX_ATTACHMENTS * maxPhoto + M
 
 export type UploadedAttachment = ChatAttachment & { data: Buffer };
 
-function imageType(bytes: Buffer) {
+/** The image type from a file's first bytes (PNG, JPEG, WebP, GIF), or undefined when it is not one of those. */
+export function imageType(bytes: Buffer) {
   if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
   if (bytes.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) return 'image/jpeg';
   if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';

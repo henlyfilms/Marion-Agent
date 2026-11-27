@@ -10,7 +10,7 @@ import { hub } from '../lib/hub.js';
 import { appendHistory, appendRow, emitBot, getBotRow, getLive, getRow, loadHistory, markSubscriptionStart, setLive, updateRow } from '../store.js';
 import type { ChatModelSelection, MessageBody, ResponseUsage, ToolCallBody } from '../types.js';
 import { composioTools, toolkitInfo } from '../composio.js';
-import { liveTeamPrompt, systemPrompt } from './prompt.js';
+import { attachPromptLine, liveTeamPrompt, systemPrompt } from './prompt.js';
 import { lifePromptLine } from '../features/life-link.js';
 import { foldersPromptLine } from '../features/folders.js';
 import { agentSkills } from './skills.js';
@@ -32,12 +32,22 @@ type VoiceTurn = { call: string; seq: number; fast: boolean };
 
 const VOICE_STYLE = 'On this call, lead with the answer in one or two short, spoken sentences. Use plain language and no formatting. Ask one question only if needed. Use tools for work that requires them and report the outcome briefly.';
 
+/**
+ * The files on the message that started this turn, for `attach: ["user_images"]` and relayed agents. Set for user, bot and
+ * group-chat (system) triggers so a later message in the chat (e.g. a text-only one that arrived before this turn ran, or
+ * another queued / parallel turn) can't be mistaken for the one being handled. Undefined (newest stored message) only for
+ * turns without their own message (routines, resumed approvals).
+ */
+export function triggerAttachmentsOf(trigger: Trigger): UploadedAttachment[] | undefined {
+  return trigger.type === 'user' || trigger.type === 'bot' || trigger.type === 'system' ? trigger.attachments ?? [] : undefined;
+}
+
 export type Trigger =
   | { type: 'user'; text: string; attachments?: UploadedAttachment[]; generation?: number; local?: LocalSelection; subscription?: SubscriptionSelection; voice?: VoiceTurn; allowSubscriptionTeam?: boolean; handoffGoal?: string;
       /** Sent while the bot was busy: it waited in the queue and is answered right after the earlier work. */
       queued?: boolean }
   | { type: 'routine'; routineId: string; name: string; prompt: string }
-  | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number; autoReply?: boolean }
+  | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number; autoReply?: boolean; attachments?: UploadedAttachment[] }
   | { type: 'system'; text: string; attachments?: UploadedAttachment[]; local?: LocalSelection }
   | { type: 'resume' };
 
@@ -293,12 +303,25 @@ function startedWaiting(botId: string) {
 /** How many bots have a turn running or waiting (the desktop app waits for 0 before it swaps in a new server build). */
 export const busyBotCount = () => new Set([...queues.keys(), ...activeRuns.keys()]).size;
 
-function enqueueBotMessage(fromBotId: string, toBotId: string, text: string, depth: number, opts: { autoReply?: boolean } = {}) {
+function enqueueBotMessage(fromBotId: string, toBotId: string, text: string, depth: number, opts: { autoReply?: boolean; attachments?: UploadedAttachment[] } = {}) {
   const from = getBotRow(fromBotId);
   const blocked = allowBotMessage(fromBotId, toBotId, depth);
   if (blocked) throw new Error(blocked);
-  appendRow(toBotId, 'message', { type: 'message', role: 'user', text, from: { kind: 'bot', id: fromBotId, name: from.name } });
-  enqueue(toBotId, { type: 'bot', fromBotId, fromName: from.name, text, depth, autoReply: opts.autoReply });
+  enqueue(toBotId, botMessageTrigger(fromBotId, from.name, toBotId, text, depth, opts));
+}
+
+/**
+ * Save a bot-to-bot message in the receiving chat and return the trigger that delivers it. Images are stored with the message
+ * (the chat shows them and the receiver can forward them again with attach: ["user_images"]) and go to the receiver's model.
+ */
+export function botMessageTrigger(fromBotId: string, fromName: string, toBotId: string, text: string, depth: number,
+  opts: { autoReply?: boolean; attachments?: UploadedAttachment[] } = {}): Extract<Trigger, { type: 'bot' }> {
+  const atts = opts.attachments ?? [];
+  appendRow(toBotId, 'message', {
+    type: 'message', role: 'user', text, from: { kind: 'bot', id: fromBotId, name: fromName },
+    ...(atts.length ? { attachments: atts.map(({ data, ...meta }) => meta) } : {}),
+  }, atts);
+  return { type: 'bot', fromBotId, fromName, text, depth, autoReply: opts.autoReply, ...(atts.length ? { attachments: atts } : {}) };
 }
 
 /** Assistant text the bot wrote after `afterSeq` in its current chat. */
@@ -370,16 +393,19 @@ function userContent(text: string, attachments?: UploadedAttachment[]) {
 /** Told to the bot in front of a message the user sent while it was busy. */
 const SENT_WHILE_BUSY = '[The user sent this while you were busy with the earlier work, which has now finished. The chat already told them you would get to it. Handle it now without repeating that.]';
 
-function triggerItem(t: Trigger, behind = 0): any | null {
+export function triggerItem(t: Trigger, behind = 0): any | null {
   switch (t.type) {
     case 'user': {
       const note = t.queued ? `${SENT_WHILE_BUSY}${behind ? ` ${behind} more message${behind === 1 ? ' is' : 's are'} queued after it and will arrive next.` : ''}\n` : '';
       return { role: 'user', content: userContent(note + t.text, t.attachments) };
     }
     case 'routine': return { role: 'user', content: `[Routine "${t.name}" is running now. Do this:]\n${t.prompt}` };
-    case 'bot': return { role: 'user', content: t.autoReply
-      ? `[Reply from ${t.fromName}, another Bot on the team, to your earlier message. Continue your work with it. Only message them again if you need more.]\n${t.text}`
-      : `[Message from ${t.fromName}, another Bot on the team. Do what they ask. Your final reply is sent back to ${t.fromName} automatically, so just answer; use send_to_bot only to message someone else.]\n${t.text}` };
+    case 'bot': {
+      const header = t.autoReply
+        ? `[Reply from ${t.fromName}, another Bot on the team, to your earlier message. Continue your work with it. Only message them again if you need more.]\n`
+        : `[Message from ${t.fromName}, another Bot on the team. Do what they ask. Your final reply is sent back to ${t.fromName} automatically, so just answer; use send_to_bot only to message someone else.]\n`;
+      return { role: 'user', content: userContent(header + t.text, t.attachments) };
+    }
     case 'system': return { role: 'user', content: userContent(`[System notice] ${t.text}`, t.attachments) };
     case 'resume': return null;
   }
@@ -424,7 +450,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
   const seenNotes = side ? sideNotes.get(botId) : undefined;
   if (sideHistory && seenNotes?.length) sideHistory.push({ role: 'user', content: `[While you were busy you also answered in parallel. Those messages and your replies, for your memory only:]\n${seenNotes.join('\n')}` });
   const sideSeed = sideHistory?.length ?? 0;
-  const ctx: ToolCtx = { side, sideHistory, userId, botId, enqueueBotMessage, depth, signal: ctrl.signal, allowSubscriptionTeam: trigger.type === 'user' && trigger.allowSubscriptionTeam, messaged: new Set(), replyTo: trigger.type === 'bot' && !trigger.autoReply ? trigger.fromBotId : undefined };
+  const ctx: ToolCtx = { side, sideHistory, userId, botId, enqueueBotMessage, depth, signal: ctrl.signal, allowSubscriptionTeam: trigger.type === 'user' && trigger.allowSubscriptionTeam, messaged: new Set(), replyTo: trigger.type === 'bot' && !trigger.autoReply ? trigger.fromBotId : undefined, triggerAttachments: triggerAttachmentsOf(trigger) };
   const startSeq = (db.prepare('SELECT COALESCE(MAX(seq),0) seq FROM rows WHERE bot_id=? AND generation=?').get(botId, bot.generation) as any).seq as number;
   let failure: string | null = null;
   // Recorded while the run is in flight, so a crash or restart can pick the work up again (see resumeInterruptedTurns).
@@ -876,6 +902,7 @@ async function callSubscriptionModel(
     agentSkills(ctx.botId),
     teamPromptSection(ctx.botId).trim(),
     liveTeamPrompt(ctx.userId, ctx.botId),
+    attachPromptLine(ctx.botId),
     voice ? VOICE_STYLE : '',
     lifePromptLine(ctx.userId, ctx.botId),
     foldersPromptLine(ctx.botId),

@@ -10,7 +10,8 @@ export const MAX_BOT_HOPS = 8;
 const PAIR_LIMIT = 30;
 const PAIR_WINDOW = 10 * 60_000;
 
-export function allowBotMessage(fromBotId: string, toBotId: string, depth: number): string | null {
+/** Why a bot-to-bot message would be refused right now, or null. Read-only: nothing is logged (see allowBotMessage). */
+export function botMessageBlock(fromBotId: string, toBotId: string, depth: number): string | null {
   if (fromBotId === toBotId) return 'A Bot cannot message itself';
   if (depth > MAX_BOT_HOPS) return `This request has already passed between Bots ${MAX_BOT_HOPS} times`;
   const target = db.prepare('SELECT id FROM bots WHERE id=?').get(toBotId);
@@ -18,6 +19,12 @@ export function allowBotMessage(fromBotId: string, toBotId: string, depth: numbe
   const recent = (db.prepare('SELECT COUNT(*) n FROM bot_messages_log WHERE from_bot_id=? AND to_bot_id=? AND created_at>?')
     .get(fromBotId, toBotId, now() - PAIR_WINDOW) as { n: number }).n;
   if (recent >= PAIR_LIMIT) return 'These two Bots have exchanged too many messages in the last 10 minutes';
+  return null;
+}
+
+export function allowBotMessage(fromBotId: string, toBotId: string, depth: number): string | null {
+  const blocked = botMessageBlock(fromBotId, toBotId, depth);
+  if (blocked) return blocked;
   db.prepare('INSERT INTO bot_messages_log(from_bot_id,to_bot_id,created_at) VALUES (?,?,?)').run(fromBotId, toBotId, now());
   db.prepare('DELETE FROM bot_messages_log WHERE created_at<?').run(now() - 24 * 3600_000);
   return null;

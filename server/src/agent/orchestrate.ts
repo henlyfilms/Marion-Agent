@@ -68,7 +68,7 @@ async function callAgent(agent: Agent, prompt: string, signal: AbortSignal, card
   })).trim();
 }
 
-export async function orchestrate(ctx: { userId: string; botId: string; signal?: AbortSignal; allowSubscriptionTeam?: boolean; turn?: { handoff?: boolean } }, args: any, folder?: Folder) {
+export async function orchestrate(ctx: { userId: string; botId: string; signal?: AbortSignal; allowSubscriptionTeam?: boolean; turn?: { handoff?: boolean }; triggerAttachments?: UploadedAttachment[] }, args: any, folder?: Folder) {
   const goal = String(args?.goal ?? '').trim().slice(0, 20_000);
   if (!goal) throw new Error('Describe the work for the team.');
   const models = await catalog(ctx.allowSubscriptionTeam !== false);
@@ -92,7 +92,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
   // Every call here is its own fresh session (the plan, each task and each review are self-contained), so the
   // owner's screenshots / screen-recording frames travel with the planning and the work, and the Token optimizer
   // line is added once per call. Reviews and the report get neither the images nor the long goal.
-  const media = await relayMedia(ctx.botId);
+  const media = await relayMedia(ctx.botId, ctx.triggerAttachments);
   const lean = leanLine(ctx.botId, Boolean(folder));
   // Each Claude agent in the run is one session in Marion Life (its plan, tasks and reviews are merged into it).
   const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

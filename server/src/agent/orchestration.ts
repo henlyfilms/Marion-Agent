@@ -210,7 +210,7 @@ const format = (results: MemberResult[]) => results.map(r => r.failed
 
 // ---------- tools ----------
 
-export async function teamDelegate(botId: string, args: any, signal: AbortSignal) {
+export async function teamDelegate(botId: string, args: any, signal: AbortSignal, triggerAttachments?: UploadedAttachment[]) {
   const settings = team(botId);
   const list: { member?: string; task?: string }[] = Array.isArray(args?.assignments) ? args.assignments.slice(0, 6) : [];
   if (!list.length || list.some(a => !a || typeof a.task !== 'string' || !a.task.trim())) throw new Error('Give each assignment a task.');
@@ -233,7 +233,7 @@ export async function teamDelegate(botId: string, args: any, signal: AbortSignal
     title: sessionTitle(task || asked), role: 'member', agent: member.label, groupId: `team:${botId}:${runId}`,
   });
   // The owner's screenshots and screen-recording frames go to Claude, Codex and Gemini members too.
-  const media = await relayMedia(botId);
+  const media = await relayMedia(botId, triggerAttachments);
   // A named GitHub repository: Marion clones it once into a scratch folder every Claude, Codex and Gemini member works in.
   const repo = githubRepoArg(args?.repo);
   const checkout = repo ? await prepareRepoCheckout(repo, signal) : undefined;
@@ -271,7 +271,7 @@ export async function teamDelegate(botId: string, args: any, signal: AbortSignal
   };
 }
 
-export async function teamDiscuss(botId: string, args: any, signal: AbortSignal) {
+export async function teamDiscuss(botId: string, args: any, signal: AbortSignal, triggerAttachments?: UploadedAttachment[]) {
   const settings = team(botId);
   const topic = typeof args?.topic === 'string' ? args.topic.trim().slice(0, 20_000) : '';
   if (!topic) throw new Error('Give the team a topic to discuss.');
@@ -291,7 +291,7 @@ export async function teamDiscuss(botId: string, args: any, signal: AbortSignal)
     id: `team:${botId}:${runId}:${member.id}`, kind: 'team', userId: owner, botId, request: topic,
     title: sessionTitle(topic), role: 'discussion', agent: member.label, groupId: `team:${botId}:${runId}`,
   });
-  const media = await relayMedia(botId);
+  const media = await relayMedia(botId, triggerAttachments);
   for (let round = 1; round <= rounds; round++) {
     for (const speaker of chosen) {
       working(botId, [speaker.label]);
