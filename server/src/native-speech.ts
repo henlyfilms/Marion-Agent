@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { isExpectedAbort } from './lib/abort.js';
 
 const run = promisify(execFile);
 const helper = process.env.MARION_NATIVE_TRANSCRIBER;
@@ -97,7 +98,7 @@ export async function transcribeOnMac(file: File, request: DictationRequest, sig
         // A whisper pass that hears nothing is trusted only if Apple is unavailable; otherwise ask Apple too.
         if (text || !request.final || order[order.length - 1] === engine) return text;
       } catch (error) {
-        if (signal.aborted) throw error;
+        if (isExpectedAbort(error, signal)) throw error;
         failure = error;
         console.warn(`[voice] ${engine} dictation failed${order.length > 1 ? ', trying the other engine' : ''}:`, (error as { stderr?: string }).stderr?.trim() || (error as Error).message);
       }

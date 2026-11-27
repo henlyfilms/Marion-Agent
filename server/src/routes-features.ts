@@ -2,6 +2,7 @@ import { basename } from 'node:path';
 import { env } from './env.js';
 import { continueHandoff, validateFallback } from './features/handoffs.js';
 import { actOnCloudCard } from './features/cloud-cards.js';
+import { actOnSignInCard } from './features/sign-in-cards.js';
 import { stopCloudSession } from './features/cloud-sessions.js';
 import { createGitHubRepo } from './features/github-repos.js';
 import { Hono } from 'hono';
@@ -327,6 +328,22 @@ featuresApi.post('/bots/:id/handoffs/:handoff/continue', async (c) => {
     const { selection, seq } = await c.req.json();
     await continueHandoff(c.get('user').id, c.req.param('id'), c.req.param('handoff'), selection, seq);
     return c.json({ ok: true }, 202);
+  } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+});
+
+// In-app provider sign-in card (Gemini → Google): open the sign-in, confirm it worked (the bot then carries on), or dismiss.
+featuresApi.post('/bots/:id/sign-in-cards/:seq', async (c) => {
+  const userId = c.get('user').id;
+  const bot = ownBot(userId, c.req.param('id'));
+  if (!bot || bot.deleted_at) return c.json({ error: 'Bot not found.' }, 404);
+  try {
+    const { action } = await c.req.json();
+    if (typeof action !== 'string') throw new Error('Choose an action.');
+    const status = await actOnSignInCard(bot.id, Number(c.req.param('seq')), action, {
+      local: localAction(c),
+      resume: () => enqueue(bot.id, { type: 'system', text: 'The owner signed in to Gemini with Google. Continue with their last request.' }),
+    });
+    return c.json({ ok: true, status });
   } catch (error) { return c.json({ error: (error as Error).message }, 400); }
 });
 

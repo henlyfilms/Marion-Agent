@@ -538,9 +538,11 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
     }
     if (!completed) throw new Error('The bot reached its tool limit before finishing.');
   } catch (e: any) {
-    const msg = ctrl.signal.aborted ? 'Stopped.' : `Something went wrong: ${e?.message ?? e}`;
+    // A Google sign-in Gemini needs comes with its own sign-in card (shown by subscriptionReply): no red error.
+    const signIn = !ctrl.signal.aborted && e?.name === 'GoogleSignInRequired';
+    const msg = ctrl.signal.aborted ? 'Stopped.' : signIn ? 'Gemini needs a Google sign-in: use the sign-in card in this chat, then I\'ll carry on.' : `Something went wrong: ${e?.message ?? e}`;
     if (!ctrl.signal.aborted) failure = String(e?.message ?? e);
-    if (!(ctrl.signal.aborted && consumeStopAnnounced(botId))) appendRow(botId, 'notice', { type: 'notice', text: msg, tone: ctrl.signal.aborted ? 'info' : 'error' });
+    if (!(ctrl.signal.aborted && consumeStopAnnounced(botId))) appendRow(botId, 'notice', { type: 'notice', text: msg, tone: ctrl.signal.aborted || signIn ? 'info' : 'error' });
     if (!ctrl.signal.aborted) console.error('[agent]', e);
   } finally {
     if (side) {
@@ -887,29 +889,59 @@ async function callSubscriptionModel(
   let actual = selection;
   let counts: TokenCounts | undefined;
   const asked = ctx.turn?.request || (current ? textContent(current.content, 300_000) : '');
-  const reply = (await subscriptionReply(selection, prompt, signal, images, {
-    fast: voice?.fast,
-    handoffContinuation: ctx.turn?.handoff,
-    handoffProgress: transcript.map(item => JSON.stringify(item).slice(0, 1200)).slice(-12),
-    session: ctx.turn ? { id: `turn:${ctx.turn.id}`, kind: 'subscription_bot', userId: ctx.userId, botId: ctx.botId, request: asked || ctx.turn.request } : undefined,
-    onUsage: value => { counts = value; },
-    onModel: value => { actual = value; setLive(ctx.botId, { activeModel: value }); },
-  })).trim();
-  record(actual, counts, { input: estimatedInput, output: Math.ceil(reply.length / 4) });
-  if (!ctx.side) recordContext(ctx.botId, counts?.input ?? estimatedInput);
-  if (signal.aborted) throw signal.reason;
-  const request = /^(?:```(?:json)?\s*)?MARION_TOOL:\s*({[\s\S]+})\s*(?:```)?$/.exec(reply);
-  if (request) {
-    const call = safeParse(request[1]);
-    if (!call || !tools.some(tool => tool.name === call.name) || !call.arguments
-      || typeof call.arguments !== 'object' || Array.isArray(call.arguments)) {
-      throw new Error('The selected provider returned an invalid Marion tool request.');
-    }
+  const ask = async (feedback?: string) => {
+    const text = feedback ? `${prompt}\n\n${feedback}` : prompt;
+    counts = undefined;
+    const answer = (await subscriptionReply(selection, text, signal, images, {
+      fast: voice?.fast,
+      handoffContinuation: ctx.turn?.handoff,
+      handoffProgress: transcript.map(item => JSON.stringify(item).slice(0, 1200)).slice(-12),
+      session: ctx.turn ? { id: `turn:${ctx.turn.id}`, kind: 'subscription_bot', userId: ctx.userId, botId: ctx.botId, request: asked || ctx.turn.request } : undefined,
+      onUsage: value => { counts = value; },
+      onModel: value => { actual = value; setLive(ctx.botId, { activeModel: value }); },
+    })).trim();
+    record(actual, counts, { input: Math.ceil(text.length / 4 + images.length * 1500), output: Math.ceil(answer.length / 4) });
+    // `counts` is set by onUsage during the call above (TypeScript can't see that through the callback).
+    if (!ctx.side) recordContext(ctx.botId, (counts as TokenCounts | undefined)?.input ?? estimatedInput);
+    if (signal.aborted) throw signal.reason;
+    return answer;
+  };
+  const { reply, call } = await resolveToolRequest(ask, tools.map(tool => tool.name));
+  if (call) {
     const doneReply = LIFE_WRITES.has(call.name) && typeof call.done_reply === 'string' && call.done_reply.trim()
       ? call.done_reply.trim().slice(0, 2000) : undefined;
     return { output: [{ type: 'function_call', call_id: newId('call'), name: call.name, arguments: JSON.stringify(call.arguments) }], doneReply };
   }
   return { output: postReply(ctx.botId, reply) };
+}
+
+type ToolRequest = { name: string; arguments: Record<string, unknown>; done_reply?: unknown };
+/** A provider reply read as a Marion tool request: none (a normal answer), a valid call, or why the request is invalid. */
+export function parseToolRequest(reply: string, toolNames: readonly string[]):
+  { kind: 'none' } | { kind: 'call'; call: ToolRequest } | { kind: 'invalid'; reason: string } {
+  if (!/^(?:```(?:json)?\s*)?MARION_TOOL:/.test(reply)) return { kind: 'none' };
+  const body = /^(?:```(?:json)?\s*)?MARION_TOOL:\s*({[\s\S]+})\s*(?:```)?$/.exec(reply)?.[1];
+  if (!body) return { kind: 'invalid', reason: 'MARION_TOOL: was not followed by one JSON object' };
+  const call = safeParse(body);
+  if (!call || typeof call !== 'object' || Array.isArray(call)) return { kind: 'invalid', reason: 'the JSON after MARION_TOOL: did not parse' };
+  if (typeof call.name !== 'string' || !toolNames.includes(call.name)) return { kind: 'invalid', reason: `"${String(call.name ?? '')}" is not one of the available tools` };
+  if (!call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments)) return { kind: 'invalid', reason: '"arguments" must be a JSON object' };
+  return { kind: 'call', call };
+}
+
+/**
+ * Asks the provider and reads its reply. An invalid MARION_TOOL request gets one retry with a short correction
+ * (providers sometimes emit a stray character or a wrong tool name); only a second invalid request fails the turn.
+ */
+export async function resolveToolRequest(ask: (feedback?: string) => Promise<string>, toolNames: readonly string[]): Promise<{ reply: string; call?: ToolRequest }> {
+  let reply = await ask();
+  let parsed = parseToolRequest(reply, toolNames);
+  if (parsed.kind === 'invalid') {
+    reply = await ask(`Your previous reply was an invalid Marion tool request: ${parsed.reason}. Reply again. Either answer the user normally, or respond with only MARION_TOOL: followed by one valid JSON object {"name": "<one of the available tools>", "arguments": { ... }}, with nothing else.`);
+    parsed = parseToolRequest(reply, toolNames);
+    if (parsed.kind === 'invalid') throw new Error(`The selected provider returned an invalid Marion tool request twice (${parsed.reason}).`);
+  }
+  return parsed.kind === 'call' ? { reply, call: parsed.call } : { reply };
 }
 
 /**

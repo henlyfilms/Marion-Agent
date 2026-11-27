@@ -1,5 +1,5 @@
 import { db, now } from './db.js';
-import { desktop } from './desktop.js';
+import { desktop, isDockerEngineDown } from './desktop.js';
 import { hub } from './lib/hub.js';
 import type { ComputerState } from './types.js';
 
@@ -46,7 +46,7 @@ export function screenFor(userId: string, botId: string): Promise<string> {
     }
     try {
       const awake = await desktop.running(botId).catch(error => {
-        if (String(error).includes('Start Docker Desktop or Colima')) return false;
+        if (isDockerEngineDown(error)) return false;
         throw error;
       });
       if (!awake) {

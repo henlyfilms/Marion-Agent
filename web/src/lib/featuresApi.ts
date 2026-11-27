@@ -115,6 +115,8 @@ export const featuresApi = {
     req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/handoffs/${encodeURIComponent(id)}/continue`, { seq, selection }),
   stopCloudSession: (botId: string, sessionId: string) =>
     req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-sessions/${encodeURIComponent(sessionId)}/stop`),
+  signInCardAction: (botId: string, seq: number, action: 'open' | 'check' | 'dismiss') =>
+    req<{ ok: true; status: string }>('POST', `/bots/${encodeURIComponent(botId)}/sign-in-cards/${seq}`, { action }),
   cloudCardAction: (botId: string, seq: number, option: string) =>
     req<{ ok: true }>('POST', `/bots/${encodeURIComponent(botId)}/cloud-cards/${seq}`, { option }),
   createGitHubRepo: (body: { name: string; description: string; visibility: 'private' | 'public'; folder?: string; confirmPush: boolean }) =>

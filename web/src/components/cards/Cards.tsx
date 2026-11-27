@@ -253,6 +253,49 @@ export function DraftCard({ body }: { body: Card<'draft'> }) {
   );
 }
 
+// ---------------- provider sign-in (Gemini → Google) ----------------
+
+export function SignInCard({ row, body }: { row: Row; body: Card<'sign-in'> }) {
+  const { busy, error, run } = useBusy();
+  const open = body.status === 'pending' || body.status === 'working';
+  const act = (action: 'open' | 'check' | 'dismiss') => run(action, () => featuresApi.signInCardAction(row.botId, row.seq, action));
+  return (
+    <div className={`card approval-card sign-in-card${open ? '' : ' is-resolved'}`}>
+      <div className="card__head">
+        <ToolkitLogo name="Google" logo="https://logos.composio.dev/api/google" size={44} />
+        <div className="card__titles">
+          <div className="card__title">Sign in to {body.providerName}</div>
+          <div className="card__sub">Gemini needs a Google sign-in</div>
+        </div>
+      </div>
+      <div className="card__body">
+        {body.reason}
+        <br /><br />
+        Or run <code>{body.command}</code> in Terminal.
+        {body.note && <><br /><br />{body.note}</>}
+      </div>
+      {open ? (
+        <div className="card__actions">
+          <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => act('dismiss')}>Dismiss</button>
+          <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => void copyText(body.command)}>Copy command</button>
+          {/* Once the sign-in was opened, "I've signed in" stays the main button, also after a failed check (retry it
+              directly); opening the sign-in again is still there for a closed Terminal window. */}
+          {body.status === 'working' && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => act('open')}>{busy === 'open' ? 'Opening…' : 'Open sign-in again'}</button>}
+          {body.status === 'working'
+            ? <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => act('check')}>{busy === 'check' ? 'Checking…' : "I've signed in"}</button>
+            : <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => act('open')}>{busy === 'open' ? 'Opening…' : 'Sign in with Google'}</button>}
+        </div>
+      ) : (
+        <div className={`card__outcome is-${body.status === 'signed-in' ? 'allowed' : 'denied'}`}>
+          <Icon name={body.status === 'signed-in' ? 'check' : 'close'} size={12} opacity={0.7} />
+          {body.status === 'signed-in' ? 'Signed in' : 'Dismissed'}
+        </div>
+      )}
+      {error && <div className="card__error">{error}</div>}
+    </div>
+  );
+}
+
 export function CardRow({ row }: { row: Row }) {
   const b = row.body;
   if (b.type !== 'card') return null;
@@ -264,6 +307,7 @@ export function CardRow({ row }: { row: Row }) {
     case 'handoff': return <UsageHandoffCard row={row} body={b} />;
     case 'work': return <WorkCard body={b} botId={row.botId} />;
     case 'cloud': return <CloudCard row={row} body={b} />;
+    case 'sign-in': return <SignInCard row={row} body={b} />;
     default: return null;
   }
 }

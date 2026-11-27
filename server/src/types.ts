@@ -229,7 +229,19 @@ export type CardBody =
     }
   | WorkCardBody
   | CloudCardBody
+  | SignInCardBody
   | { type: 'card'; card: 'handoff'; id: string; provider: RelayProvider; goal: string; status: 'pending' | 'started'; fallback: ChatModelSelection | null };
+
+/** A provider CLI needs the owner to sign in (Gemini → Google): the chat shows this instead of a plain error. */
+export interface SignInCardBody {
+  type: 'card'; card: 'sign-in'; id: string; provider: 'gemini'; providerName: string;
+  /** Why it is shown, in plain words. */
+  reason: string;
+  /** The Terminal command that signs in (the resolved agy path when Marion found one), shown so it can be copied. */
+  command: string;
+  status: 'pending' | 'working' | 'signed-in' | 'dismissed';
+  note?: string;
+}
 
 /** Strict Cloud mode: why Cloud work can't start yet, and the fixes the owner can approve from the card. */
 export type CloudBlocker = 'gh-missing' | 'gh-auth' | 'gh-scopes' | 'not-found' | 'ambiguous' | 'no-access' | 'cloud-connect' | 'claude-missing' | 'launch-failed' | 'folder-trust';

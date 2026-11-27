@@ -18,6 +18,7 @@ import { appendRow, emitBot, getBotRow, getLive, listRoutines, listTasks, update
 import { enqueue } from './agent/loop.js';
 import { computerState } from './computer.js';
 import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOption } from './types.js';
+import { isExpectedAbort } from './lib/abort.js';
 
 export const voiceApi = new Hono<AuthVars>();
 
@@ -478,6 +479,8 @@ voiceApi.post('/stt', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.jso
     const hints = dictationHints(names, String(form?.get('context') ?? '').slice(-600));
     try { return c.json({ text: await transcribeOnMac(file, { language: locale, final: form?.get('final') === '1', hints }, c.req.raw.signal) }); }
     catch (error) {
+      // A cancelled pass (the owner stopped, a newer pass replaced it, the browser dropped it) is normal: no warning.
+      if (isExpectedAbort(error, c.req.raw.signal)) return c.json({ text: '', cancelled: true });
       const detail = (error as { stderr?: string }).stderr?.trim();
       console.warn('[voice] Mac dictation:', detail || (error as Error).name);
       const block = macBlock(error, 'Transcribe your dictation with Mac speech recognition');
@@ -495,6 +498,7 @@ voiceApi.post('/stt', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.jso
   const r = await fetch(LOCAL_STT_URL || `${XAI}/stt`, {
     method: 'POST', headers, body: out, signal: AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(90_000)]), redirect: 'error',
   }).catch(() => null);
+  if (!r && c.req.raw.signal.aborted) return c.json({ text: '', cancelled: true });
   if (!r?.ok) {
     console.warn('[voice] stt failed', r?.status);
     return c.json({ error: 'Transcription failed' }, 502);

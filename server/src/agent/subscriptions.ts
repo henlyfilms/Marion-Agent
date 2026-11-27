@@ -30,10 +30,58 @@ const claudeEfforts = [...extendedEfforts, 'max'];
  */
 export const DEFAULT_SUBSCRIPTION_MODELS = { claude: 'claude-opus-5-5', codex: 'gpt-6.2-sol', gemini: 'gemini-4-neon' } as const;
 export const DEFAULT_SUBSCRIPTION_EFFORT = 'high';
+/** Gemini (Antigravity) needs a Google sign-in: the chat shows an in-app sign-in card instead of a plain failure. */
+export class GoogleSignInRequired extends Error {
+  readonly provider = 'gemini' as const;
+  constructor() { super('Gemini needs you to sign in with your personal Google account (agy acp --login).'); this.name = 'GoogleSignInRequired'; }
+}
+/** Forget the cached Gemini model list (after a sign-in, so the next check asks the CLI again). */
+export function forgetGeminiCatalog() { geminiCatalog = undefined; }
 /** High when the model offers it, else the closest step down (medium), else whatever it has. */
 export function preferredEffort(efforts: readonly string[]): string | null {
   return efforts.includes(DEFAULT_SUBSCRIPTION_EFFORT) ? DEFAULT_SUBSCRIPTION_EFFORT : efforts.includes('medium') ? 'medium' : efforts[0] ?? null;
 }
+/**
+ * The `--effort` a CLI run gets, or null for none. A model from the catalog only ever gets one of its own levels (a
+ * saved effort it doesn't offer falls back to its preferred one; a model with no levels gets no flag: Antigravity
+ * exits with "--effort is not supported for model …" otherwise). A model missing from the catalog keeps the saved
+ * effort, else high, unless `unlisted: 'none'` (Gemini: when `agy models` failed or does not list the model, its levels
+ * are unknown, so no flag rather than a blind --effort high). `noEffort`: the CLI already refused the flag for this model.
+ */
+export function runEffort(chosen: Pick<ChatModel, 'efforts'> | undefined, saved: string | null | undefined, fast = false, noEffort = false,
+  unlisted: 'saved' | 'none' = 'saved'): string | null {
+  if (noEffort) return null;
+  if (!chosen) return unlisted === 'none' ? null : saved ?? DEFAULT_SUBSCRIPTION_EFFORT;
+  if (!chosen.efforts.length) return null;
+  if (fast && chosen.efforts.includes('low')) return 'low';
+  return saved && chosen.efforts.includes(saved) ? saved : preferredEffort(chosen.efforts);
+}
+/**
+ * The CLI refused `--effort` for the model it was asked to run, or does not know the flag at all. Wording verified
+ * against agy 1.5.18: its flag parser on an unknown flag ("flags provided but not defined: -no-such-flag", run live;
+ * the Go stdlib's singular "flag provided but not defined: -effort" too) and its effort errors (from the binary):
+ * `--effort is not supported for model %q`, `--effort=%s is not supported for model %q`, `--effort is not supported
+ * for the current model`, `invalid --effort %q (valid: %s)`, `%s has no %q effort (available: %s)`, `unrecognized
+ * effort %q for thinking level`, `--model %s conflicts with --effort=%s`, `invalid model selection (--model %q
+ * --effort %q)`; plus the usual unknown-option / invalid-level wording of other CLIs.
+ */
+const EFFORT_REFUSED = new RegExp([
+  String.raw`--effort\b[^\n]*not\s+supported`,
+  String.raw`\bnot\s+supported\b[^\n]*--?effort\b`,
+  String.raw`flags?\s+provided\s+but\s+not\s+defined:\s*-{1,2}effort\b`,
+  String.raw`unknown\s+(?:option|flag|argument)[^\n]*--?effort\b`,
+  String.raw`unrecognized\s+(?:option|flag|argument)[^\n]*--?effort\b`,
+  String.raw`invalid\s+(?:--?|reasoning\s+)?effort(?:\s+level)?\b`,
+  String.raw`\bhas\s+no\s+"?[\w.-]+"?\s+effort\b`,
+  String.raw`unrecognized\s+effort\b`,
+  String.raw`conflicts\s+with\s+--?effort\b`,
+  String.raw`invalid\s+model\s+selection\s*\([^)]*--effort\b`,
+  String.raw`\beffort\s+isn't\s+adjustable\b`,
+  String.raw`invalid\s+(?:value|argument)[^\n]*(?:for\s+)?(?:flag\s+)?--?effort\b`,
+  String.raw`unsupported\s+(?:reasoning\s+)?effort\b`,
+  String.raw`\beffort(?:\s+level)?\s+(?:\S+\s+)?(?:is\s+)?not\s+(?:supported|allowed)\b`,
+].join('|'), 'i');
+export const effortUnsupported = (error: unknown) => EFFORT_REFUSED.test(String((error as Error)?.message ?? error));
 /** The default model first, so name matches ("codex", "gemini") and pickers land on it. */
 const defaultFirst = <T>(models: T[], isDefault: (model: T) => boolean) => [...models].sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)));
 const claudeModels: ChatModel[] = [
@@ -356,6 +404,8 @@ async function discoverCodexModels(program: string): Promise<CodexModel[]> {
 
 interface ReplyOptions {
   fast?: boolean;
+  /** Internal: the CLI refused --effort for this model, so the retry passes none. */
+  noEffort?: boolean;
   handoffProgress?: string[];
   handoffContinuation?: boolean;
   /** A folder on this Mac the bot shares: the CLI may work inside it (and only there). */
@@ -440,6 +490,10 @@ export async function subscriptionReply(
     return reply;
   } catch (error) {
     finished({ status: signal.aborted ? 'stopped' : 'failed', error: String((error as Error)?.message ?? error), startedAt, endedAt: Date.now(), model: model(), tokens });
+    if (!signal.aborted && generation !== undefined && error instanceof GoogleSignInRequired) {
+      const { showSignInCard } = await import('../features/sign-in-cards.js');
+      try { showSignInCard(track.userId, track.botId, generation, 'gemini'); } catch (failure) { console.warn('[subscriptions] could not show the sign-in card', (failure as Error).message); }
+    }
     if (!signal.aborted && generation !== undefined && isUsageLimitError(error)) {
       const { offerHandoff, reportHandoffError } = await import('../features/handoffs.js');
       await offerHandoff({ track, generation, selection: actual, progress, folder: options.folder, error,
@@ -457,7 +511,15 @@ async function runSubscriptionReply(
   selection: SubscriptionSelection, prompt: string, signal: AbortSignal, images: UploadedAttachment[], options: ReplyOptions,
 ): Promise<string> {
   activeRuns++;
-  try { return await spawnSubscriptionReply(selection, prompt, signal, images, options); }
+  try {
+    try { return await spawnSubscriptionReply(selection, prompt, signal, images, options); }
+    catch (error) {
+      // The CLI refused --effort for this model (e.g. a Gemini model without effort levels): run once more without it.
+      if (signal.aborted || options.noEffort || selection.provider === 'codex' || !effortUnsupported(error)) throw error;
+      console.warn(`[subscriptions] ${selection.provider} refused --effort for ${selection.model}; retrying without it`);
+      return await spawnSubscriptionReply(selection, prompt, signal, images, { ...options, noEffort: true });
+    }
+  }
   finally { activeRuns--; }
 }
 
@@ -485,18 +547,19 @@ async function spawnSubscriptionReply(
         ? agyArgs.map(arg => arg === googleSettings ? googleSettingsWithPhotos : arg)
         : [...providerArgs[provider]];
     if (provider !== 'codex') {
+      // Gemini: the account's live catalog (cached for a minute), so --effort is only passed to models that take it.
       const catalog = provider === 'claude' ? claudeModels
-        : geminiCatalog && geminiCatalog.expires > Date.now() ? await geminiCatalog.models.catch(() => []) : [];
+        : await subscriptionModels('gemini').then(listed => listed.models, () => [] as ChatModel[]);
       // The built-in default (Gemini 4 Neon) falls back to the account's best model if this account doesn't list it.
       const chosen = catalog.find(option => option.id === model)
         ?? (model === DEFAULT_SUBSCRIPTION_MODELS[provider] ? catalog[0] : undefined);
       const runModel = chosen?.id ?? model;
       if (meter) meter.model = runModel;
       args.push('--model', runModel);
-      // No saved effort (older bots, first run): high, like everywhere else.
-      const baseEffort = effort ?? (chosen ? preferredEffort(chosen.efforts) : DEFAULT_SUBSCRIPTION_EFFORT);
-      const fastEffort = chosen?.efforts.includes('low') ? 'low' : baseEffort;
-      const selectedEffort = options.fast ? fastEffort : baseEffort;
+      // No saved effort (older bots, first run): high, like everywhere else; never a level the model doesn't offer.
+      // Gemini without a catalog entry (`agy models` failed, or this account doesn't list the model): its levels are
+      // unknown, so no --effort at all rather than a blind --effort high that may crash the run.
+      const selectedEffort = runEffort(chosen, effort, options.fast, options.noEffort, provider === 'gemini' ? 'none' : 'saved');
       if (selectedEffort) args.push('--effort', selectedEffort);
       options.onModel?.({ ...selection, model: runModel, label: chosen?.label ?? (runModel === model ? selection.label : undefined) ?? runModel, effort: selectedEffort });
       if (provider === 'claude' && images.length) args.push('--input-format', 'stream-json');
@@ -594,9 +657,7 @@ async function spawnSubscriptionReply(
     }
     if (signal.aborted) throw signal.reason;
     if (processError) throw new Error(`Could not start ${labels[provider]} on this Mac: ${processError}`);
-    if (provider === 'gemini' && /authenticat|sign.in|log.in/i.test(diagnostic)) {
-      throw new Error('Sign in with your personal Google account using agy acp --login in Terminal.');
-    }
+    if (provider === 'gemini' && /authenticat|sign.in|log.in/i.test(diagnostic)) throw new GoogleSignInRequired();
     // The real reason: how the CLI ended and its own last words (stderr).
     const ended = exitSignal ? `was stopped by ${exitSignal}` : exitCode !== null && exitCode !== 0 ? `exited with code ${exitCode}` : 'ended without a reply';
     const said = short(diagnostic, 400);

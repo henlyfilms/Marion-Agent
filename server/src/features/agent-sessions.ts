@@ -1,7 +1,7 @@
 import { db, now } from '../db.js';
 import { hub } from '../lib/hub.js';
-import { getBotRow } from '../store.js';
-import type { MarionSession, RelayKind, RelayProvider, RelayStatus, RowBody } from '../types.js';
+import { getBotRow, updateRow } from '../store.js';
+import type { MarionSession, RelayKind, RelayProvider, RelayStatus, RowBody, ToolCallBody, WorkCardBody } from '../types.js';
 import { sessionTitle, summarizeReply, type SessionFinish, type SessionTrack } from './life-outbox.js';
 import './schema.js';
 
@@ -127,7 +127,44 @@ export function recoverAgentSessions() {
   db.prepare("UPDATE agent_sessions SET status='stopped', ended_at=?, error=COALESCE(error,'Never started.'), updated_at=? WHERE status='waiting' AND updated_at < ?")
     .run(at, at, at - 7 * 24 * 3600_000);
   db.prepare('DELETE FROM agent_sessions WHERE status != ? AND updated_at < ?').run('running', at - KEEP_MS);
+  recoverStaleRows();
   return rows.length;
+}
+
+/** When this server process started: transcript rows from before then cannot still be running. */
+const processStartedAt = Date.now() - Math.round(process.uptime() * 1000);
+const RESTART_NOTE = 'Interrupted: Marion Agent restarted before this finished.';
+
+/**
+ * Tool calls and work cards that were `running` when the server stopped (crash, update, restart) would spin forever in
+ * the chat: finalize them. Only rows created before this process started are touched, so a turn that resumed after
+ * the restart keeps its own live rows. Returns how many rows were finalized.
+ */
+export function recoverStaleRows(before = processStartedAt) {
+  const stale = db.prepare(`SELECT r.bot_id, r.seq, r.body FROM rows r JOIN bots b ON b.id = r.bot_id AND b.generation = r.generation
+    WHERE r.created_at < ? AND json_extract(r.body,'$.status') = 'running'
+      AND (r.kind = 'tool-call' OR (r.kind = 'card' AND json_extract(r.body,'$.card') = 'work'))`).all(before) as { bot_id: string; seq: number; body: string }[];
+  const at = now();
+  let fixed = 0;
+  for (const row of stale) {
+    try {
+      const body = JSON.parse(row.body) as ToolCallBody | WorkCardBody;
+      if (body.type === 'tool-call') {
+        updateRow(row.bot_id, row.seq, { ...body, status: 'error', summary: body.summary || RESTART_NOTE });
+      } else if (body.type === 'card' && body.card === 'work') {
+        updateRow(row.bot_id, row.seq, {
+          ...body, status: 'stopped', endedAt: body.endedAt ?? at, stop: undefined,
+          agents: body.agents.map(agent => agent.usage ? { ...agent, usage: { ...agent.usage, live: false } } : agent),
+          phases: body.phases.map(phase => phase.status === 'running' ? { ...phase, status: 'failed' } : phase),
+          steps: [...body.steps, { at, agent: 'Marion', kind: 'error' as const, text: RESTART_NOTE }].slice(-60),
+        });
+      } else continue;
+      fixed++;
+    } catch (error) {
+      console.warn('[agent-sessions] could not finalize a stale row', (error as Error).message);
+    }
+  }
+  return fixed;
 }
 
 // ---------- reading ----------

@@ -9,18 +9,34 @@ const name = (id: string) => {
   return `marion-desktop-${id}`;
 };
 
+/**
+ * What the Docker CLI prints when its engine (Colima or Docker Desktop) is not running, across Docker versions: e.g.
+ * "Cannot connect to the Docker daemon at unix://…/.colima/default/docker.sock. Is the docker daemon running?" or
+ * "failed to connect to the docker API at unix://…/docker.sock; check if the path is correct and if the daemon is running".
+ * Only the Docker client's own daemon/socket wording: a bare "connection refused" or "cannot connect" also comes from
+ * commands run inside the container (`docker exec … curl` → "Connection refused"), which says nothing about the engine.
+ */
+const ENGINE_DOWN = /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|failed to connect to the docker api|error during connect:[^\n]*(?:docker|\.sock|pipe)|(?:docker|colima)[^\s]*\.sock[^\n]*(?:no such file|connection refused|connect:)|colima is not running/i;
+
+/** The bot computer's Docker engine is not running: the owner has to start Colima (or Docker Desktop). */
+export class DockerEngineDown extends Error {
+  constructor() { super('Colima isn’t running, so this bot’s computer can’t open. Start Colima (run colima start in Terminal, or open Docker Desktop), then try again.'); this.name = 'DockerEngineDown'; }
+}
+export const isDockerEngineDown = (error: unknown) => error instanceof DockerEngineDown || /Start Colima|Start Docker Desktop or Colima/.test(String(error));
+
+/** A Docker CLI failure as the error the owner should see: a friendly one when the engine is down, else the original. */
+export function dockerFailure(error: unknown): Error {
+  const failure = error as NodeJS.ErrnoException & { stderr?: Buffer | string };
+  if (failure?.code === 'ENOENT') return new Error('Install Docker Desktop or Colima to use bot desktops.');
+  const detail = `${failure?.stderr?.toString() ?? ''}\n${failure?.message ?? String(error)}`;
+  if (ENGINE_DOWN.test(detail)) return new DockerEngineDown();
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 async function docker(args: string[], timeout = 30_000) {
   try {
     return await exec('docker', args, { encoding: 'buffer', maxBuffer: 32 * 1024 * 1024, timeout, windowsHide: true });
-  } catch (error) {
-    const failure = error as NodeJS.ErrnoException & { stderr?: Buffer };
-    if (failure.code === 'ENOENT') throw new Error('Install Docker Desktop or Colima to use bot desktops.');
-    const detail = failure.stderr?.toString() ?? failure.message;
-    if (/cannot connect|connection refused|error during connect|daemon is not running/i.test(detail)) {
-      throw new Error('Start Docker Desktop or Colima to wake this bot’s computer.');
-    }
-    throw error;
-  }
+  } catch (error) { throw dockerFailure(error); }
 }
 
 let colimaStartup: Promise<void> | undefined;
@@ -28,7 +44,7 @@ let colimaStartup: Promise<void> | undefined;
 async function startConfiguredEngine() {
   try { await docker(['info', '--format', '{{.ServerVersion}}'], 3500); }
   catch (error) {
-    if (process.platform !== 'darwin' || !String(error).includes('Start Docker Desktop or Colima')) throw error;
+    if (process.platform !== 'darwin' || !isDockerEngineDown(error)) throw error;
     const context = await docker(['context', 'show'], 2500);
     if (context.stdout.toString().trim() !== 'colima') throw error;
     colimaStartup ??= exec('colima', ['start'], { timeout: 180_000 }).then(() => undefined)
@@ -77,7 +93,7 @@ export const desktop = {
     let state: boolean | undefined;
     try { state = await running(id); }
     catch (error) {
-      if (!String(error).includes('Start Docker Desktop or Colima')) throw error;
+      if (!isDockerEngineDown(error)) throw error;
       await startConfiguredEngine();
       state = await running(id);
     }
