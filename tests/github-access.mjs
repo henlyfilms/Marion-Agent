@@ -1,7 +1,7 @@
 // Public GitHub for builders on every provider (Claude, Codex, Gemini), still inside each CLI's sandbox.
 //  - Claude: sandboxed Bash reaches GitHub hosts only (sandbox.network.allowedDomains); WebFetch is pre-approved for
 //    GitHub hosts only; read-only folders stay --restricted with no Bash.
-//  - Gemini (Antigravity): read_url allowed for GitHub hosts only; a writable folder's sandboxed terminal gets network;
+//  - Gemini (Antigravity): read_url allowed for GitHub hosts only; settings carry only keys agy knows (no sandboxAllowNetwork);
 //    unsandboxed commands, execute_url and MCP stay denied.
 //  - Codex: a builder turn keeps its file sandbox (workspace-write / read-only) with network on; plain chat stays offline.
 //  - Every builder is told how to use public repositories; ask_subscription takes owner/repo or a GitHub URL.
@@ -95,7 +95,8 @@ try {
     for (const rule of ['unsandboxed(*)', 'execute_url(*)', 'mcp(*)']) assert.ok(settings.permissions.deny.includes(rule), `${rule} stays denied`);
     assert.ok(!settings.permissions.deny.includes('read_url(*)'), 'read_url(*) leaves deny so GitHub rules apply');
     assert.equal(settings.allowNonWorkspaceAccess, false);
-    assert.equal(settings.sandboxAllowNetwork, write ? true : undefined, `terminal network only in a writable folder (write=${write})`);
+    assert.equal(settings.sandboxAllowNetwork, undefined, `no sandboxAllowNetwork: agy rejects it and exits 1 (write=${write})`);
+    assert.deepEqual(Object.keys(settings).filter((k) => !S.GEMINI_SETTINGS_KEYS.includes(k)), [], 'only settings keys agy knows');
     assert.equal(settings.permissions.deny.includes('command(*)'), !write, 'read-only folders run no commands');
     assert.ok(S.folderArgs('gemini', { path: '/tmp/x', write }).includes('--sandbox'));
   }
@@ -178,7 +179,8 @@ try {
   assert.ok(claudeAsk.stdin.includes(S.GITHUB_ACCESS_LINE) && /Public GitHub|public GitHub/.test(agyAsk.stdin) && codexThread.params.baseInstructions.includes(S.GITHUB_ACCESS_LINE), 'and keep GitHub access');
   assert.equal(codexTurn.params.sandboxPolicy.type, 'workspaceWrite', 'Codex can work in the checkout');
   assert.ok(JSON.parse(flag(claudeAsk.args, '--settings')).sandbox.network, 'Claude sandbox keeps GitHub network');
-  assert.equal(JSON.parse(flag(agyAsk.args, '--settings')).sandboxAllowNetwork, true, 'Gemini terminal keeps GitHub network');
+  assert.equal(JSON.parse(flag(agyAsk.args, '--settings')).sandboxAllowNetwork, undefined, 'Gemini settings never carry the unknown sandboxAllowNetwork key');
+  assert.ok(JSON.parse(flag(agyAsk.args, '--settings')).permissions.allow.includes('read_url(github.com)'), 'Gemini keeps GitHub reads');
   const scratchPaths = [...claudeAsk.stdin.matchAll(/(\S*marion-repo-[^/\s]+)/g)].map((m) => m[1]);
   assert.ok(scratchPaths.length && scratchPaths.every((p) => !existsSync(p.replace(/[.,]$/, ''))), 'scratch checkout removed after the run');
   console.log('PASS public GitHub for Claude, Codex and Gemini builders (GitHub-only where the CLI allows it, sandboxes kept), Marion-made checkout for ask_subscription/orchestrate/team, no token leak');

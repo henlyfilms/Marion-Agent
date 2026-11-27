@@ -183,6 +183,8 @@ addColumn('bots', 'voice_language', "TEXT NOT NULL DEFAULT 'auto'");
 addColumn('bots', 'completed_at', 'INTEGER');
 addColumn('bots', 'chat_provider', 'TEXT');
 addColumn('bots', 'chat_model', 'TEXT');
+// Who handed a task out: the Bot that called create_task with bot_name (NULL when a Bot made its own task).
+addColumn('tasks', 'assigned_by', 'TEXT');
 addColumn('bots', 'chat_model_label', 'TEXT');
 addColumn('bots', 'chat_effort', 'TEXT');
 addColumn('bots', 'sort_position', 'INTEGER');

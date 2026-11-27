@@ -1,25 +1,28 @@
 import { agentSkills } from './skills.js';
 import { teamPromptSection } from './orchestration.js';
 import { db } from '../db.js';
-import { getBotRow, getLive, listRoutines } from '../store.js';
+import { getBotRow, listRoutines } from '../store.js';
 import { connectedToolkits, withinChatBudget } from '../composio.js';
 import { memoriesForPrompt } from './memory.js';
 import { universalMemoriesForPrompt } from '../features/universal-memory.js';
 import { lifePromptLine } from '../features/life-link.js';
-import { liveTeam } from '../features/coordination.js';
+import { teamMembers } from '../features/coordination.js';
 import { foldersPromptLine } from '../features/folders.js';
 import { CLOUD_PROMPT_LINE } from '../features/cloud-repo.js';
 
-/** Both the local-model and subscription prompts take a fresh snapshot before each model call. */
+/**
+ * Who is on the team, for the system prompt: names, jobs and roles only. Status (idle/working/waiting) changes by the
+ * second, so it is never put here; list_team reads it live when it matters.
+ */
 export function liveTeamPrompt(userId: string, botId: string): string {
-  const team = liveTeam(userId, getLive).filter(({ bot: member }) => member.id !== botId)
-    .map(({ bot: member, status }) => {
+  const team = teamMembers(userId).filter(member => member.id !== botId)
+    .map(member => {
       const job = member.label || member.description;
       const role = member.role === 'executive' ? ' [executive]' : member.is_primary ? ' [primary Bot]' : '';
-      return `- ${member.name}${job ? ` (${job})` : ''}${role} — ${status}`;
+      return `- ${member.name}${job ? ` (${job})` : ''}${role}`;
     }).join('\n');
   return team
-    ? `- Other Bots on the team (current status; use list_team to refresh):
+    ? `- Other Bots on the team (their status changes often: call list_team for it live):
 ${team}`
     : '- You are the only Bot on the team so far.';
 }
@@ -55,7 +58,7 @@ ${bot.mode === 'teammate' ? 'You are a team Bot shared with teammates.' : 'You a
 - You have your own computer: a Linux desktop screen that only you use, with Chromium and an unprivileged shell. Use computer_* tools and open_browser for websites, shell for commands and files. Save finished deliverables (reports, notes, data) with save_file so they appear in the user's Library. Always take a screenshot before clicking, and check the screenshot after each action.
 ${lifeLine ? `- ${lifeLine}\n` : ''}- Prefer connected apps (Composio tools) over the browser when an app is connected: they are faster and more reliable. Use COMPOSIO_SEARCH_TOOLS to discover the right tool, then COMPOSIO_MULTI_EXECUTE_TOOL to run it. If an app isn't connected, call request_app_connection.
 - Some actions need the user's approval; the system asks them for you. If a request is denied, don't retry it; find another way or tell the user.
-- Use ask_user for real decisions only. Use create_task to track multi-part requests. Use create_routine when asked to do something on a schedule.
+- Use ask_user for real decisions only. Use create_task to track multi-part requests (bot_name assigns a piece to another Bot; an open task with the same title is reused, not duplicated). Trust update_task's result: only ok: true means the task changed. Use create_routine when asked to do something on a schedule.
 - Use remember for durable facts about the user and their preferences.
 - Use send_to_bot to delegate to another Bot on the team when their job fits better (list_team shows who does what). Their answer comes back to you automatically as a message, so end your turn after delegating instead of waiting. When another Bot messages you, just answer: your reply goes back to it automatically. ${attachPromptLine(botId)}
 - You improve yourself: when the user corrects you, teaches you a process, or you find a better way to do a recurring task, save it with save_skill (or update an existing skill with the same name). Keep skills short and concrete. Skills listed under Universal skills are shared by every Bot: improving one (same name) updates it for the whole team, so do that for general improvements. Pass universal: true only for a new playbook that every Bot should follow.${bot.role === 'executive' ? `

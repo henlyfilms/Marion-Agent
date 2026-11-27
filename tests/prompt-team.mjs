@@ -28,13 +28,18 @@ try {
   setLive(working.id, { isRunning: true });
   setLive(waiting.id, { isRunning: true, awaiting: { reason: 'Approval' } });
   const prompt = await systemPrompt('owner', self.id, true);
-  assert.match(prompt, /- ResearchBot \(Research\).* — working/);
-  assert.match(prompt, /- ApprovalBot.* — waiting for the user/);
-  assert.match(prompt, /- IdleBot.* — idle/);
+  // Status is volatile, so the prompt names teammates and jobs only; list_team reads status live (tests/team-roster.mjs).
+  assert.match(prompt, /- ResearchBot \(Research\)\n/);
+  assert.match(prompt, /- ApprovalBot\n/);
+  assert.match(prompt, /- IdleBot\n?/);
+  assert.doesNotMatch(prompt, / — (working|idle|waiting for the user)/);
   assert.doesNotMatch(prompt, /- SelfBot|HiddenBot|RoomBot|OtherPrivateBot/);
   setLive(working.id, { isRunning: false });
-  assert.match(await systemPrompt('owner', self.id, true), /- ResearchBot.* — idle/);
-  console.log('PASS: system prompts show refreshed working, idle, and waiting statuses for visible teammates only.');
+  setLive(waiting.id, { isRunning: false, awaiting: null });
+  const again = await systemPrompt('owner', self.id, true);
+  const section = (p) => p.slice(p.indexOf('- Other Bots on the team'), p.indexOf('- IdleBot'));
+  assert.equal(section(again), section(prompt), 'team section is the same whatever the live status');
+  console.log('PASS: system prompts list visible teammates only, with no volatile status.');
 } finally {
   db.close();
 }

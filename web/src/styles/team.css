@@ -73,6 +73,8 @@
 .mic-note.is-error { background: color-mix(in srgb, var(--color-danger) 10%, var(--color-bg-pane)); color: var(--color-danger-text); padding-right: 5px; }
 .mic-note__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mic-note__close { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; flex: none; color: inherit; opacity: 0.75; transition: background-color 150ms var(--ease-out), opacity 150ms; }
+.mic-note__action { flex: none; padding: 1px 7px; border-radius: 999px; color: inherit; font: inherit; font-weight: 600; background: color-mix(in srgb, currentColor 12%, transparent); transition: background-color 150ms var(--ease-out); }
+.mic-note__action:hover { background: color-mix(in srgb, currentColor 22%, transparent); }
 .mic-note__close:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
 /* Listening graphic: bars driven by the live microphone level (components/VoiceWave sets --level, 0..1, per bar).
    Silent = flat round dots; talking = rounded pills that rise with your voice. */

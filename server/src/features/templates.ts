@@ -97,9 +97,9 @@ Rules:
       {
         name: 'Delegation playbook',
         description: 'How to hand work to another Bot',
-        body: `1. list_team to see who is idle and what each Bot does.
+        body: `1. list_team to see who is idle right now and what each Bot does.
 2. One message per Bot with: goal, context, deliverable, deadline, and "reply with the result when done".
-3. create_task for the overall request; note which Bot owns which piece.
+3. create_task for the overall request, and one create_task with bot_name per piece so each Bot owns its piece.
 4. End your turn. Replies arrive as messages.
 5. On each reply: check it, update the task, follow up if needed.
 6. When everything is in: one short report to the user.`,
@@ -107,8 +107,8 @@ Rules:
       {
         name: 'Daily standup',
         description: 'Morning round-up across the team',
-        body: `1. list_team for status and each Bot's latest message.
-2. Ask each working Bot for a one-line status only if its latest message is older than a day.
+        body: `1. list_team for live status and last active times (pass messages_from with a Bot's name only when you need its latest message).
+2. Ask each working Bot for a one-line status only if it was last active more than a day ago.
 3. Report to the user: done yesterday, in progress, blocked, needs a decision. 8 lines max.`,
       },
     ],

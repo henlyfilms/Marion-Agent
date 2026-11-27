@@ -119,6 +119,15 @@ export function getRow(botId: string, seq: number): Row | null {
   return r ? toRow(r) : null;
 }
 
+/** The question card this chat is waiting on: the newest still-pending one in the current conversation, if any. */
+export function pendingQuestion(botId: string): Row | null {
+  const b = getBotRow(botId);
+  if (!b) return null;
+  const r = db.prepare("SELECT * FROM rows WHERE bot_id=? AND generation=? AND kind='card' AND json_extract(body,'$.card')='question' AND json_extract(body,'$.status')='pending' ORDER BY seq DESC LIMIT 1")
+    .get(botId, b.generation);
+  return r ? toRow(r) : null;
+}
+
 /**
  * The user message already saved under this client id (a prompt queued while offline and retried on reconnect), if any.
  * Looks at the last day of this chat in any generation so a retry never posts the same prompt twice.
@@ -239,5 +248,5 @@ export function toRoutine(r: any): Routine {
 
 export const listRoutines = (botId: string) => (db.prepare('SELECT * FROM routines WHERE bot_id=? ORDER BY created_at').all(botId) as any[]).map(toRoutine);
 
-export const toTask = (r: any): Task => ({ id: r.id, botId: r.bot_id, title: r.title, state: r.state, note: r.note, updatedAt: r.updated_at });
+export const toTask = (r: any): Task => ({ id: r.id, botId: r.bot_id, title: r.title, state: r.state, note: r.note, updatedAt: r.updated_at, ...(r.assigned_by ? { assignedBy: r.assigned_by } : {}) });
 export const listTasks = (botId: string) => (db.prepare('SELECT * FROM tasks WHERE bot_id=? ORDER BY updated_at DESC').all(botId) as any[]).map(toTask);

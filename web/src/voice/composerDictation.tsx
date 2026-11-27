@@ -35,7 +35,9 @@ export interface DictationSink {
 
 /** Where dictated words go in one chat's box: the committed-text offset the live words are drawn at. */
 interface DictationAnchor { botId: string; at: number }
-interface DictationView { state: DictationState; interim: string; anchor?: DictationAnchor; owner?: string }
+/** A recording whose transcription failed, kept in memory (never saved) so its chat can offer Retry. */
+export interface DictationRetry { botId: string; error: string; code?: string; retryable: boolean }
+interface DictationView { state: DictationState; interim: string; anchor?: DictationAnchor; owner?: string; retry?: DictationRetry }
 /** What every chat box shows: whether dictation is running, the words heard so far and where they belong. */
 export const useComposerDictation = create<DictationView>(() => ({ state: 'idle', interim: '' }));
 
@@ -45,6 +47,10 @@ interface Controls {
   discard(): void;
   /** End dictation now and keep every word heard (finished and still being heard) in its own chat. */
   commit(): void;
+  /** Transcribe the recording kept after a failed transcription again, into the chat it was made in. */
+  retry(botId: string): void;
+  /** Forget the recording kept for retry. */
+  discardRetry(): void;
 }
 
 let controls: Controls | undefined;
@@ -59,6 +65,8 @@ export const dictationOwner = () => owner;
 /** Where a recorded dictation began, so its caret position is only reused in that same chat. */
 let origin: { botId: string; range?: TextRange } | undefined;
 let touchLive: (() => void) | undefined;
+/** The chat a recording kept for retry was made in. */
+let retryOwner: string | undefined;
 /** Words the user deleted from what is still being heard: they must not come back with the engine's next update. */
 let cut: HeardCut | undefined;
 /** What the engine reports as heard right now (before any cut). */
@@ -115,6 +123,8 @@ export const composerDictation: Controls & {
   stop: () => controls?.stop(),
   discard: () => controls?.discard(),
   commit: () => controls?.commit(),
+  retry: botId => controls?.retry(botId),
+  discardRetry: () => controls?.discardRetry(),
   cutHeard: range => {
     touchLive?.();
     const shown = useComposerDictation.getState().interim;
@@ -174,6 +184,17 @@ export function ComposerDictationHost() {
     return botId ? getDraft(botId) : '';
   });
   const spoken = useLiveDictation(deliverWords, fail, language);
+  // Which chat the recording kept for retry belongs to: the owner when its transcription failed.
+  const failedFor = recorded.failed ? retryOwner ?? (owner ?? origin?.botId) : undefined;
+  if (recorded.failed && !retryOwner) retryOwner = failedFor;
+  if (!recorded.failed) retryOwner = undefined;
+  const retry: DictationRetry | undefined = recorded.failed && failedFor
+    ? { botId: failedFor, error: recorded.failed.error, code: recorded.failed.code, retryable: recorded.failed.retryable }
+    : undefined;
+  useLayoutEffect(() => {
+    const current = useComposerDictation.getState().retry;
+    if (current?.botId !== retry?.botId || current?.error !== retry?.error || current?.retryable !== retry?.retryable) useComposerDictation.setState({ retry });
+  }, [retry?.botId, retry?.error, retry?.retryable]);
 
   touchLive = spoken.touch;
   const state = spoken.state !== 'idle' ? spoken.state : recorded.state;
@@ -191,6 +212,7 @@ export function ComposerDictationHost() {
       start(botId, range) {
         primeAudio(); // inside the click: lets the start cue and the listening bars run every time
         if (chatTarget() !== botId || owner) return; // one dictation at a time, started from the chat on screen
+        recorded.clearRetry(); // a new recording (either engine) replaces the one kept for retry
         refreshStatus(); // pick up speech settings changed since the last chat box opened
         const audioInput = microphoneId();
         const server = status?.localSpeech || status?.realtime;
@@ -219,6 +241,15 @@ export function ComposerDictationHost() {
         spoken.stop();
         recorded.finish();
       },
+      retry(botId) {
+        if (owner || !recorded.failed || !recorded.failed.retryable || retryOwner !== botId) return; // not retryable: Discard only
+        setOwner(botId); // the words go to the chat the recording was made in, appended at the end of its box or draft
+        setOrigin({ botId });
+        void recorded.retry();
+      },
+      discardRetry() {
+        recorded.clearRetry();
+      },
       discard() {
         setOrigin(undefined);
         spoken.stop(true);
@@ -238,6 +269,7 @@ export function ComposerDictationHost() {
   // writing into its own chat until the user stops it. Only a deleted owner chat ends it (keeping nothing to save).
   useEffect(() => useStore.subscribe(current => {
     if (owner && !current.bots.some(bot => bot.id === owner)) controls?.discard();
+    if (retryOwner && !current.bots.some(bot => bot.id === retryOwner)) controls?.discardRetry();
   }), []);
 
   return null;

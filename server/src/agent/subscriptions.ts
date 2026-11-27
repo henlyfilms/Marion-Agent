@@ -16,6 +16,7 @@ import '../db-config.js';
 import { isDesktop } from '../lib/desktop-access.js';
 import type { ChatModel, ChatModelSelection, ChatProvider, WorkUsage } from '../types.js';
 import { TaskUsageMeter } from './task-usage.js';
+import { normalizeEffort } from './runner-settings.js';
 export { modelLabel } from '../model-label.js';
 
 export type SubscriptionProvider = Exclude<ChatProvider, 'local'>;
@@ -35,6 +36,46 @@ export class GoogleSignInRequired extends Error {
   readonly provider = 'gemini' as const;
   constructor() { super('Gemini needs you to sign in with your personal Google account (agy acp --login).'); this.name = 'GoogleSignInRequired'; }
 }
+/**
+ * Whether Gemini's (agy's) own last words mean "sign in with Google". Only whole login phrases count — "not authenticated",
+ * "please sign in", "login required", "agy acp --login" … — so startup, logging ("logging", "log in to file"), sandbox
+ * and loopback failures that merely contain those letters are reported as themselves, not as a sign-in card.
+ * Two look-alikes are excluded too: proxy authentication (HTTP 407, "Proxy Authentication Required", proxy credentials)
+ * is the network's sign-in, not Google's; and a bare `--login` only counts as agy's own hint (`agy acp --login`), never
+ * a CLI/shell flag error ("unknown option '--login'", "bash --login: …"). Clauses about either are dropped before
+ * matching, and once a proxy-auth failure is present only Google-specific wording still counts.
+ */
+const GOOGLE_SIGN_IN = [
+  /\b(?:not|un)[\s-]?authenticated\b/i,
+  /\bauthentication (?:is )?(?:required|needed|failed|expired)\b/i,
+  /\b(?:please|must|need to|needs you to|required to)\s+(?:re-?)?(?:sign|log)[\s-]?in\b/i,
+  /\b(?:sign|log)[\s-]?in (?:is )?(?:required|needed|expired)\b/i,
+  /\bnot (?:signed|logged)[\s-]?in\b/i,
+];
+/** Wording that can only mean Google / agy's own sign-in or OAuth — still trusted when a proxy failure is also present. */
+const GOOGLE_SPECIFIC_SIGN_IN = [
+  /\bGoogleSignInRequired\b/,
+  /\b(?:sign|log)[\s-]?in with (?:your )?(?:personal )?google\b/i,
+  /\bagy(?:\s+acp)?\s+--login\b/i,
+  /\bgoogle\b[^\n]{0,40}\b(?:oauth|credentials?|token|account|sign[\s-]?in|log[\s-]?in)\b[^\n]{0,30}\b(?:expired|invalid|revoked|missing|required)\b/i,
+  /\b(?:oauth|google)\b[^\n]{0,20}\b(?:access|refresh|id)?[\s-]?token\b[^\n]{0,10}\b(?:has\s+)?(?:expired|been revoked|is invalid|invalid|missing)\b/i,
+  /\binvalid_grant\b/i,
+];
+/** HTTP 407 / proxy authentication: the network proxy wants credentials, Google sign-in would not help. */
+const PROXY_AUTH = /\bproxy[\s-]+(?:auth\w*|credentials?|log[\s-]?in|sign[\s-]?in)\b|\bproxy\b[^\n]{0,60}\b(?:(?:un|not\s)authenticated|auth(?:entication|orization)? (?:is )?(?:required|failed|needed))\b|\b(?:HTTP(?:\/[\d.]+)?|status(?:[\s_-]?code)?|code|error)\s*[:=]?\s*407\b|\b407\s+proxy\b|\bCONNECT\s+tunnel\s+failed\b[^\n]{0,40}\b407\b|\bproxy\s+response\s*\(?\s*407\b|\b(?:HTTPS?|ALL)_PROXY\b[^\n]{0,120}\b(?:returned|response|responded|status)\b[^\n]{0,20}\(?\s*407\b/i;
+/** A CLI or shell rejecting a `--login` flag, or a login shell (`bash --login`), is not agy asking for Google sign-in. */
+const LOGIN_FLAG_ERROR = /\b(?:unknown|unrecognized|unrecognised|invalid|unsupported|illegal|unexpected|bad)\s+(?:command[\s-]line\s+)?(?:option|flag|argument|switch|parameter)s?\b[^\n]*--?login\b|--?login['"`]?:?\s+(?:is\s+)?(?:an?\s+)?(?:unknown|unrecognized|unrecognised|invalid|unsupported|not (?:a\s+)?(?:supported|recognized|recognised|defined|valid))\b|\bflag provided but not defined:\s*-?-login\b|\b(?:ba|z|k|da|fi|c|tc)?sh\s+(?:-\w+\s+)*--login\b/i;
+export const isGoogleSignInFailure = (diagnostic: string) => {
+  // Proxy detection is scoped to whole clauses: only a clause that is itself a proxy-auth failure counts, so a harmless
+  // "Connecting via proxy …" line never suppresses a later sign-in error.
+  const clauses = diagnostic.split(/\r?\n|;\s*|\.\s+/);
+  const proxy = clauses.some(clause => PROXY_AUTH.test(clause));
+  const relevant = clauses
+    .filter(clause => !PROXY_AUTH.test(clause) && !LOGIN_FLAG_ERROR.test(clause))
+    .join('\n');
+  if (GOOGLE_SPECIFIC_SIGN_IN.some(pattern => pattern.test(relevant))) return true;
+  return !proxy && GOOGLE_SIGN_IN.some(pattern => pattern.test(relevant));
+};
 /** Forget the cached Gemini model list (after a sign-in, so the next check asks the CLI again). */
 export function forgetGeminiCatalog() { geminiCatalog = undefined; }
 /** High when the model offers it, else the closest step down (medium), else whatever it has. */
@@ -158,7 +199,18 @@ export const codexArgs = [
   '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'project_doc_max_bytes=0',
 ];
 const googleDeny = ['command(*)', 'unsandboxed(*)', 'read_file(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)'];
-export const googleSettings = JSON.stringify({
+/**
+ * The only settings.json keys Marion passes to Antigravity's `--settings`. agy rejects any key it does not know with
+ * `Error: --settings: unknown setting "<key>"` and exit code 1 (seen with `sandboxAllowNetwork`, which agy 1.5 does not
+ * have), so every Gemini settings object goes through geminiSettingsJson, which refuses anything else.
+ */
+export const GEMINI_SETTINGS_KEYS = ['modelProvider', 'allowNonWorkspaceAccess', 'permissions'] as const;
+export function geminiSettingsJson(settings: Record<string, unknown>) {
+  const unknown = Object.keys(settings).filter(key => !(GEMINI_SETTINGS_KEYS as readonly string[]).includes(key));
+  if (unknown.length) throw new Error(`Gemini --settings: unsupported key(s) ${unknown.join(', ')} (agy would exit with code 1)`);
+  return JSON.stringify(settings);
+}
+export const googleSettings = geminiSettingsJson({
   modelProvider: '',
   allowNonWorkspaceAccess: false,
   permissions: { allow: [], deny: googleDeny },
@@ -167,7 +219,7 @@ export const googleSettings = JSON.stringify({
  * With photos attached, Antigravity may read files, but only inside its own fresh temporary
  * working folder, which holds nothing except those photos (non-workspace access stays off).
  */
-const googleSettingsWithPhotos = JSON.stringify({
+const googleSettingsWithPhotos = geminiSettingsJson({
   modelProvider: '',
   allowNonWorkspaceAccess: false,
   permissions: { allow: [], deny: googleDeny.filter(rule => rule !== 'read_file(*)') },
@@ -243,10 +295,10 @@ export function folderArgs(provider: 'claude' | 'gemini', folder: { path: string
   const github = GITHUB_HOSTS.map(host => `read_url(${host})`);
   const allowed = folder.write ? [inFolder('read_file'), inFolder('write_file'), 'command(*)', ...github, ...photos] : [inFolder('read_file'), ...github, ...photos];
   const open = folder.write ? ['read_file(*)', 'write_file(*)', 'command(*)', 'read_url(*)'] : ['read_file(*)', 'read_url(*)'];
-  const settings = JSON.stringify({
+  // No terminal-network key here: agy has no such setting (an unknown key makes it exit 1 before doing anything).
+  // GitHub reads go through read_url for GitHub hosts; ask_subscription/orchestrate hand it a checkout Marion cloned.
+  const settings = geminiSettingsJson({
     modelProvider: '', allowNonWorkspaceAccess: false,
-    // A folder it may change: its sandboxed terminal may reach the network too (git clone/fetch, gh), still confined to the workspace.
-    ...(folder.write ? { sandboxAllowNetwork: true } : {}),
     permissions: { allow: allowed, deny: googleDeny.filter(rule => !open.includes(rule)) },
   });
   return [
@@ -511,6 +563,11 @@ async function runSubscriptionReply(
   selection: SubscriptionSelection, prompt: string, signal: AbortSignal, images: UploadedAttachment[], options: ReplyOptions,
 ): Promise<string> {
   activeRuns++;
+  // An empty effort ("" in saved settings) is unset: the CLI gets no --effort at all, never `--effort ""`.
+  if (typeof selection.effort === 'string' && !normalizeEffort(selection.effort)) {
+    selection = { ...selection, effort: null };
+    if (selection.provider !== 'codex') options = { ...options, noEffort: true };
+  }
   try {
     try { return await spawnSubscriptionReply(selection, prompt, signal, images, options); }
     catch (error) {
@@ -645,7 +702,9 @@ async function spawnSubscriptionReply(
           return result.response;
         }
         checkUsageLimit(result, diagnostic);
-        diagnostic += ` ${typeof result?.error === 'string' ? result.error : ''}`;
+        // A newline, not a space: stderr's last line (often without a trailing newline) and the result error are separate
+        // clauses, so a proxy / flag error in one cannot swallow a Google sign-in in the other.
+        diagnostic += `\n${typeof result?.error === 'string' ? result.error : ''}`;
         break;
       }
       // The CLI ended without a reply: give it a moment to report its exit code before blaming it.
@@ -657,7 +716,7 @@ async function spawnSubscriptionReply(
     }
     if (signal.aborted) throw signal.reason;
     if (processError) throw new Error(`Could not start ${labels[provider]} on this Mac: ${processError}`);
-    if (provider === 'gemini' && /authenticat|sign.in|log.in/i.test(diagnostic)) throw new GoogleSignInRequired();
+    if (provider === 'gemini' && isGoogleSignInFailure(diagnostic)) throw new GoogleSignInRequired();
     // The real reason: how the CLI ended and its own last words (stderr).
     const ended = exitSignal ? `was stopped by ${exitSignal}` : exitCode !== null && exitCode !== 0 ? `exited with code ${exitCode}` : 'ended without a reply';
     const said = short(diagnostic, 400);

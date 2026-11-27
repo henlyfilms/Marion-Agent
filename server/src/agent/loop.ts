@@ -1,6 +1,7 @@
 import { isUsageLimitError } from './usage-limit.js';
 import { localInput, localModel, localModelLoaded, selectedLocalModel } from './models.js';
 import { chatModelForBot } from './chat-model.js';
+import { RunnerSettingsInvalid, blockedSettingsKey, runnerSettingsKey as runnerSettingsKeyOf, checkRunnerSettings, downstreamText, normalizeEffort, runnerSettingsFailure, runnerSettingsText } from './runner-settings.js';
 import { attachmentText, photos, type UploadedAttachment } from '../attachments.js';
 import { subscriptionReply, type SubscriptionSelection } from './subscriptions.js';
 import { isDesktop } from '../lib/desktop-access.js';
@@ -483,6 +484,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
   const ctx: ToolCtx = { side, sideHistory, userId, botId, enqueueBotMessage, depth, signal: ctrl.signal, allowSubscriptionTeam: trigger.type === 'user' && trigger.allowSubscriptionTeam, messaged: new Set(), replyTo: trigger.type === 'bot' && !trigger.autoReply ? trigger.fromBotId : undefined, triggerAttachments: triggerAttachmentsOf(trigger) };
   const startSeq = (db.prepare('SELECT COALESCE(MAX(seq),0) seq FROM rows WHERE bot_id=? AND generation=?').get(botId, bot.generation) as any).seq as number;
   let failure: string | null = null;
+  let settingsBlocked = false;
   // Recorded while the run is in flight, so a crash or restart can pick the work up again (see resumeInterruptedTurns).
   const inflightId = `${botId}:${Date.now().toString(36)}:${++sideCounter}`;
   if (trigger.type !== 'resume' && !(trigger.type === 'system' && trigger.text.startsWith(CONTINUE_MARK))) {
@@ -525,12 +527,21 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
       if (item) addHistory(ctx, [item]);
     }
 
+    // §3.5: the runner's own settings are checked before anything launches. Settings that already failed (same key) are
+    // not launched again by automatic triggers (auto resume, the next routine, a restart) and keep their one card.
+    if (subscription) {
+      const invalid = checkRunnerSettings(subscription);
+      if (invalid) throw invalid;
+      // A new user message is an explicit retry; automatic triggers (routines, resumes, other bots) are not.
+      if (trigger.type !== 'user' && blockedSettingsKey(botId, bot.generation) === runnerSettingsKeyOf(subscription)) throw new RunnerSettingsInvalid(subscription.provider, 'model', subscription.model, runnerSettingsKeyOf(subscription), 'these settings already failed');
+    }
+
     const builtInTools = functionSchemas(userId, botId);
     const appTools = await composioTools(userId);
 
     local ??= selected?.provider === 'local'
       ? { model: selected.model, effort: selected.effort }
-      : { model: selectedLocalModel(userId), effort: bot.effort ?? 'medium' };
+      : { model: selectedLocalModel(userId), effort: normalizeEffort(bot.effort) ?? 'medium' };
     let takeovers = 0;
     for (let step = 0; step < MAX_STEPS; step++) {
       if (ctrl.signal.aborted) throw new Error('interrupted');
@@ -549,6 +560,9 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
           ? await callSubscriptionModel(ctx, subscription, tools, ctrl.signal, voice, record)
           : await callModel(ctx, local, tools, ownTools, ctrl.signal, voice, record);
       } catch (error) {
+        // The runner's own settings were rejected (not the request it made): no takeover, no retry with the same settings.
+        const settings = subscription && !ctrl.signal.aborted ? runnerSettingsFailure(error, subscription) : null;
+        if (settings) throw settings;
         // Team mode: when the orchestrator runs out of usage (or its CLI fails), a team member takes over.
         if (ctrl.signal.aborted || (subscription && isUsageLimitError(error)) || !teamOn || takeovers >= 2) throw error;
         const failed: ChatModelSelection = subscription ?? { provider: 'local', model: local.model, effort: local.effort };
@@ -596,9 +610,19 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
   } catch (e: any) {
     // A Google sign-in Gemini needs comes with its own sign-in card (shown by subscriptionReply): no red error.
     const signIn = !ctrl.signal.aborted && e?.name === 'GoogleSignInRequired';
-    const msg = ctrl.signal.aborted ? 'Stopped.' : signIn ? 'Gemini needs a Google sign-in: use the sign-in card in this chat, then I\'ll carry on.' : `Something went wrong: ${e?.message ?? e}`;
+    const routine = trigger.type === 'routine' ? trigger.name : undefined;
+    const settings = !ctrl.signal.aborted && e instanceof RunnerSettingsInvalid ? e : null;
+    const msg = ctrl.signal.aborted ? 'Stopped.' : signIn ? 'Gemini needs a Google sign-in: use the sign-in card in this chat, then I\'ll carry on.'
+      : settings ? runnerSettingsText(settings, routine)
+      : subscription ? downstreamText(e, subscription.provider, routine) : `Something went wrong: ${e?.message ?? e}`;
     if (!ctrl.signal.aborted) failure = String(e?.message ?? e);
-    if (!(ctrl.signal.aborted && consumeStopAnnounced(botId))) appendRow(botId, 'notice', { type: 'notice', text: msg, tone: ctrl.signal.aborted || signIn ? 'info' : 'error' });
+    if (settings) {
+      // One card per settings key: a repeat of the same blocked settings adds nothing (the existing card stays).
+      settingsBlocked = true;
+      if (trigger.type === 'user' || blockedSettingsKey(botId, bot.generation) !== settings.key) {
+        appendRow(botId, 'notice', { type: 'notice', text: msg, tone: 'error', blocker: { kind: 'runner_settings', key: settings.key, provider: settings.provider, setting: settings.setting } });
+      }
+    } else if (!(ctrl.signal.aborted && consumeStopAnnounced(botId))) appendRow(botId, 'notice', { type: 'notice', text: msg, tone: ctrl.signal.aborted || signIn ? 'info' : 'error' });
     if (!ctrl.signal.aborted) console.error('[agent]', e);
   } finally {
     if (side) {
@@ -649,7 +673,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
     // The last run just ended: write what was answered in parallel into the stored history now (never while an approval is pending).
     if (!othersLeft && !stillPending && sameChat) flushSideNotes(botId);
     if (completed) resumeAttempts.delete(botId);
-    else if (failure && !ctrl.signal.aborted && sameChat && !stillPending) scheduleResume(botId, bot.generation, runLabel, failure);
+    else if (failure && !settingsBlocked && !ctrl.signal.aborted && sameChat && !stillPending) scheduleResume(botId, bot.generation, runLabel, failure);
     afterTurn(botId, bot, trigger, { completed: completed && !ctrl.signal.aborted && !stillPending, failure, startSeq, depth, messaged: ctx.messaged!, ...(side ? { reply: sideReply ?? '' } : {}) });
   }
 }
@@ -1081,7 +1105,7 @@ async function callModel(
     model,
     input,
     tools,
-    reasoning: { effort: effort ?? 'medium' },
+    reasoning: { effort: normalizeEffort(effort) ?? 'medium' },
     stream: true,
   };
 

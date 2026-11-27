@@ -1,4 +1,5 @@
 import { toMonoWav } from './wav';
+import { TranscriptionError } from './dictationRetry';
 import type { VoiceOption } from '@shared/types';
 
 export interface VoiceSession {
@@ -96,11 +97,16 @@ export const voiceApi = {
     if (hints.context?.trim()) fd.append('context', hints.context.trim().slice(-600));
     const ext = native ? 'wav' : blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm';
     fd.append('file', blob, `dictation.${ext}`);
-    const res = await fetch('/api/voice/stt', { method: 'POST', credentials: 'include', body: fd, signal });
+    const res = await fetch('/api/voice/stt', { method: 'POST', credentials: 'include', body: fd, signal }).catch((cause: unknown) => {
+      // A cancel stays a cancel; anything else means the app's own server could not be reached ("Failed to fetch" says nothing).
+      if (signal?.aborted || (cause as Error)?.name === 'AbortError') throw cause;
+      throw new TranscriptionError("Can't reach Marion Agent. Check that it is still running. Your recording is kept: try again.", 0, 'network_error', true);
+    });
     if (!res.ok) {
-      let msg = 'Transcription failed';
-      try { msg = ((await res.json()) as { error?: string }).error ?? msg; } catch { /* not json */ }
-      throw new Error(msg);
+      // Keep the server's status, code and message: an unsupported macOS or language is not a passing failure.
+      let body: { error?: string; code?: string; retryable?: boolean } = {};
+      try { body = (await res.json()) as typeof body; } catch { /* not json */ }
+      throw new TranscriptionError(body.error || 'Transcription failed', res.status, body.code, body.retryable ?? res.status >= 500);
     }
     return ((await res.json()) as { text: string }).text;
   },

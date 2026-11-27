@@ -22,6 +22,7 @@ import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '..
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
 import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes } from '../triggers.js';
 import { setCheckins } from '../proactive.js';
+import { createTask, TASK_STATES, updateTask } from './task-tools.js';
 import { createSubagent, deleteSubagent, listSubagents } from './subagents.js';
 import { createRoom, postToRoom, roomForPost } from './rooms.js';
 import { orchestrationForBot, saveOrchestration, teamModels, validateTeamSettings } from './orchestration-settings.js';
@@ -753,36 +754,47 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'create_task',
-    description: 'Track a piece of work the user asked for as a task (use one per request when asked for several things at once).',
-    parameters: obj({ title: { type: 'string' } }, ['title']),
+    description: 'Track a piece of work the user asked for as a task (use one per request when asked for several things at once). The task is yours unless bot_name names another active Bot on the team. If that Bot already has an open task with the same title, no duplicate is made and the existing task_id is returned (created: false); done tasks never block a new one.',
+    parameters: obj({
+      title: { type: 'string' },
+      bot_name: { type: 'string', description: 'Optional: the name of another active Bot on the team to assign the task to. Leave out to assign it to yourself.' },
+    }, ['title']),
     activity: 'working',
     label: 'Making a task',
     impl: async (a, ctx) => {
-      const id = newId('task');
-      db.prepare("INSERT INTO tasks(id,bot_id,title,state,created_at,updated_at) VALUES (?,?,?,'working',?,?)").run(id, ctx.botId, a.title, now(), now());
-      hub.emit(ctx.userId, { type: 'tasks', botId: ctx.botId });
-      return { output: JSON.stringify({ task_id: id }) };
+      const r = createTask(db, { userId: ctx.userId, callerBotId: ctx.botId, title: a.title, botName: a.bot_name, newId: () => newId('task'), now });
+      if (!r.ok) return { output: JSON.stringify({ ok: false, error: r.error, message: r.message }) };
+      if (r.created) hub.emit(ctx.userId, { type: 'tasks', botId: r.botId });
+      return {
+        output: JSON.stringify(r.created
+          ? { ok: true, created: true, task_id: r.taskId, bot: r.botName }
+          : { ok: true, created: false, duplicate: true, task_id: r.taskId, bot: r.botName, state: r.state, message: `${r.botId === ctx.botId ? 'You already have' : `${r.botName} already has`} an open task "${r.title}" (${r.state}); no new task was made.` }),
+        summary: r.created ? (r.botId === ctx.botId ? undefined : `Task for ${r.botName}`) : 'Task already open',
+      };
     },
   },
   {
     name: 'update_task',
-    description: 'Update a task: state is working, needs_input, or done.',
-    parameters: obj({ task_id: { type: 'string' }, state: { type: 'string', enum: ['working', 'needs_input', 'done'] }, note: { type: 'string' } }, ['task_id', 'state']),
+    description: 'Update a task assigned to you, or one you assigned to another Bot: state is working, needs_input, or done. Returns ok: true with the new and previous state only when the task really changed; fails (ok: false, with error not_found, not_owner or invalid_state) if the task_id does not exist, belongs to an unrelated Bot, or the state is invalid. Never report a task as updated unless ok is true.',
+    parameters: obj({ task_id: { type: 'string' }, state: { type: 'string', enum: [...TASK_STATES] }, note: { type: 'string' } }, ['task_id', 'state']),
     activity: 'working',
     label: 'Updating a task',
     impl: async (a, ctx) => {
-      db.prepare('UPDATE tasks SET state=?, note=COALESCE(?, note), updated_at=? WHERE id=? AND bot_id=?').run(a.state, a.note ?? null, now(), a.task_id, ctx.botId);
-      hub.emit(ctx.userId, { type: 'tasks', botId: ctx.botId });
-      return { output: 'Updated.' };
+      const r = updateTask(db, { userId: ctx.userId, callerBotId: ctx.botId, taskId: a.task_id, state: a.state, note: a.note, now });
+      if (!r.ok) return { output: JSON.stringify({ ok: false, error: r.error, message: r.message }) };
+      hub.emit(ctx.userId, { type: 'tasks', botId: r.botId });
+      return { output: JSON.stringify({ ok: true, task_id: r.taskId, state: r.state, previous_state: r.previousState }) };
     },
   },
   {
     name: 'list_team',
-    description: "List every Bot on the user's team: name, job, role, model, whether it is working or idle, and its latest message. Use before delegating.",
-    parameters: obj({}),
+    description: "List every Bot on the user's team with its live status (idle, working or waiting for the user) and routing fields: name (for send_to_bot), job, role, model, last active time. No message text by default; to read a Bot's latest message, name it in messages_from. Use before delegating.",
+    parameters: obj({
+      messages_from: { type: 'array', items: { type: 'string' }, description: 'Optional: names of the Bots whose latest message (first 200 characters) to include. Leave out for none.' },
+    }),
     activity: 'working',
     label: 'Checking the team',
-    impl: async (_a, ctx) => ({ output: JSON.stringify(teamRoster(ctx.userId, ctx.botId, getLive)), summary: 'Checked the team' }),
+    impl: async (a, ctx) => ({ output: JSON.stringify(teamRoster(ctx.userId, ctx.botId, getLive, { messagesFrom: a.messages_from })), summary: 'Checked the team' }),
   },
   {
     name: 'create_bot',

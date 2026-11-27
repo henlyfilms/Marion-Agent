@@ -19,6 +19,7 @@ import { enqueue } from './agent/loop.js';
 import { computerState } from './computer.js';
 import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOption } from './types.js';
 import { isExpectedAbort } from './lib/abort.js';
+import { BAD_RESPONSE_FAILURE, classifyDictationError, classifySpeechServiceFailure, MAC_PERMISSION_FAILURE } from './lib/dictationErrors.js';
 
 export const voiceApi = new Hono<AuthVars>();
 
@@ -484,8 +485,10 @@ voiceApi.post('/stt', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.jso
       const detail = (error as { stderr?: string }).stderr?.trim();
       console.warn('[voice] Mac dictation:', detail || (error as Error).name);
       const block = macBlock(error, 'Transcribe your dictation with Mac speech recognition');
-      if (block) { notifyMacBlocked(c.get('user').id, block); return c.json({ error: describeMacBlock(block), macBlock: block }, 403); }
-      return c.json({ error: 'Mac dictation could not transcribe this recording. Check the language and try again.' }, 502);
+      if (block) { notifyMacBlocked(c.get('user').id, block); return c.json({ error: describeMacBlock(block), macBlock: block, code: MAC_PERMISSION_FAILURE.code, retryable: false }, MAC_PERMISSION_FAILURE.status); }
+      // Unsupported macOS / language and a missing engine are said plainly (with what to do); only unknown failures are a 502.
+      const failure = classifyDictationError(error, locale);
+      return c.json({ error: failure.error, code: failure.code, retryable: failure.retryable }, failure.status);
     }
   }
   const out = new FormData();
@@ -500,10 +503,12 @@ voiceApi.post('/stt', bodyLimit({ maxSize: 26 * 1024 * 1024, onError: c => c.jso
   }).catch(() => null);
   if (!r && c.req.raw.signal.aborted) return c.json({ text: '', cancelled: true });
   if (!r?.ok) {
-    console.warn('[voice] stt failed', r?.status);
-    return c.json({ error: 'Transcription failed' }, 502);
+    console.warn('[voice] stt failed', r?.status ?? 'unreachable');
+    // Unreachable, bad key, rate limit, unreadable audio/language and real upstream faults each get their own status and fix.
+    const failure = classifySpeechServiceFailure(r?.status, !!LOCAL_STT_URL);
+    return c.json({ error: failure.error, code: failure.code, retryable: failure.retryable }, failure.status);
   }
   const result = await r.json().catch(() => null) as { text?: unknown } | null;
-  if (typeof result?.text !== 'string') return c.json({ error: 'Speech server returned no transcript' }, 502);
+  if (typeof result?.text !== 'string') return c.json({ error: BAD_RESPONSE_FAILURE.error, code: BAD_RESPONSE_FAILURE.code, retryable: true }, BAD_RESPONSE_FAILURE.status);
   return c.json({ text: result.text.trim() });
 });

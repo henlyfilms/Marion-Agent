@@ -13,7 +13,7 @@ import { hub } from './lib/hub.js';
 import { archiveExists } from './features/deleted-archive.js';
 import { archiveDeletedBot, noteRestoredBot } from './features/life-outbox.js';
 import { createSession, destroySession, remoteAccessFor, remoteWorkspaceUser, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
-import { allLive, appendRow, chatTranscript, clearConversation, emitBot, findClientMessage, getBot, getBotRow, toBot, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, toTask, updateRow } from './store.js';
+import { allLive, appendRow, chatTranscript, clearConversation, emitBot, findClientMessage, getBot, getBotRow, getLive, toBot, getRow, listBots, listRoutines, listRows, listTasks, pendingQuestion, setLive, toRoutine, toTask, updateRow } from './store.js';
 import { enqueue, interrupt, isBotBusy, preemptWith, resolveApproval, runInBotQueue, stopBot } from './agent/loop.js';
 import { classifyIntent } from './agent/chat-intent.js';
 import { planLabels, planOptions, readProvider, savePlanLabels, subscriptionUsage, usageProviders, withPlanLabel } from './agent/subscription-usage.js';
@@ -28,7 +28,7 @@ import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
-import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type MessageBody, type Toolkit } from './types.js';
+import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort, type MessageBody, type Row, type Toolkit } from './types.js';
 import { orderChats, tier } from './chat-order.js';
 import { AVATAR_SHAPE_IDS, isAvatarColor, isStemColor, isWorkFxChoice, normalizeAvatarShape } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
@@ -532,6 +532,11 @@ api.post('/bots/:id/messages', bodyLimit({
   const busy = current.kind !== 'room' && !call && isBotBusy(b.id);
   const intent = busy ? classifyIntent(text) : 'additive';
   if (intent === 'stop') { stopBot(b.id); return c.json({ row }); }
+  // "Pick an option or reply in your own words": a typed reply answers the question card this chat is waiting on, exactly
+  // like an option click (one turn, the card resolves). Claimed here, before any await, so it can only be answered once.
+  // Only question cards: approval cards are never resolved by a message.
+  const question = current.kind !== 'room' && !call && text ? pendingQuestion(b.id) : null;
+  const answerNote = question ? answerQuestion(b.id, question, text) : '';
   // Screen recordings reach the models as frames (the chat keeps the original file).
   const media = await forModel(attachments);
   const mediaNote = media.note ? `[${media.note}]\n` : '';
@@ -539,7 +544,7 @@ api.post('/bots/:id/messages', bodyLimit({
   if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, media.attachments, notes + mediaNote);
   else {
     const voice = call ? { call, seq: row.seq, fast: !override } : undefined;
-    const turn = { type: 'user' as const, text: notes + mediaNote + text, attachments: media.attachments, generation: row.generation, voice,
+    const turn = { type: 'user' as const, text: notes + mediaNote + answerNote + text, attachments: media.attachments, generation: row.generation, voice,
       allowSubscriptionTeam: isDesktop && !remoteAccessFor(c) };
     const full = provider === 'local'
       ? { ...turn, local: { model, label: selection.label, effort: voice?.fast ? 'low' : effort ?? 'medium' } }
@@ -603,22 +608,41 @@ api.post('/approvals/:id', async (c) => {
 api.post('/bots/:id/cards/:seq/answer', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
+  const body = await c.req.json<{ answer?: unknown }>().catch(() => null);
+  const answer = typeof body?.answer === 'string' ? body.answer.trim() : '';
+  if (!answer) return c.json({ error: 'empty answer' }, 400);
+  // Read after the await: nothing can claim the card between this check and answerQuestion below.
   const row = getRow(b.id, Number(c.req.param('seq')));
-  const { answer } = await c.req.json<{ answer: string }>();
   if (!row || row.body.type !== 'card' || row.body.card !== 'question') return c.json({ error: 'not a question' }, 400);
-  updateRow(b.id, row.seq, { ...row.body, status: 'answered', answer });
+  if (row.body.status !== 'pending') return c.json({ error: 'This question was already answered.' }, 409);
+  const note = answerQuestion(b.id, row, answer);
   appendRow(b.id, 'message', { type: 'message', role: 'user', text: answer });
-  enqueue(b.id, { type: 'user', text: `[Answer to "${row.body.question}"] ${answer}` });
+  enqueue(b.id, { type: 'user', text: note + answer });
   return c.json({ ok: true });
 });
+
+/** Mark a pending question card answered and return the note that tells the bot which question this reply answers. */
+function answerQuestion(botId: string, row: Row, answer: string) {
+  if (row.body.type !== 'card' || row.body.card !== 'question') return '';
+  updateRow(botId, row.seq, { ...row.body, status: 'answered', answer });
+  settleQuestionWait(botId);
+  return `[Answer to "${row.body.question}"] `;
+}
+
+/** The bot stops showing "waiting for your answer" once no question card is left open. */
+function settleQuestionWait(botId: string) {
+  if (getLive(botId).awaiting?.reason === 'your answer' && !pendingQuestion(botId)) setLive(botId, { awaiting: null });
+}
 
 api.post('/bots/:id/cards/:seq/dismiss', (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'card') return c.json({ error: 'not a card' }, 400);
+  if (row.body.card === 'question' && row.body.status !== 'pending') return c.json({ error: 'This question was already answered.' }, 409);
   const body: any = { ...row.body, status: row.body.card === 'connect' ? 'skipped' : 'dismissed' };
   updateRow(b.id, row.seq, body);
+  if (row.body.card === 'question') settleQuestionWait(b.id);
   if (row.body.card === 'connect') enqueue(b.id, { type: 'system', text: `The user skipped connecting ${row.body.toolkitName}. Continue without it.` });
   return c.json({ ok: true });
 });

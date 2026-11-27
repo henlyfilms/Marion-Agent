@@ -4,6 +4,7 @@ import { readCustomTheme, readTheme, saveCustomTheme, THEME_PREF, themeColors, t
 import type { ServerEvent } from '@shared/types';
 import { useStore } from './store';
 import { readResume, trackResume } from './lib/resume';
+import { invalidateTaskVersions } from './lib/eventStream';
 
 /** UI state for bot settings, app settings, the Tasks view and the theme. Kept apart from store.ts on purpose. */
 
@@ -34,6 +35,8 @@ interface ConfigUI {
   setView(v: 'chat' | 'tasks' | 'sessions'): void;
   setTheme(t: Theme): void;
   bump(key: string): void;
+  /** After a dropped connection: every Tasks list refetches (see lib/eventStream). */
+  invalidateTasks(): void;
 }
 
 const darkQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
@@ -80,6 +83,7 @@ export const useConfigUI = create<ConfigUI>((set, get) => ({
     set({ theme });
   },
   bump: (key) => set({ versions: { ...get().versions, [key]: (get().versions[key] ?? 0) + 1 } }),
+  invalidateTasks: () => set({ versions: invalidateTaskVersions(get().versions) }),
 }));
 
 // Apply the saved theme as early as possible, and follow the OS while on "system".

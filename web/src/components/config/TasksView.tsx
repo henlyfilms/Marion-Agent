@@ -6,6 +6,7 @@ import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { configApi } from '../../lib/configApi';
 import { relativeShort } from '../../lib/time';
 import { useConfigUI, useVersion } from '../../configStore';
+import { TASKS_RESYNC_KEY } from '../../lib/eventStream';
 import { useStore } from '../../store';
 import { useContextMenu } from '../ContextMenu';
 import { openBotChat } from '../botMenuItems';
@@ -25,6 +26,8 @@ function when(t: Task): string {
 
 function TaskRow({ t, bot, showBot }: { t: Task; bot?: Bot; showBot: boolean }) {
   const contextMenu = useContextMenu();
+  // A task another Bot handed out says so ("from Ada"), so ownership is clear in every list.
+  const assigner = useStore((s) => (t.assignedBy ? s.bots.find((b) => b.id === t.assignedBy) : undefined));
   const open = () => { if (bot) openBotChat(bot.id); };
   const setState = async () => {
     const { task } = await configApi.setTaskState(t.id, t.state === 'done' ? 'working' : 'done');
@@ -46,6 +49,7 @@ function TaskRow({ t, bot, showBot }: { t: Task; bot?: Bot; showBot: boolean }) 
         {t.note && <span className="task-row__note">{t.note}</span>}
         <span className="task-row__meta">
           {showBot && bot && <><BotAvatarFor bot={bot} size={14} /><span>{bot.name}</span><span aria-hidden>·</span></>}
+          {assigner && <><span className="task-row__from" title={`Assigned by ${assigner.name}`}>from {assigner.name}</span><span aria-hidden>·</span></>}
           <span>{when(t)}</span>
         </span>
       </span>
@@ -60,13 +64,14 @@ const taskCache = new Map<string, Task[]>();
 function useTasks(botId?: string): Task[] | null {
   const key = botId ? `tasks:${botId}` : 'tasks';
   const v = useVersion(key);
+  const resynced = useVersion(TASKS_RESYNC_KEY); // bumped on reconnect, so a list never stays stale after a dropped connection
   const [tasks, setTasks] = useState<Task[] | null>(() => taskCache.get(key) ?? null);
   useEffect(() => {
     let alive = true;
     if (taskCache.has(key)) setTasks(taskCache.get(key)!);
     (botId ? configApi.botTasks(botId) : configApi.tasks()).then((r) => { taskCache.set(key, r.tasks); if (alive) setTasks(r.tasks); }).catch(() => { if (alive) setTasks((current) => current ?? []); });
     return () => { alive = false; };
-  }, [botId, v]);
+  }, [botId, v, resynced]);
   return tasks;
 }
 

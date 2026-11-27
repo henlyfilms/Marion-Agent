@@ -16,6 +16,7 @@ import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { voiceApi, type VoiceStatus } from '../voice/api';
 import { caretInsideHeard, deletedHeard, insertDictated, liveSpan, placeCaret, planEdit, withSpan } from '../voice/dictationText';
 import { composerDictation, registerDictationSink, useComposerDictation, type TextRange } from '../voice/composerDictation';
+import { retryActions } from '../voice/dictationRetry';
 import { listMicrophones, microphoneId, micErrorMessage, openMic, setMicrophoneId } from '../voice/audio';
 import { dictationShortcut, shortcutFor, shortcutLabel } from '../voice/shortcut';
 import { useConfigUI } from '../configStore';
@@ -466,8 +467,12 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
     return () => window.clearTimeout(timer);
   }, [micError]);
   // The mic pill keeps its last words while it fades out, so closing is as smooth as opening.
+  // A recording whose transcription failed is kept in memory (never saved) until it is retried, discarded or replaced.
+  const retryHere = useComposerDictation(s => (s.retry?.botId === bot.id ? s.retry : undefined));
+  const offer = retryActions(retryHere, state === 'idle');
   const micText = dictatingElsewhere ? `Dictating in ${ownerName ?? 'another chat'}…`
-    : state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…' : micError;
+    : state === 'recording' ? 'Listening…' : state === 'transcribing' ? 'Transcribing…'
+    : micError ?? (offer.retry ? 'Transcription failed. Recording kept.' : offer.kept ? `Transcription failed: ${retryHere!.error}` : null);
   const lastMicText = useRef(micText);
   if (micText) lastMicText.current = micText;
   const micTone = state !== 'idle' ? 'live' : 'error';
@@ -552,7 +557,9 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
         )}
         <div className={`mic-note is-${lastMicTone.current}`} data-visible={!!micText} role={micTone === 'error' && micText ? 'alert' : 'status'} aria-hidden={!micText}>
           {lastMicTone.current === 'live' ? <VoiceWave active={state === 'recording'} /> : <MicOff size={13} aria-hidden="true" />}
-          <span className="mic-note__text">{lastMicText.current}</span>
+          <span className="mic-note__text" title={lastMicText.current ?? undefined}>{lastMicText.current}</span>
+          {offer.retry && <button type="button" className="mic-note__action" onClick={() => { setMicError(null); composerDictation.retry(bot.id); }}>Retry</button>}
+          {offer.discard && <button type="button" className="mic-note__action" onClick={() => { setMicError(null); composerDictation.discardRetry(); }}>Discard</button>}
           {lastMicTone.current === 'error' && <button type="button" className="mic-note__close" tabIndex={micText ? 0 : -1} onClick={() => setMicError(null)} aria-label="Dismiss"><Icon name="close" size={9} /></button>}
         </div>
       </div>

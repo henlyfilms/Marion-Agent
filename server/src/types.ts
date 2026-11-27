@@ -342,7 +342,11 @@ export interface VoiceCallRecord {
 
 export interface VoiceOption { id: string; name: string; gender?: string }
 
-export interface NoticeBody { type: 'notice'; text: string; tone?: 'info' | 'warn' | 'error' }
+export interface NoticeBody {
+  type: 'notice'; text: string; tone?: 'info' | 'warn' | 'error';
+  /** An unresolved blocker this card stands for (one card per key): see agent/runner-settings.ts. */
+  blocker?: { kind: 'runner_settings'; key: string; provider: string; setting: 'model' | 'effort' };
+}
 
 export type ActivityKind =
   | 'thinking' | 'working' | 'searching_web' | 'reading_web' | 'browsing_web' | 'on_its_computer'
@@ -365,7 +369,8 @@ export interface Routine {
   enabled: boolean; nextRunAt: number | null; lastRunAt: number | null; description: string;
 }
 
-export interface Task { id: string; botId: string; title: string; state: 'working' | 'needs_input' | 'done'; note: string; updatedAt: number }
+/** botId is the assignee (the Bot doing the work); assignedBy is the Bot that handed it out, when another Bot did. */
+export interface Task { id: string; botId: string; title: string; state: 'working' | 'needs_input' | 'done'; note: string; updatedAt: number; assignedBy?: string }
 
 export interface Memory { id: string; botId: string; text: string; createdAt: number; source?: 'chat' | 'learned' }
 

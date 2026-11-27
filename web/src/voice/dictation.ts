@@ -4,6 +4,7 @@ import { playDictationSound } from './sounds';
 import { voiceApi } from './api';
 import { micErrorMessage, microphoneId, openMic } from './audio';
 import { PcmRecorder } from './pcmRecorder';
+import { createRetryHold, type HeldRecording, type TranscriptionError } from './dictationRetry';
 
 export type DictationState = 'idle' | 'recording' | 'transcribing';
 
@@ -63,8 +64,15 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
   const active = useRef<Recording>();
   const cb = useRef({ onText, onError, language, native, getContext });
   cb.current = { onText, onError, language, native, getContext };
+  // A recording whose final transcription failed, kept in memory only (see dictationRetry) so it can be retried.
+  const [failed, setFailed] = useState<HeldRecording>();
+  const held = useRef<ReturnType<typeof createRetryHold>>();
+  held.current ??= createRetryHold(setFailed);
+  const retained = held.current;
 
   const finish = useCallback((cancel = false) => {
+    // Discarding also throws away a recording kept for retry.
+    if (cancel) retained.clear();
     const recording = active.current;
     if (!recording) return;
     clearTimeout(recording.timer);
@@ -84,6 +92,7 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
 
   const begin = useCallback(async () => {
     if (active.current) return;
+    retained.clear(); // a new recording replaces the one kept for retry
     if (typeof MediaRecorder === 'undefined') { cb.current.onError('Audio recording is unavailable in this browser.'); return; }
     const recording: Recording = { controller: new AbortController() };
     const { signal } = recording.controller;
@@ -130,14 +139,22 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
         recording.previewing?.abort();
         if (signal.aborted || !chunkCount() || Date.now() - start < 250) { idle(); return; }
         setState('transcribing');
+        const recorded = audio();
+        const native = cb.current.native;
         try {
-          const text = await voiceApi.transcribe(audio(), cb.current.language, signal, cb.current.native, { final: true, context: cb.current.getContext?.() });
+          const text = await voiceApi.transcribe(recorded, cb.current.language, signal, native, { final: true, context: cb.current.getContext?.() });
           if (!signal.aborted) {
             if (text) cb.current.onText(text);
             else cb.current.onError('No speech heard'); // short, so it never wraps the model row (owner, Nov 25)
           }
         } catch (cause) {
-          if (!signal.aborted) cb.current.onError((cause as Error).message || 'Transcription failed');
+          if (!signal.aborted) {
+            const e = cause as Partial<TranscriptionError>;
+            const message = e?.message || 'Transcription failed';
+            // Keep the audio in memory so the owner can retry without speaking again.
+            retained.hold({ audio: recorded, native, error: message, code: e?.code, retryable: e?.retryable ?? true });
+            cb.current.onError(message);
+          }
         } finally { idle(); }
       };
       if (!pcm) (media as MediaRecorder).start(SLICE_MS);
@@ -182,5 +199,26 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
   // Closing the chat mid-recording still transcribes it, so the words are kept (the owner never loses them).
   useEffect(() => () => finish(), [finish]);
 
-  return { state, interim, begin, finish };
+  /** Transcribe the recording kept after a failed transcription again. Success inserts the words and forgets the audio. */
+  const retry = useCallback(async () => {
+    if (active.current || !retained.current() || retained.busy()) return;
+    const recording: Recording = { controller: new AbortController() };
+    const { signal } = recording.controller;
+    active.current = recording;
+    setState('transcribing');
+    try {
+      const text = await retained.retry(held => voiceApi.transcribe(held.audio, cb.current.language, signal, held.native, { final: true, context: cb.current.getContext?.() }));
+      if (!signal.aborted && text !== undefined) {
+        if (text) cb.current.onText(text);
+        else cb.current.onError('No speech heard');
+      }
+    } catch (cause) {
+      if (!signal.aborted) cb.current.onError((cause as Error)?.message || 'Transcription failed');
+    } finally {
+      if (active.current === recording) { active.current = undefined; setState('idle'); }
+    }
+  }, [retained]);
+  const clearRetry = useCallback(() => retained.clear(), [retained]);
+
+  return { state, interim, begin, finish, retry, clearRetry, failed };
 }
