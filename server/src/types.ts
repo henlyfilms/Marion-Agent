@@ -232,10 +232,10 @@ export type CardBody =
   | { type: 'card'; card: 'handoff'; id: string; provider: RelayProvider; goal: string; status: 'pending' | 'started'; fallback: ChatModelSelection | null };
 
 /** Strict Cloud mode: why Cloud work can't start yet, and the fixes the owner can approve from the card. */
-export type CloudBlocker = 'gh-missing' | 'gh-auth' | 'gh-scopes' | 'not-found' | 'ambiguous' | 'no-access' | 'cloud-connect' | 'claude-missing' | 'launch-failed';
+export type CloudBlocker = 'gh-missing' | 'gh-auth' | 'gh-scopes' | 'not-found' | 'ambiguous' | 'no-access' | 'cloud-connect' | 'claude-missing' | 'launch-failed' | 'folder-trust';
 export type CloudOptionKind = 'repo' | 'gh-install' | 'gh-login' | 'gh-scopes' | 'create-repo' | 'fork' | 'retry' | 'open' | 'cancel';
 export interface CloudOption { id: string; kind: CloudOptionKind; label: string; hint?: string; repo?: string; url?: string }
-export type CloudCardStatus = 'pending' | 'working' | 'started' | 'cancelled' | 'allowed' | 'denied';
+export type CloudCardStatus = 'pending' | 'working' | 'started' | 'cancelled' | 'allowed' | 'denied' | 'expired';
 /** In-app Cloud card: 'setup' shows a repository/access blocker with fixes; 'permission' asks before a running Cloud session uses a tool. */
 export interface CloudCardBody {
   type: 'card'; card: 'cloud'; id: string; mode: 'setup' | 'permission';

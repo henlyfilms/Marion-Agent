@@ -153,7 +153,9 @@ export function ConnectCard({ row, body }: { row: Row; body: Card<'connect'> }) 
 
 // ---------------- Claude Cloud (strict: GitHub only, fixes approved right here) ----------------
 
-const CLOUD_OUTCOME: Record<string, string> = { started: 'Cloud work started', cancelled: 'Cancelled', allowed: 'Allowed', denied: 'Not allowed' };
+const CLOUD_OUTCOME: Record<string, string> = { started: 'Cloud work started', cancelled: 'Cancelled', allowed: 'Allowed', denied: 'Not allowed', expired: 'Expired' };
+/** Outcome of the dedicated folder-trust card (Trust folder / Cancel). */
+const TRUST_OUTCOME: Record<string, string> = { allowed: 'Folder trusted', denied: 'Cancelled: folder not trusted', expired: 'Expired' };
 
 export function CloudCard({ row, body }: { row: Row; body: Card<'cloud'> }) {
   const { busy, error, run } = useBusy();
@@ -161,18 +163,20 @@ export function CloudCard({ row, body }: { row: Row; body: Card<'cloud'> }) {
   const working = body.status === 'working';
   const pick = (id: string) => run(id, () => featuresApi.cloudCardAction(row.botId, row.seq, id));
   const permission = body.mode === 'permission';
+  const trust = permission && body.blocker === 'folder-trust';
+  const outcome = (trust ? TRUST_OUTCOME[body.status] : undefined) ?? CLOUD_OUTCOME[body.status] ?? body.status;
   return (
     <div className={`card approval-card cloud-card${pending || working ? '' : ' is-resolved'}`}>
       <div className="card__head">
         <ToolkitLogo name="GitHub" logo="https://logos.composio.dev/api/github" size={44} />
         <div className="card__titles">
-          <div className="card__title">{permission ? 'Allow Claude Cloud?' : body.status === 'started' ? `Claude Cloud on ${body.repo}` : 'Claude Cloud needs one step'}</div>
+          <div className="card__title">{trust ? 'Trust this folder for Claude Cloud?' : permission ? 'Allow Claude Cloud?' : body.status === 'started' ? `Claude Cloud on ${body.repo}` : 'Claude Cloud needs one step'}</div>
           <div className="card__sub">{body.title || body.query || 'Cloud work'}</div>
         </div>
       </div>
       <div className="card__body">
         {body.problem}
-        {body.solution && <><br /><br />{permission ? <code>{body.solution}</code> : body.solution}</>}
+        {body.solution && <><br /><br />{permission && !trust ? <code>{body.solution}</code> : <span style={{ whiteSpace: 'pre-line' }}>{body.solution}</span>}</>}
       </div>
       {body.device && working && (
         <div className="card__body" role="status">
@@ -193,7 +197,7 @@ export function CloudCard({ row, body }: { row: Row; body: Card<'cloud'> }) {
       ) : working ? null : (
         <div className={`card__outcome is-${body.status === 'started' || body.status === 'allowed' ? 'allowed' : 'denied'}`}>
           <Icon name={body.status === 'started' || body.status === 'allowed' ? 'check' : 'close'} size={12} opacity={0.7} />
-          {CLOUD_OUTCOME[body.status] ?? body.status}
+          {outcome}
         </div>
       )}
       {error && <div className="card__error">{error}</div>}

@@ -9,7 +9,7 @@ import { appendRow, getBotRow, getRow, updateRow } from '../store.js';
 import { executable } from '../agent/subscriptions.js';
 import { notify } from './notify.js';
 import { createGitHubRepo } from './github-repos.js';
-import { CloudLaunchError, startCloudSession, type CloudLaunchHooks } from './cloud-sessions.js';
+import { CloudLaunchError, startCloudSession, type CloudLaunchHooks, type TrustAnswer } from './cloud-sessions.js';
 import { recordCloudRequest, settleCloudRequest } from './agent-sessions.js';
 import type { CloudCardBody } from '../types.js';
 import {
@@ -47,32 +47,63 @@ let deps: CloudDeps = { ...defaults };
 export function setCloudDeps(patch: Partial<CloudDeps>) { deps = { ...deps, ...patch }; }
 export function resetCloudDeps() { deps = { ...defaults }; }
 
-/** Pending permission questions from running Cloud sessions, answered from their cards. */
-const permissionWaits = new Map<string, (allowed: boolean) => void>();
+/** Pending permission questions from running Cloud sessions, answered from their cards ('aborted' = nobody can any more). */
+const permissionWaits = new Map<string, (answer: TrustAnswer) => void>();
+/** Tests: how many permission questions are still waiting on an answer. */
+export const pendingCloudPermissions = () => permissionWaits.size;
 
 const current = (botId: string, generation: number) => {
   const bot = getBotRow(botId);
   return bot && !bot.deleted_at && bot.generation === generation ? bot : null;
 };
 
-function hooksFor(userId: string, botId: string, generation: number, goal: string, title: string | undefined, repo: CloudRepo): CloudLaunchHooks {
-  return {
-    onPermission: ({ tool, detail }) => new Promise<boolean>(resolve => {
-      if (!current(botId, generation)) return resolve(false);
+/** Ends the wait of a permission card that can no longer be answered (its launch ended) and marks the card expired. */
+function expirePermission(botId: string, id: string, seq: number, note: string) {
+  const wait = permissionWaits.get(id);
+  if (!wait) return;
+  permissionWaits.delete(id);
+  const now = getRow(botId, seq)?.body as CloudCardBody | undefined;
+  if (now?.type === 'card' && now.card === 'cloud' && now.status === 'pending') updateRow(botId, seq, { ...now, status: 'expired', note });
+  wait('aborted');
+}
+
+type LaunchHooks = CloudLaunchHooks & { onEnd: NonNullable<CloudLaunchHooks['onEnd']> };
+
+function hooksFor(userId: string, botId: string, generation: number, goal: string, title: string | undefined, repo: CloudRepo): LaunchHooks {
+  /** This launch's permission cards still waiting on the owner (card id → row seq). */
+  const open = new Map<string, number>();
+  /** 'aborted' (no card, or a card that can no longer be answered) is never reported as the owner's decline. */
+  const ask = (problem: string, solution: string, labels: { allow: string; deny: string }, alertText: string, blocker?: CloudBlocker) =>
+    new Promise<TrustAnswer>(resolve => {
+      if (!current(botId, generation)) return resolve('aborted');
       const id = randomUUID();
-      // 'Claude Code' = a question the CLI asks while launching (access, auth, repository); anything else is a tool in the Cloud sandbox.
-      const problem = tool === 'Claude Code'
-        ? `Claude Code is asking before it starts Cloud work on ${repo.nameWithOwner}.`
-        : `Claude Cloud wants to use ${tool} in its cloud sandbox for ${repo.nameWithOwner}.`;
       const card: CloudCardBody = {
         type: 'card', card: 'cloud', id, mode: 'permission', goal, title, query: repo.nameWithOwner, generation, repo: repo.nameWithOwner,
-        problem, solution: detail,
-        options: [{ id: 'allow', kind: 'retry', label: 'Allow' }, { id: 'deny', kind: 'cancel', label: "Don't allow" }], status: 'pending',
+        ...(blocker ? { blocker } : {}), problem, solution,
+        options: [{ id: 'allow', kind: 'retry', label: labels.allow }, { id: 'deny', kind: 'cancel', label: labels.deny }], status: 'pending',
       };
-      appendRow(botId, 'card', card);
-      permissionWaits.set(id, resolve);
-      alert(userId, botId, `Claude Cloud wants to use ${tool}`);
-    }),
+      const row = appendRow(botId, 'card', card);
+      open.set(id, row.seq as number);
+      permissionWaits.set(id, answer => { open.delete(id); resolve(answer); });
+      alert(userId, botId, alertText);
+    });
+  return {
+    // A tool or launch question nobody can answer any more is simply not allowed.
+    onPermission: async ({ tool, detail }) => await ask(
+      // 'Claude Code' = a question the CLI asks while launching (access, auth, repository); anything else is a tool in the Cloud sandbox.
+      tool === 'Claude Code'
+        ? `Claude Code is asking before it starts Cloud work on ${repo.nameWithOwner}.`
+        : `Claude Cloud wants to use ${tool} in its cloud sandbox for ${repo.nameWithOwner}.`,
+      detail, { allow: 'Allow', deny: "Don't allow" }, `Claude Cloud wants to use ${tool}`) === 'approved',
+    onTrust: detail => ask(
+      `Claude Code is asking whether to trust the folder it starts in. That folder is Marion's temporary Git launch folder for ${repo.nameWithOwner}: it is empty apart from a Git remote naming the GitHub repository (no project files, nothing else on this Mac), and is deleted afterwards. Claude Code will not start the Cloud session until this is answered.`,
+      `Trust folder lets Claude Code start the Cloud session on ${repo.nameWithOwner}; Cancel stops the launch.` + (detail ? `\n\nClaude Code shows: ${detail.slice(0, 600)}` : ''),
+      { allow: 'Trust folder', deny: 'Cancel' }, `Claude Code asks to trust its launch folder for ${repo.nameWithOwner}`, 'folder-trust'),
+    onEnd: outcome => {
+      const note = outcome === 'stopped' ? 'Expired: the Cloud launch was stopped.'
+        : outcome === 'failed' ? 'Expired: the Cloud launch ended before this was answered.' : 'Expired: the Cloud session finished.';
+      for (const [id, seq] of [...open]) expirePermission(botId, id, seq, note);
+    },
     onConnectionNeeded: message => showCard(userId, botId, generation, goal, title, repo.nameWithOwner, {
       ok: false, blocker: 'cloud-connect',
       problem: `Claude Cloud cannot reach ${repo.nameWithOwner} yet: ${message.slice(0, 300)}`,
@@ -116,8 +147,13 @@ export type CloudLaunchResult =
 
 /** Launch and wait for Claude to confirm the Cloud session; a launch that fails throws (CloudLaunchError) with the reason. */
 async function launchConfirmed(userId: string, botId: string, generation: number, goal: string, title: string | undefined, repo: CloudRepo, sessionId?: string) {
-  try { return await deps.launch(userId, botId, generation, goal, repo, hooksFor(userId, botId, generation, goal, title, repo), sessionId); }
-  catch (error) { throw error instanceof CloudLaunchError ? error : new CloudLaunchError(String((error as Error)?.message ?? error)); }
+  const hooks = hooksFor(userId, botId, generation, goal, title, repo);
+  try { return await deps.launch(userId, botId, generation, goal, repo, hooks, sessionId); }
+  catch (error) {
+    // It did not start: nothing can answer this launch's questions any more.
+    hooks.onEnd('failed');
+    throw error instanceof CloudLaunchError ? error : new CloudLaunchError(String((error as Error)?.message ?? error));
+  }
 }
 
 /**
@@ -173,7 +209,7 @@ export function actOnCloudCard(userId: string, botId: string, seq: number, optio
     save({ status: allowed ? 'allowed' : 'denied' });
     const wait = permissionWaits.get(body.id);
     permissionWaits.delete(body.id);
-    wait?.(allowed);
+    wait?.(allowed ? 'approved' : 'declined');
     return { done: Promise.resolve() };
   }
   if (option.kind === 'cancel') {

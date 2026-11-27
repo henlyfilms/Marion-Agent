@@ -28,7 +28,7 @@ try {
     if (args.includes('auth')) { out({loggedIn:true, authMethod:'claude.ai', apiProvider:'firstParty', subscriptionType:'max'}); process.exit(0); }
     if (!args.includes('--cloud')) process.exit(2);
     let remote = '';
-    try { remote = require('node:child_process').execFileSync('git',['remote','get-url','origin'],{encoding:'utf8'}).trim(); } catch {}
+    try { remote = require('node:child_process').execFileSync('git',['remote','get-url','origin'],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim(); } catch {}
     fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({cwd:process.cwd(), remote, files:fs.readdirSync('.')})+'\\n');
     // Like the real CLI on an account without the headless Cloud gate: stream-json is refused, a terminal launch works.
     if (args.includes('--input-format') && fs.existsSync(${JSON.stringify(join(scratch, 'terminal-only'))})) {
@@ -40,6 +40,8 @@ try {
       const w = s => process.stdout.write(s);
       let step = 0;
       const create = () => {
+        if (goal.includes('MIDESC')) { w('Created cloud session: Fix it\\r\\nView: https://claude.ai/code/session_ab\\x1b[3'); setTimeout(() => { w('0Gcd\\x1b[2Cef\\x1b[1Ggh?from=cli&m=0\\r\\n'); setTimeout(() => process.exit(0), 20); }, 60); return; }
+        if (goal.includes('MIDURL')) { w('Created cloud session: Fix it\\r\\nView: https://claude.ai/code/session_ab'); setTimeout(() => { w('\\x1b[1Xcd\\x1b[30Gef?from=cli&m=0\\r\\n'); setTimeout(() => process.exit(0), 20); }, 60); return; }
         if (goal.includes('TERM_FAIL')) { w('\\r\\n\\x1b[31mError: Could not create a cloud session: repository not accessible\\x1b[39m\\r\\n'); process.exit(1); }
         w('Created cloud session: Fix it\\r\\nSession ID: session_term_1\\r\\nView: https://claude.ai/code/session_term_1?from=cli&m=0\\r\\nResume with: claude --teleport session_term_1\\r\\n');
         if (goal.includes('ATTACH')) { let n = 0; const t = setInterval(() => { w('\\x1b[2K\\x1b[G✻ Working… (1s · esc to interrupt)\\r\\n● Edited README.md part ' + (n++) + '\\r\\n'); if (n > 3) clearInterval(t); }, 40); return; }
@@ -50,10 +52,32 @@ try {
         step = 2;
         w('\\x1b[2K\\x1b[1ADo you want to grant Claude access to octo/widget?\\r\\n\\x1b[36m❯\\x1b[39m 1. Yes\\r\\n  2. No\\r\\n');
       };
-      w('\\x1b[?25l\\x1b[2J\\x1b[H╭──────╮\\r\\n│ \\x1b[1mDo you trust the files in this folder?\\x1b[22m │\\r\\n❯ 1. Yes, proceed\\r\\n  2. No, exit\\r\\n');
+      // The folder-trust prompt. Default: numbered like Claude Code, ❯ on Yes. SQUASHED: the renderer skips blanks with
+      // ESC[nG / ESC[nX instead of spaces, no numbers, and ❯ starts on "No, exit" (listed first).
+      const squashed = goal.includes('SQUASHED');
+      const options = squashed || goal.includes('UNSPACED') ? ['No, exit', 'Yes, I trust this folder'] : ['Yes, I trust this folder', 'No, exit'];
+      let at = 0;
+      const squash = line => line.replace(/ /g, (_, i) => i % 2 ? '\\x1b[' + (i + 2) + 'G' : '\\x1b[1X');
+      const unspaced = goal.includes('UNSPACED');
+      const render = () => {
+        // The exact screen a QA run captured: no spaces between words, ❯ on "No, exit" listed before Yes, no numbers.
+        if (unspaced) return w('\\x1b[2J\\x1b[Hfolderfirst. ClaudeCode\\'llbeabletoread,edit,andexecutefileshere. Security guide ' + (at === 0 ? '❯' : ' ') + 'No,exit ' + (at === 1 ? '❯' : '') + 'Yes,Itrustthisfolder Entertoconfirm·Esctocancel\\r\\n');
+        const lines = ['╭──────╮', '│ \\x1b[1mDo you trust the files in this folder?\\x1b[22m │', "Claude Code'll be able to read, edit, and execute files here.", '',
+          ...options.map((o, i) => (i === at ? '❯ ' : '  ') + (squashed ? '' : (i + 1) + '. ') + o)];
+        w('\\x1b[?25l\\x1b[2J\\x1b[H' + lines.map(l => '\\x1b[1G' + (squashed ? squash(l) : l)).join('\\r\\n') + '\\r\\n');
+      };
+      render();
+      if (goal.includes('TRUST_THEN_DIE')) setTimeout(() => { w('\\r\\nError: Claude Code crashed while waiting\\r\\n'); process.exit(1); }, 400);
       process.stdin.on('data', d => {
         const key = String(d);
-        if (step === 0) { if (key !== '\\r') { w('Error: folder not trusted\\r\\n'); process.exit(1); } step = 1; return next(); }
+        fs.appendFileSync(${JSON.stringify(join(scratch, 'keys.log'))}, JSON.stringify({ goal: goal.split('\\n').pop().split(' ')[0], key, at }) + '\\n');
+        if (step === 0) {
+          if (key === '\\x1b[B' || key === '\\x1b[A') { at = Math.max(0, Math.min(options.length - 1, at + (key === '\\x1b[B' ? 1 : -1))); return render(); }
+          const pick = key === '\\r' ? at : !squashed && /^[1-9]$/.test(key) ? Number(key) - 1 : -1;
+          if (!options[pick] || options[pick].startsWith('No')) { w('Error: folder not trusted\\r\\n'); process.exit(1); }
+          if (goal.includes('STUCK')) return render();
+          step = 1; return next();
+        }
         if (step === 2) { if (key === '\\r') { step = 3; return create(); } w('\\r\\nError: The owner declined GitHub access.\\r\\n'); process.exit(1); }
       });
       return;
@@ -83,7 +107,7 @@ try {
   const repoMod = await import('../server/dist/features/cloud-repo.js');
   const { wantsCloud, exactRepo, repoHint, matchRepos, resolveCloudRepo, tokenScopes, ghDeviceAuth, CLOUD_PROMPT_LINE } = repoMod;
   const { cloudGoal } = await import('../server/dist/features/cloud-sessions.js');
-  const { launchCloudWork, actOnCloudCard, setCloudDeps } = await import('../server/dist/features/cloud-cards.js');
+  const { launchCloudWork, actOnCloudCard, setCloudDeps, pendingCloudPermissions } = await import('../server/dist/features/cloud-cards.js');
   const { startCloudSession } = await import('../server/dist/features/cloud-sessions.js');
   const { listSessions } = await import('../server/dist/features/agent-sessions.js');
   const { TOOLS, policyFor } = await import('../server/dist/agent/tools.js');
@@ -347,7 +371,15 @@ try {
   CS.setCloudTerminal((program, args) => [program, args]);
   writeFileSync(join(scratch, 'terminal-only'), '');
   const workCards = () => db.prepare("SELECT body FROM rows WHERE bot_id=? AND json_extract(body,'$.card')='work' ORDER BY seq").all(botId).map(r => JSON.parse(r.body));
-  const term = await tool.impl({ prompt: 'Fix the README', repo: 'octo/widget' }, ctx);
+  // Claude Code's folder-trust question: an in-app card the owner answers (never an automatic Enter).
+  const trustCardSeq = () => waitFor(() => db.prepare("SELECT seq FROM rows WHERE bot_id=? AND json_extract(body,'$.blocker')='folder-trust' AND json_extract(body,'$.status')='pending'").get(botId)?.seq, 'the folder-trust card');
+  const answerTrust = async (option = 'allow') => { const seq = await trustCardSeq(); await actOnCloudCard(userId, botId, seq, option, { local: false }).done; return seq; };
+  const keysFor = tag => existsSync(join(scratch, 'keys.log')) ? readFileSync(join(scratch, 'keys.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(k => k.goal === tag) : [];
+  const termRun = tool.impl({ prompt: 'Fix the README', repo: 'octo/widget' }, ctx);
+  const firstTrust = await answerTrust();
+  const term = await termRun;
+  assert.equal(card(firstTrust).status, 'allowed');
+  assert.deepEqual(keysFor('Fix').map(k => k.key), ['1'], 'numbered prompt: presses the number of "Yes, I trust this folder"');
   assert.match(term.output, /confirmed/);
   const termRow = await waitFor(() => listSessions(userId, { type: 'builders' }).find(s => s.cloudUrl === 'https://claude.ai/code/session_term_1' && s.status === 'completed'), 'the terminal-launched session in Sessions → Builders');
   assert.equal(termRow.kind, 'cloud');
@@ -356,18 +388,22 @@ try {
   console.log('PASS terminal launch: stream-json refused → pseudo-terminal, trust prompt answered, session URL parsed, builder card + Sessions (Builders) updated');
 
   // A failed launch is a failed tool result, never "started".
-  await assert.rejects(tool.impl({ prompt: 'TERM_FAIL fix', repo: 'octo/widget' }, ctx), error => /did NOT start/.test(error.message) && /repository not accessible/.test(error.message));
+  const failRun = tool.impl({ prompt: 'TERM_FAIL fix', repo: 'octo/widget' }, ctx);
+  await answerTrust();
+  await assert.rejects(failRun, error => /did NOT start/.test(error.message) && /repository not accessible/.test(error.message));
   await waitFor(() => listSessions(userId, { kind: 'cloud' }).find(s => s.status === 'failed' && /repository not accessible/.test(s.error ?? '')), 'the failed record');
   await waitFor(() => workCards().find(c => c.status === 'failed' && c.steps.some(s => /repository not accessible/.test(s.text))), 'a failed builder card');
   console.log('PASS launch failure: tool result fails with the CLI error, Sessions and the card say failed');
 
   // A question the CLI asks while launching becomes an in-app approval card; approving continues, declining fails.
   const asked = launchCloudWork({ userId, botId, generation, goal: 'ASK_OWNER fix', query: 'octo/widget' });
+  await answerTrust();
   const askSeq = await waitFor(() => db.prepare("SELECT seq FROM rows WHERE bot_id=? AND json_extract(body,'$.mode')='permission' AND json_extract(body,'$.status')='pending'").get(botId)?.seq, 'the launch question card');
   assert.match(card(askSeq).problem, /Claude Code is asking/); assert.match(card(askSeq).solution, /grant Claude access to octo\/widget/);
   await actOnCloudCard(userId, botId, askSeq, 'allow', { local: false }).done;
   assert.equal((await asked).started, true);
   const declined = launchCloudWork({ userId, botId, generation, goal: 'ASK_OWNER again', query: 'octo/widget' });
+  await answerTrust();
   const denySeq = await waitFor(() => db.prepare("SELECT seq FROM rows WHERE bot_id=? AND json_extract(body,'$.mode')='permission' AND json_extract(body,'$.status')='pending'").get(botId)?.seq, 'the second question card');
   await actOnCloudCard(userId, botId, denySeq, 'deny', { local: false }).done;
   await assert.rejects(declined, /declined/);
@@ -377,7 +413,7 @@ try {
   const steps = [];
   const pointerDir = mkdtempSync(join(tmpdir(), 'marion-cloud-test-'));
   const attached = await CS.relayCloudTerminal('claude', pointerDir, 'ATTACH work', new AbortController().signal,
-    { onUrl: () => {}, onProgress: line => steps.push(line) }, { idleMs: 400 });
+    { onUrl: () => {}, onProgress: line => steps.push(line), onTrust: async () => true }, { idleMs: 400 });
   rmSync(pointerDir, { recursive: true, force: true });
   assert.equal(attached.url, 'https://claude.ai/code/session_term_1'); assert.equal(attached.attached, true);
   assert.ok(steps.some(s => /Edited README\.md part 2/.test(s))); assert.ok(!steps.some(s => /esc to interrupt/.test(s)), 'spinner lines filtered');
@@ -385,6 +421,332 @@ try {
 
   // Stop from the work card ends exactly that run.
   assert.throws(() => CS.stopCloudSession(userId, botId, 'nope'), /no longer running/);
+
+  // ---------- 9. Folder trust: squashed ANSI prompt, owner decides, Yes selected deliberately, cards cleaned up ----------
+  const squashedPrompt = '\x1b[1G❯\x1b[1XNo,\x1b[5Gexit\r\n\x1b[1G\x1b[1X\x1b[2GYes,\x1b[1XI\x1b[8Gtrust\x1b[1Xthis\x1b[14Gfolder\r\n';
+  const cleaned = CS.cleanTerminal(squashedPrompt);
+  assert.match(cleaned, /❯\s*No,\s*exit/); assert.match(cleaned, /Yes,\s*I\s*trust\s*this\s*folder/);
+  // ESC[nX erases without moving the cursor: no space. ESC[nG within a line is a gap only when reading the screen.
+  assert.equal(CS.cleanTerminal('a\x1b[5Gb\x1b[3Xc\x1b[2;9Hd'), 'a bc\nd');
+  assert.equal(CS.cleanTerminal('a\x1b[5Gb\x1b[3Xc\x1b[2;9Hd', { gaps: false }), 'abc\nd');
+  // Mid-token cursor sequences never cut a session link short (it used to stop at session_ab, and that first link stuck).
+  for (const midUrl of ['View: https://claude.ai/code/session_ab\x1b[1Xcd\r\n', 'View: https://claude.ai/code/session_ab\x1b[30Gcd\r\n']) {
+    assert.equal(CS.terminalCloudUrl(CS.cleanTerminal(midUrl, { gaps: false }), { complete: true }), 'https://claude.ai/code/session_abcd', JSON.stringify(midUrl));
+  }
+  assert.equal(CS.terminalCloudUrl('View: https://claude.ai/code/session_ab', { complete: true }), null, 'a link at the very end may still be arriving');
+  assert.equal(CS.terminalCloudUrl('Session ID: session_ab\n', { complete: true }), 'https://claude.ai/code/session_ab');
+  // A chunk that ends mid-escape (ESC[3 before 0G arrives): the cut-off sequence is dropped, so its "[3" is no terminator.
+  const splitAt = 'View: https://claude.ai/code/session_ab\x1b[3';
+  assert.equal(CS.terminalCloudUrl(CS.cleanTerminal(splitAt, { gaps: false }), { complete: true }), null, 'mid-escape split: wait for the rest');
+  assert.equal(CS.terminalCloudUrl(CS.cleanTerminal(splitAt + '0Gcd\r\n', { gaps: false }), { complete: true }), 'https://claude.ai/code/session_abcd');
+  for (const cut of ['\x1b', '\x1b[', '\x1b[?25', '\x1b]0;tit', '\x1b]0;title\x1b']) {
+    assert.equal(CS.cleanTerminal('session_ab' + cut, { gaps: false }), 'session_ab', 'cut-off sequence dropped: ' + JSON.stringify(cut));
+  }
+  assert.equal(CS.cleanTerminal('a\x1b]0;t\x1b\\b c'), 'ab c', 'a complete OSC (ST) is not taken for a cut-off one');
+  // ESC[nC and ESC[1G inside a token: nothing under gaps: false (a space / line break only when reading the screen).
+  for (const jump of ['\x1b[3C', '\x1b[C', '\x1b[1G', '\x1b[G']) {
+    const mid = 'View: https://claude.ai/code/session_ab' + jump + 'cd\r\n';
+    assert.equal(CS.terminalCloudUrl(CS.cleanTerminal(mid, { gaps: false }), { complete: true }), 'https://claude.ai/code/session_abcd', JSON.stringify(jump));
+  }
+  assert.equal(CS.cleanTerminal('a\x1b[2Cb\x1b[1Gc'), 'a  b\nc', 'gaps still drawn when reading the screen');
+  assert.ok(CS.isTrustPrompt('❯No,exit\nYes,Itrustthisfolder'));
+  assert.ok(CS.isTrustPrompt("Doyoutrustthefilesinthisfolder?"));
+  assert.ok(CS.isTrustPrompt("Claude Code’ll be able to read, edit, and execute files here."));
+  assert.ok(!CS.isTrustPrompt('Do you want to grant Claude access to octo/widget?'));
+  const DOWN = '\x1b[B', UP = '\x1b[A';
+  assert.deepEqual(CS.trustSelection('❯No,exit\nYes,Itrustthisfolder'), { number: null, key: DOWN }, 'pointer on No above Yes: one step down');
+  assert.deepEqual(CS.trustSelection('Yes, I trust this folder\n❯ No, exit'), { number: null, key: UP }, 'pointer on No below Yes: one step up');
+  assert.deepEqual(CS.trustSelection('❯ Yes, I trust this folder\n  No, exit'), { number: null, key: '\r' });
+  assert.deepEqual(CS.trustSelection('❯ 1. Yes, I trust this folder\n  2. No, exit'), { number: '1', key: '\r' });
+  assert.deepEqual(CS.trustSelection('  1. No, exit\n❯ 2. Yes, I trust this folder'), { number: '2', key: '\r' });
+  assert.deepEqual(CS.trustSelection('❯ No, exit\n  Show details\n  Yes, I trust this folder'), { number: null, key: DOWN }, '3 options: ❯ on the first is one step, not Enter');
+  assert.deepEqual(CS.trustSelection('  No, exit\n❯ Show details\n  Yes, I trust this folder'), { number: null, key: DOWN }, '3 options: ❯ on the middle one is not Yes');
+  assert.deepEqual(CS.trustSelection('Do you trust it?\n❯ Yes, I trust this folder\n  No, exit\nDo you trust it?\n  Yes, I trust this folder\n❯ No, exit'), { number: null, key: UP }, 'only the latest render counts');
+  assert.deepEqual(CS.trustSelection('Yes, I trust this folder\nNo, exit'), { number: null, key: null }, 'no pointer, no number: nothing is pressed');
+  assert.equal(CS.trustSelection('Do you trust the files in this folder?'), null, 'no Yes option drawn yet');
+
+  // selectTrustOption re-reads the terminal after every key and presses Enter only with ❯ confirmed on Yes.
+  const fakeMenu = ({ options, at = 0, drop = 0, lagMs = 0 }) => {
+    const yes = options.findIndex(o => o.startsWith('Yes'));
+    const render = () => 'Do you trust the files in this folder?\n' + options.map((o, i) => (i === at ? '❯ ' : '  ') + o).join('\n') + '\n';
+    let since = render();
+    const typed = [];
+    return { typed, yes, term: {
+      read: () => since,
+      wait: ms => delay(ms),
+      type: key => {
+        typed.push({ key, at }); since = '';
+        if (key === '\r' || /^\d$/.test(key)) return;
+        if (drop > 0) { drop--; return; }
+        at = Math.max(0, Math.min(options.length - 1, at + (key === DOWN ? 1 : -1)));
+        const shot = render();
+        if (lagMs) setTimeout(() => { since += shot; }, lagMs); else since += shot;
+      },
+    } };
+  };
+  const fast = { pollMs: 10, redrawMs: 250, settleMs: 40, numberMs: 200, timeoutMs: 3000 };
+  const enterOnYes = (menu, what) => {
+    const enters = menu.typed.filter(k => k.key === '\r');
+    assert.equal(enters.length, 1, what + ': one Enter'); assert.equal(enters[0].at, menu.yes, what + ': Enter only with ❯ on Yes');
+    assert.equal(menu.typed.at(-1).key, '\r', what + ': Enter is the last key');
+  };
+  const three = fakeMenu({ options: ['No, exit', 'Show details', 'Yes, I trust this folder'] });
+  assert.equal((await CS.selectTrustOption(three.term, fast)).ok, true);
+  assert.deepEqual(three.typed.map(k => k.key), [DOWN, DOWN, '\r'], '3 options: two arrows, each confirmed by a redraw, then Enter');
+  enterOnYes(three, '3 options');
+  const lagging = fakeMenu({ options: ['No, exit', 'Yes, I trust this folder'], lagMs: 150 });
+  assert.equal((await CS.selectTrustOption(lagging.term, fast)).ok, true);
+  assert.deepEqual(lagging.typed.map(k => k.key), [DOWN, '\r'], 'delayed redraw: waits for it, no extra arrow, no early Enter');
+  enterOnYes(lagging, 'delayed redraw');
+  const dropped = fakeMenu({ options: ['No, exit', 'Yes, I trust this folder'], drop: 1 });
+  assert.equal((await CS.selectTrustOption(dropped.term, fast)).ok, true);
+  assert.deepEqual(dropped.typed.map(k => k.key), [DOWN, DOWN, '\r'], 'dropped arrow: stepped again, never a blind Enter');
+  enterOnYes(dropped, 'dropped arrow');
+  const below = fakeMenu({ options: ['No, exit', 'Yes, I trust this folder', 'Show details'], at: 2 });
+  assert.equal((await CS.selectTrustOption(below.term, fast)).ok, true);
+  assert.deepEqual(below.typed.map(k => k.key), [UP, '\r']); enterOnYes(below, '❯ below Yes');
+  const deaf = fakeMenu({ options: ['No, exit', 'Yes, I trust this folder'], drop: Infinity });
+  const deafResult = await CS.selectTrustOption(deaf.term, { ...fast, maxSteps: 3 });
+  assert.equal(deafResult.ok, false, 'arrows never arrive: fails');
+  assert.ok(!deaf.typed.some(k => k.key === '\r'), 'no Enter without ❯ on Yes'); assert.equal(deaf.typed.length, 3, 'bounded retries');
+  const numbered = fakeMenu({ options: ['1. Yes, I trust this folder', '2. No, exit'], at: 1 });
+  assert.equal((await CS.selectTrustOption(numbered.term, fast)).ok, true);
+  assert.deepEqual(numbered.typed.map(k => k.key), ['1'], 'numbered: the number of Yes, and no Enter when the prompt does not redraw');
+
+  // Fix 2a: after a number key, Enter only when the prompt is proven to still wait with ❯ on Yes (never on a stale frame).
+  const TRUST_ON_YES = 'Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit\n';
+  const TRUST_ON_NO = 'Do you trust the files in this folder?\n  1. Yes, I trust this folder\n❯ 2. No, exit\n';
+  const afterNumber = async ({ frames, screen }) => {
+    let since = TRUST_ON_NO, shown = TRUST_ON_NO;
+    const typed = [];
+    const result = await CS.selectTrustOption({ read: () => since, wait: ms => delay(ms), screen: () => shown,
+      type: key => {
+        typed.push(key); since = '';
+        if (key === '1') for (const [ms, text, scr] of frames) setTimeout(() => { since += text; shown = scr ?? screen; }, ms);
+      } }, fast);
+    return { result, typed };
+  };
+  const NEXT = 'Creating cloud session…\n';
+  // (i) The number answered it: one last render with ❯ on Yes, then the next screen (it erases the prompt).
+  let run = await afterNumber({ frames: [[20, TRUST_ON_YES, TRUST_ON_YES], [60, NEXT, NEXT]] });
+  assert.equal(run.result.ok, true); assert.deepEqual(run.typed, ['1'], 'stale frame, then the next screen: no Enter');
+  // Same, with both in one read.
+  run = await afterNumber({ frames: [[20, TRUST_ON_YES + NEXT, NEXT]] });
+  assert.deepEqual(run.typed, ['1'], 'stale frame and next screen in one read: no Enter');
+  // The next screen arrives late (after the stale frame looked settled): still inside the watched window, no Enter.
+  run = await afterNumber({ frames: [[20, TRUST_ON_YES, TRUST_ON_YES], [150, NEXT, NEXT]] });
+  assert.deepEqual(run.typed, ['1'], 'late next screen inside numberMs: no Enter');
+  // A stale frame with ❯ still on No: no arrows after a number key (they would go to the next screen).
+  run = await afterNumber({ frames: [[20, TRUST_ON_NO, TRUST_ON_NO], [60, NEXT, NEXT]] });
+  assert.deepEqual(run.typed, ['1'], 'stale ❯-on-No frame after a number: no arrows, no Enter');
+  // (ii) The number only moved ❯: the prompt redraws with ❯ on Yes and stays on screen, so it still needs Enter.
+  run = await afterNumber({ frames: [[20, TRUST_ON_YES, TRUST_ON_YES]] });
+  assert.equal(run.result.ok, true); assert.deepEqual(run.typed, ['1', '\r'], 'number moved ❯ only: Enter on the waiting prompt');
+  // No screen to read: a stale frame cannot be told from a waiting prompt, so no Enter.
+  {
+    let since = TRUST_ON_NO; const typed = [];
+    await CS.selectTrustOption({ read: () => since, wait: ms => delay(ms),
+      type: key => { typed.push(key); since = ''; if (key === '1') setTimeout(() => { since = TRUST_ON_YES; }, 20); } }, fast);
+    assert.deepEqual(typed, ['1'], 'no screen: no Enter after a number');
+  }
+
+  // Fix 2c: 10+ options. ❯ on "10. Yes" is Enter (not Down); the two-digit number is never typed (it could read as "1").
+  assert.deepEqual(CS.trustSelection('Do you trust the files in this folder?\n  9. No, exit\n❯ 10. Yes, I trust this folder'), { number: '10', key: '\r' });
+  assert.deepEqual(CS.trustSelection('Do you trust the files in this folder?\n❯ 9. No, exit\n  10. Yes, I trust this folder'), { number: '10', key: DOWN });
+  assert.deepEqual(CS.trustSelection('Do you trust the files in this folder?\n> 10. Yes, I trust this folder\n  11. No, exit'), { number: '10', key: '\r' }, 'ASCII > pointer before a two-digit number');
+  const ten = (at) => ({ ...fakeMenu({ options: [...Array.from({ length: 9 }, (_, i) => `${i + 1}. Option ${i + 1}`), '10. Yes, I trust this folder', '11. No, exit'], at }), yes: 9 });
+  const tenOnYes = ten(9);
+  assert.equal((await CS.selectTrustOption(tenOnYes.term, fast)).ok, true);
+  assert.deepEqual(tenOnYes.typed.map(k => k.key), ['\r'], '❯ already on "10. Yes": Enter only, no Down, no digits'); enterOnYes(tenOnYes, '10 options');
+  const tenBelow = ten(10);
+  assert.equal((await CS.selectTrustOption(tenBelow.term, fast)).ok, true);
+  assert.deepEqual(tenBelow.typed.map(k => k.key), [UP, '\r'], '❯ on 11: one Up to 10, then Enter'); enterOnYes(tenBelow, '11 options');
+
+  // P0 regression: a number answers the trust prompt; the NEXT prompt ("Do you want to proceed? ❯ 1. Yes, proceed") is the
+  // owner's to answer on its own card. It is never auto-confirmed here, with or without the old trust render above it.
+  assert.equal(CS.trustSelection('Do you want to proceed?\n❯ 1. Yes, proceed\n  2. No'), null, 'a bare "Yes, proceed" prompt is not the trust prompt');
+  assert.equal(CS.trustSelection('Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit\nDo you want to proceed?\n❯ 1. Yes, proceed\n  2. No'), null, 'a question after the trust prompt: a different prompt');
+  assert.equal(CS.trustSelection('Do you trust the files in this folder?\n❯ 1. Yes, I trust this folder\nAllow Bash(rm -rf x)?\n❯ 1. Yes\n  2. No'), null, 'no arrows/Enter onto a following tool prompt');
+  assert.deepEqual(CS.trustSelection('Do you trust the files in this folder?\n\n/tmp/x\n\n❯ 1. Yes, proceed\n  2. No, exit'), { number: '1', key: '\r' }, 'the older trust dialog ("Yes, proceed" under its header) still works');
+  assert.deepEqual(CS.trustSelection('❯ 1. Yes, proceed\n  2. No, exit', { known: true }), { number: '1', key: '\r' }, 'right after an arrow it is still the trust prompt');
+  for (const next of ['Do you want to proceed?\n❯ 1. Yes, proceed\n  2. No\n', 'Do you trust the files in this folder?\n  1. Yes, proceed\n  2. No, exit\nDo you want to proceed?\n❯ 1. Yes, proceed\n  2. No\n']) {
+    let since = 'Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit\n';
+    const typed = [];
+    const result = await CS.selectTrustOption({ read: () => since, wait: ms => delay(ms), screen: () => next,
+      type: key => { typed.push(key); since = ''; if (key === '1') setTimeout(() => { since = next; }, 30); } }, fast);
+    assert.equal(result.ok, true);
+    assert.deepEqual(typed, ['1'], 'the following "Yes, proceed" prompt gets no Enter: ' + JSON.stringify(next));
+  }
+
+  // Partial redraws: after an arrow Claude Code may redraw only the changed cells (old ❯ blanked, new ❯ drawn), so the output
+  // since the key holds no option text. That is a redraw (not a dropped key), read from the whole screen.
+  assert.equal(CS.terminalScreen('Do you trust the files in this folder?\r\n❯ No, exit\r\n  Yes, I trust this folder\r\n\x1b[2A\x1b[1G \x1b[1B\x1b[1G❯'),
+    'Do you trust the files in this folder?\n  No, exit\n❯ Yes, I trust this folder');
+  assert.equal(CS.terminalScreen('abc\x1b[2;5Hxy\x1b[1;2H\x1b[K\r\n\x1b[2KZ'), 'a\nZ', 'absolute moves and line erases');
+  const partialMenu = ({ withScreen }) => {
+    let raw = 'Do you trust the files in this folder?\r\n❯ No, exit\r\n  Yes, I trust this folder\r\n', since = raw, at = 0;
+    const typed = [];
+    return { typed, term: {
+      read: () => CS.cleanTerminal(since), wait: ms => delay(ms),
+      ...withScreen ? { screen: () => CS.terminalScreen(raw) } : {},
+      type: key => {
+        typed.push({ key, at }); since = '';
+        if (key !== DOWN || at === 1) return;
+        at = 1;
+        const delta = '\x1b[2A\x1b[1G \x1b[1B\x1b[1G❯\x1b[2B\x1b[1G';
+        raw += delta; since += delta;
+      },
+    } };
+  };
+  const partial = partialMenu({ withScreen: true });
+  assert.equal(CS.cleanTerminal('\x1b[2A\x1b[1G \x1b[1B\x1b[1G❯').includes('Yes'), false, 'the delta itself has no "Yes" text');
+  assert.equal((await CS.selectTrustOption(partial.term, fast)).ok, true);
+  assert.deepEqual(partial.typed.map(k => k.key), [DOWN, '\r'], 'partial redraw: one arrow (not re-stepped as dropped), then Enter');
+  assert.equal(partial.typed.at(-1).at, 1, 'Enter only with ❯ on Yes');
+  const blind = partialMenu({ withScreen: false });
+  const blindResult = await CS.selectTrustOption(blind.term, { ...fast, timeoutMs: 800 });
+  assert.equal(blindResult.ok, false, 'no screen to read the partial redraw: fails safely');
+  assert.match(blindResult.reason, /redrew only in part/);
+  assert.deepEqual(blind.typed.map(k => k.key), [DOWN], 'no extra arrows, no Enter');
+  console.log('PASS folder trust: a later "Yes, proceed" prompt is never auto-confirmed; partial (❯-only) redraws are read from the screen, never treated as dropped');
+
+  // The card detail: from the question on, or the latest output (never the oldest) when the question line is not in view.
+  assert.equal(CS.trustDetail('old stuff\nDo you trust the files in this folder?\n❯ Yes'), 'Do you trust the files in this folder?\n❯ Yes');
+  const tailOnly = CS.trustDetail('OLDEST ' + 'x'.repeat(12_000) + ' ❯ Yes, I trust this folder');
+  assert.ok(tailOnly.endsWith('❯ Yes, I trust this folder') && !tailOnly.includes('OLDEST'), 'no question line: the tail, not the oldest output');
+  // Several renders in the buffer: the latest one, from its own question line (not the oldest render).
+  const render = (pointer) => `Do you trust the files in this folder?\nClaude Code'll be able to read, edit, and execute files here.\n${pointer}\n`;
+  assert.equal(CS.trustDetail('OLD ' + render('❯ No, exit') + render('❯ Yes, I trust this folder')),
+    "Do you trust the files in this folder?\nClaude Code'll be able to read, edit, and execute files here.\n❯ Yes, I trust this folder");
+  assert.equal(CS.trustDetail(render('❯ No, exit') + "Claude Code'll be able to read, edit, and execute files here.\n❯ Yes"),
+    'read, edit, and execute files here.\n❯ Yes', 'latest render without a question line: from its own "read, edit" line');
+
+  // (a)+(b) Direct terminal launch: onTrust fires, the startup clock pauses while the owner thinks (startupMs 700, answer after 1500),
+  // then ❯ moves from "No, exit" to Yes with the down arrow and Enter is pressed only there; the session URL comes back.
+  const trustDir = mkdtempSync(join(tmpdir(), 'marion-cloud-test-'));
+  const trustAsked = [];
+  const trustedRun = await CS.relayCloudTerminal('claude', trustDir, 'SQUASHED trust', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async detail => { trustAsked.push(detail); await delay(1500); return true; } }, { startupMs: 700 });
+  assert.equal(trustedRun.url, 'https://claude.ai/code/session_term_1');
+  assert.equal(trustAsked.length, 1, 'asked once'); assert.match(trustAsked[0], /trust/i);
+  const squashedKeys = keysFor('SQUASHED');
+  assert.deepEqual(squashedKeys.map(k => k.key), ['\x1b[B', '\r'], 'down to Yes, then Enter');
+  assert.equal(squashedKeys.find(k => k.key === '\r').at, 1, 'Enter pressed with ❯ on "Yes, I trust this folder", never on "No, exit"');
+  // Without an answer, the same short startup window still times out.
+  await assert.rejects(CS.relayCloudTerminal('claude', trustDir, 'SQUASHED slow', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onPrompt: undefined, onTrust: undefined }, { startupMs: 300 }), /nobody can answer/);
+
+  // (c) Cancel: Esc is sent and the launch fails cleanly.
+  await assert.rejects(CS.relayCloudTerminal('claude', trustDir, 'SQUASHED deny', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => false }, { startupMs: 300 }),
+    error => error instanceof CS.CloudLaunchError && error.message === 'Owner declined folder trust' && error.cardShown === true);
+  await waitFor(() => keysFor('SQUASHED').some(k => k.key === '\x1b'), 'Esc on decline');
+  assert.ok(!keysFor('SQUASHED').filter(k => k.key === '\r').some(k => k.at === 0), 'never Enter on "No, exit"');
+  // A trust question nobody can answer any more (conversation reset) is not the owner's decline, and shows no card.
+  await assert.rejects(CS.relayCloudTerminal('claude', trustDir, 'SQUASHED aborted', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => 'aborted' }, { startupMs: 300 }),
+    error => error instanceof CS.CloudLaunchError && error.message === CS.FOLDER_TRUST_ABORTED && error.cardShown === false);
+  // A session link split across output chunks, with mid-token ESC[1X / ESC[30G, comes back whole.
+  const midUrl = await CS.relayCloudTerminal('claude', trustDir, 'MIDURL run', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => true }, { startupMs: 3000 });
+  assert.equal(midUrl.url, 'https://claude.ai/code/session_abcdef');
+  // A chunk that ends mid-escape (ESC[3 | 0G), then ESC[2C / ESC[1G inside the link: the whole link, not session_ab.
+  const midEsc = await CS.relayCloudTerminal('claude', trustDir, 'MIDESC run', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => true }, { startupMs: 3000 });
+  assert.equal(midEsc.url, 'https://claude.ai/code/session_abcdefgh');
+  // Fix 2b: the selection itself throws: the launch fails promptly and cleanly (no unhandled rejection, no stuck clock).
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  const throwStart = Date.now();
+  await assert.rejects(CS.relayCloudTerminal('claude', trustDir, 'SQUASHED throws', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => true },
+    { startupMs: 60_000, trust: { get pollMs() { throw new Error('terminal read failed'); } } }),
+    error => /could not confirm "Yes, I trust this folder" was selected \(terminal read failed\)/.test(error.message));
+  assert.ok(Date.now() - throwStart < 10_000, 'failed right away, not after the startup clock');
+  await delay(50);
+  process.off('unhandledRejection', onUnhandled);
+  assert.deepEqual(unhandled, [], 'no unhandled rejection');
+  rmSync(trustDir, { recursive: true, force: true });
+
+  // Through the in-app card: "Trust folder" / "Cancel", explained, and the launch proceeds or fails.
+  const viaCard = launchCloudWork({ userId, botId, generation, goal: 'SQUASHED card', query: 'octo/widget' });
+  const trustSeq = await trustCardSeq();
+  const trustCard = card(trustSeq);
+  assert.equal(trustCard.mode, 'permission'); assert.equal(trustCard.blocker, 'folder-trust');
+  assert.deepEqual(trustCard.options.map(o => o.label), ['Trust folder', 'Cancel']);
+  assert.match(trustCard.problem, /temporary Git launch folder for octo\/widget/);
+  assert.equal(pendingCloudPermissions(), 1);
+  await actOnCloudCard(userId, botId, trustSeq, 'allow', { local: false }).done;
+  assert.equal((await viaCard).started, true);
+  assert.equal(pendingCloudPermissions(), 0);
+  const deniedRun = launchCloudWork({ userId, botId, generation, goal: 'SQUASHED refuse', query: 'octo/widget' });
+  const deniedSeq = await answerTrust('deny');
+  await assert.rejects(deniedRun, error => error.message === 'Owner declined folder trust' && error.cardShown === true);
+  assert.equal(card(deniedSeq).status, 'denied');
+  assert.ok(keysFor('SQUASHED').some(k => k.key === '\x1b'));
+  // The conversation reset before the question came up: no card, and the launch fails as such (not "Owner declined").
+  const trustCards = () => db.prepare("SELECT COUNT(*) n FROM rows WHERE bot_id=? AND json_extract(body,'$.blocker')='folder-trust'").get(botId).n;
+  const cardsBefore = trustCards();
+  await assert.rejects(launchCloudWork({ userId, botId, generation: generation + 1, goal: 'SQUASHED reset', query: 'octo/widget' }),
+    error => error.message === CS.FOLDER_TRUST_ABORTED && error.message !== CS.FOLDER_TRUST_DECLINED && error.cardShown === false);
+  assert.equal(trustCards(), cardsBefore, 'no folder-trust card for a reset conversation');
+  assert.equal(pendingCloudPermissions(), 0);
+
+  // (d) A pending trust card expires, and its wait is dropped, when the launch is stopped or fails.
+  const stoppedRun = launchCloudWork({ userId, botId, generation, goal: 'SQUASHED stop', query: 'octo/widget' });
+  const stopSeq = await trustCardSeq();
+  assert.equal(pendingCloudPermissions(), 1);
+  const stopId = await waitFor(() => { const c = workCards().at(-1); return c.status === 'running' && c.stop?.sessionId; }, 'the running work card with Stop');
+  CS.stopCloudSession(userId, botId, stopId);
+  await assert.rejects(stoppedRun, /Stopped/);
+  await waitFor(() => card(stopSeq).status === 'expired', 'the trust card to expire on stop');
+  assert.match(card(stopSeq).note, /stopped/);
+  assert.equal(pendingCloudPermissions(), 0, 'stop removes the wait');
+  assert.throws(() => actOnCloudCard(userId, botId, stopSeq, 'allow', { local: false }), /already done/);
+  const diedRun = launchCloudWork({ userId, botId, generation, goal: 'SQUASHED TRUST_THEN_DIE', query: 'octo/widget' });
+  const diedSeq = await trustCardSeq();
+  await assert.rejects(diedRun, /crashed while waiting/);
+  await waitFor(() => card(diedSeq).status === 'expired', 'the trust card to expire on failure');
+  assert.equal(pendingCloudPermissions(), 0, 'failure removes the wait');
+  console.log('PASS folder trust: squashed ANSI prompt detected; owner card (Trust folder / Cancel); startup clock paused; ❯ moved to Yes before Enter; Cancel → Esc + "Owner declined folder trust"; stop/failure expire the card and its wait');
+
+  // ---------- 10. The exact unspaced prompt from QA (it used to stall 2m 30s, then error with raw terminal lines) ----------
+  const QA_PROMPT = "folderfirst. ClaudeCode'llbeabletoread,edit,andexecutefileshere. Security guide ❯No,exit Yes,Itrustthisfolder Entertoconfirm·Esctocancel";
+  assert.ok(CS.isTrustPrompt(QA_PROMPT), 'unspaced QA prompt recognised');
+  assert.deepEqual(CS.trustSelection(QA_PROMPT), { number: null, key: DOWN }, '❯ on "No,exit" first: Down (Enter only once the redraw shows ❯ on Yes)');
+  assert.match(CS.waitingPrompt(QA_PROMPT), /folder-trust/);
+  assert.equal(CS.FOLDER_TRUST_DECLINED, 'Owner declined folder trust');
+  // Without a dedicated trust hook, the generic onPrompt card answers it (never a silent Enter).
+  const qaDir = mkdtempSync(join(tmpdir(), 'marion-cloud-test-'));
+  const prompted = [];
+  const viaPrompt = await CS.relayCloudTerminal('claude', qaDir, 'UNSPACED prompt', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onPrompt: async text => { prompted.push(text); return true; } }, { startupMs: 5000 });
+  assert.equal(viaPrompt.url, 'https://claude.ai/code/session_term_1'); assert.equal(prompted.length, 1);
+  // Startup clock paused while the owner decides (startupMs 400, owner answers after 1200 ms) and resumed afterwards.
+  let waitingSince = 0;
+  const paused = await CS.relayCloudTerminal('claude', qaDir, 'UNSPACED pause', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => { waitingSince = Date.now(); await delay(1200); return true; } }, { startupMs: 400 });
+  assert.ok(waitingSince > 0 && paused.url, 'no timeout while the owner was deciding');
+  // A timeout on a recognised prompt is a clean sentence, not raw terminal lines.
+  await assert.rejects(CS.relayCloudTerminal('claude', qaDir, 'UNSPACED STUCK', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => true }, { startupMs: 600 }),
+    error => /did not start within 1 seconds\. Claude Code was still waiting on its folder-trust question/.test(error.message)
+      && !/Entertoconfirm|Security guide/.test(error.message));
+  rmSync(qaDir, { recursive: true, force: true });
+  // Through the app: the folder-trust action card, Allow selects Yes (not No), Cancel fails cleanly.
+  const qaAllow = launchCloudWork({ userId, botId, generation, goal: 'UNSPACED allow', query: 'octo/widget' });
+  const qaSeq = await trustCardSeq();
+  assert.equal(card(qaSeq).blocker, 'folder-trust'); assert.deepEqual(card(qaSeq).options.map(o => o.label), ['Trust folder', 'Cancel']);
+  await actOnCloudCard(userId, botId, qaSeq, 'allow', { local: false }).done;
+  assert.equal((await qaAllow).started, true);
+  const allowKeys = keysFor('UNSPACED').filter(k => k.key === '\r');
+  assert.ok(allowKeys.length > 0 && allowKeys.every(k => k.at === 1), 'every Enter landed on "Yes, I trust this folder", never "No, exit"');
+  const qaCancel = launchCloudWork({ userId, botId, generation, goal: 'UNSPACED cancel', query: 'octo/widget' });
+  const qaCancelSeq = await answerTrust('deny');
+  await assert.rejects(qaCancel, error => error.message === 'Owner declined folder trust');
+  assert.equal(card(qaCancelSeq).status, 'denied');
+  console.log('PASS QA unspaced folder-trust prompt: folder-trust card (Trust folder / Cancel), Allow → Down+Enter on Yes, Cancel → "Owner declined folder trust", startup clock paused while asking');
   CS.setCloudTerminal();
 } finally {
   rmSync(scratch, { recursive: true, force: true });
