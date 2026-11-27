@@ -51,6 +51,8 @@ export function resetCloudDeps() { deps = { ...defaults }; }
 const permissionWaits = new Map<string, (answer: TrustAnswer) => void>();
 /** Tests: how many permission questions are still waiting on an answer. */
 export const pendingCloudPermissions = () => permissionWaits.size;
+/** Whether a Cloud permission card can still be answered (its launch is waiting in this process; a restart ends every wait). */
+export const hasCloudPermissionWait = (id: string) => permissionWaits.has(id);
 
 const current = (botId: string, generation: number) => {
   const bot = getBotRow(botId);

@@ -3,7 +3,7 @@ import { saveAttachments, type UploadedAttachment } from './attachments.js';
 import { db, now } from './db.js';
 import { isWorkFxChoice, resolveAvatarShape } from './avatarShapes.js';
 import { hub } from './lib/hub.js';
-import type { Bot, LiveState, Row, RowBody, RowKind, Routine, Task } from './types.js';
+import { WAITING_CARD_TYPES, type Bot, type LiveState, type Row, type RowBody, type RowKind, type Routine, type Task } from './types.js';
 import { Cron } from 'croner';
 import { chatModelForBot } from './agent/chat-model.js';
 
@@ -71,6 +71,10 @@ export function emitBot(botId: string) {
 
 // ---------- rows ----------
 
+/** A card that can wait on the owner was written: Tasks → Waiting on You (and its badge) reload from the rows themselves. */
+const waitingCard = (body: RowBody) => body.type === 'card' && (WAITING_CARD_TYPES as readonly string[]).includes(body.card);
+export function emitWaiting(userId: string, botId?: string) { hub.emit(userId, { type: 'waiting', ...(botId ? { botId } : {}) }); }
+
 function toRow(r: any): Row {
   return { botId: r.bot_id, generation: r.generation, seq: r.seq, updatedSeq: r.updated_seq, kind: r.kind, body: JSON.parse(r.body), createdAt: r.created_at };
 }
@@ -94,6 +98,7 @@ export function appendRow(botId: string, kind: RowKind, body: RowBody, attachmen
   });
   const { userId, row } = tx();
   hub.emit(userId, { type: 'rows', botId, generation: row.generation, rows: [row] });
+  if (waitingCard(body)) emitWaiting(userId, botId);
   return row;
 }
 
@@ -110,6 +115,7 @@ export function updateRow(botId: string, seq: number, body: RowBody): Row | null
   const res = tx();
   if (!res) return null;
   hub.emit(res.userId, { type: 'rows', botId, generation: res.row.generation, rows: [res.row] });
+  if (waitingCard(body)) emitWaiting(res.userId, botId);
   return res.row;
 }
 
@@ -162,6 +168,8 @@ export function clearConversation(botId: string) {
   db.prepare('DELETE FROM pending_turns WHERE bot_id=?').run(botId);
   setLive(botId, { modelUsage: undefined, voiceReply: undefined });
   hub.emit(b.user_id, { type: 'cleared', botId, generation: b.generation + 1 });
+  // Cards of the old conversation can no longer be answered: they leave Waiting on You.
+  emitWaiting(b.user_id, botId);
 }
 
 // ---------- LLM history (Responses API input items) ----------

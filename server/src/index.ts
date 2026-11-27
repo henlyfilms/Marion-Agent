@@ -16,6 +16,7 @@ import { featuresApi } from './routes-features.js';
 import { startLifeSync } from './features/life-link.js';
 import { startLifeOutbox } from './features/life-outbox.js';
 import { recoverAgentSessions } from './features/agent-sessions.js';
+import { sweepStaleWaiting } from './features/waiting.js';
 import { busyCount, isRetiring, reportedAppBuild, retire, setAppBuild, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
 import { startAutoUpdate } from './features/app-update.js';
 import { appEnv, env } from './env.js';
@@ -113,6 +114,10 @@ if (appEnv('NO_SCHEDULER') !== '1') {
   catch (error) { console.warn('[marion-agent] could not resume interrupted turns', (error as Error).message); }
 }
 try { recoverAgentSessions(); } catch (error) { console.warn('[marion-agent] could not tidy relayed sessions', (error as Error).message); }
+// Cards nobody can answer any more (a Cloud permission whose launch died with the old process, a closed Cloud request, an
+// approval with no paused turn) close now, so Tasks → Waiting on You and its badge only count what still needs the owner.
+try { const n = sweepStaleWaiting(); if (n) console.log(`[marion-agent] closed ${n} stale waiting card(s)`); }
+catch (error) { console.warn('[marion-agent] could not tidy waiting cards', (error as Error).message); }
 startIdleWatcher();
 startOrphanWatch();
 if (appEnv('NO_SCHEDULER') !== '1') startAutoUpdate();

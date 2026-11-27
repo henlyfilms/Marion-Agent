@@ -232,6 +232,19 @@ export type CardBody =
   | SignInCardBody
   | { type: 'card'; card: 'handoff'; id: string; provider: RelayProvider; goal: string; status: 'pending' | 'started'; fallback: ChatModelSelection | null };
 
+/** Card types that can wait on the owner. Work cards are excluded: their question is always also shown as a question card. */
+export const WAITING_CARD_TYPES = ['approval', 'question', 'connect', 'draft', 'cloud', 'sign-in', 'handoff'] as const;
+export type WaitingCardType = typeof WAITING_CARD_TYPES[number];
+
+/**
+ * One thing the owner needs to answer or act on (Tasks → Waiting on You). It is never stored separately: a 'card' item is
+ * the chat's own card row (the single source of truth, resolved through the same routes as in chat) and a 'task' item is
+ * a task a bot marked needs_input while no card from that bot is already waiting.
+ */
+export type WaitingItem =
+  | { key: string; kind: 'card'; card: WaitingCardType; botId: string; botName: string; at: number; row: Row }
+  | { key: string; kind: 'task'; botId: string; botName: string; at: number; task: Task };
+
 /** A provider CLI needs the owner to sign in (Gemini → Google): the chat shows this instead of a plain error. */
 export interface SignInCardBody {
   type: 'card'; card: 'sign-in'; id: string; provider: 'gemini'; providerName: string;
@@ -524,6 +537,8 @@ export type ServerEvent =
   | { type: 'notify'; notification: AppNotification }
   /** A relayed agent session started, finished or rotated (or a bot's chat session changed): Sessions views reload. */
   | { type: 'sessions'; botId?: string }
+  /** Something that waits on the owner (an action card or a "needs input" task) appeared, was resolved or expired: Tasks → Waiting on You and its badge reload. */
+  | { type: 'waiting'; botId?: string }
   | { type: 'ping' };
 
 export type NotificationKind = 'finished' | 'approval' | 'question' | 'error' | 'bot-message' | 'routine' | 'learned';

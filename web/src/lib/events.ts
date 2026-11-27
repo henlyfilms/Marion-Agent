@@ -18,6 +18,8 @@ export function startEvents(): () => void {
     st.loadBots().catch(() => {});
     st.loadComputer().catch(() => {});
     if (st.selectedBotId) { st.loadRows(st.selectedBotId).catch(() => {}); st.loadRoutines(st.selectedBotId).catch(() => {}); }
+    // Anything answered, added or expired while disconnected (e.g. a server restart): Waiting on You and its badge reload.
+    window.dispatchEvent(new CustomEvent('marion-agent:event', { detail: { type: 'waiting' } }));
   };
 
   const open = () => {

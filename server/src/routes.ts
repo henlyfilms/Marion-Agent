@@ -32,6 +32,7 @@ import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort,
 import { orderChats, tier } from './chat-order.js';
 import { AVATAR_SHAPE_IDS, isAvatarColor, isStemColor, isWorkFxChoice, normalizeAvatarShape } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
+import { listWaiting, ownerReplied } from './features/waiting.js';
 
 export const api = new Hono<AuthVars>();
 
@@ -525,6 +526,8 @@ api.post('/bots/:id/messages', bodyLimit({
     ...(call ? { from: { kind: 'voice' as const, id: call, name: 'Voice call' } } : {}),
     ...(attachments.length ? { attachments: attachments.map(({ id, name, mime, size }) => ({ id, name, mime, size })) } : {}),
   }, attachments);
+  // A reply in the chat is the answer to its open question cards and the input its needs-input tasks waited for.
+  if (current.kind !== 'room') ownerReplied(b.id, text || 'Sent an attachment', { questions: true });
   // A busy bot (a turn, a relayed session or an orchestration is running) still answers every new message right away, in
   // parallel with the running work (see runsConcurrently in the loop); nothing running is ever aborted by a normal message,
   // including "work on this first" (it only jumps the queue). Only an explicit stop / cancel / abort aborts running work.
@@ -596,18 +599,28 @@ api.post('/approvals/:id', async (c) => {
   if (decision !== 'deny' && remoteAccessFor(c) &&
     db.prepare("SELECT 1 FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND b.user_id=? AND a.tool='github_create_repo'")
       .get(c.req.param('id'), c.get('user').id)) return c.json({ error: 'Approve GitHub repository creation on the Mac.' }, 403);
-  try { resolveApproval(c.get('user').id, c.req.param('id'), decision); } catch { return c.json({ error: 'not found' }, 404); }
-  return c.json({ ok: true });
+  if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') return c.json({ error: 'Choose allow, always or deny.' }, 400);
+  let first: boolean;
+  try { first = resolveApproval(c.get('user').id, c.req.param('id'), decision); } catch { return c.json({ error: 'not found' }, 404); }
+  // Already decided (in chat, in Tasks, or a second tap) or expired: nothing changes and the bot is not resumed twice.
+  return first ? c.json({ ok: true }) : c.json({ error: 'This was already answered.' }, 409);
 });
 
+// Question and connect cards are answered from chat or from Tasks → Waiting on You through these same routes. The body is
+// read before the card is checked so the check and the update run without an await in between: of two racing answers
+// only the first is taken.
 api.post('/bots/:id/cards/:seq/answer', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
+  const raw = await c.req.json<{ answer?: unknown }>().catch(() => null);
+  const answer = typeof raw?.answer === 'string' ? raw.answer.trim().slice(0, 4000) : '';
   const row = getRow(b.id, Number(c.req.param('seq')));
-  const { answer } = await c.req.json<{ answer: string }>();
   if (!row || row.body.type !== 'card' || row.body.card !== 'question') return c.json({ error: 'not a question' }, 400);
+  if (row.body.status !== 'pending') return c.json({ error: 'This question was already answered.' }, 409);
+  if (!answer) return c.json({ error: 'Write an answer first.' }, 400);
   updateRow(b.id, row.seq, { ...row.body, status: 'answered', answer });
   appendRow(b.id, 'message', { type: 'message', role: 'user', text: answer });
+  ownerReplied(b.id, answer, { questions: false });
   enqueue(b.id, { type: 'user', text: `[Answer to "${row.body.question}"] ${answer}` });
   return c.json({ ok: true });
 });
@@ -617,6 +630,7 @@ api.post('/bots/:id/cards/:seq/dismiss', (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'card') return c.json({ error: 'not a card' }, 400);
+  if ((row.body.card === 'question' || row.body.card === 'connect') && row.body.status !== 'pending') return c.json({ error: 'This card is already done.' }, 409);
   const body: any = { ...row.body, status: row.body.card === 'connect' ? 'skipped' : 'dismissed' };
   updateRow(b.id, row.seq, body);
   if (row.body.card === 'connect') enqueue(b.id, { type: 'system', text: `The user skipped connecting ${row.body.toolkitName}. Continue without it.` });
@@ -661,6 +675,12 @@ api.delete('/routines/:id', async (c) => {
 api.get('/bots/:id/tasks', (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   return b ? c.json({ tasks: listTasks(b.id) }) : c.json({ error: 'not found' }, 404);
+});
+
+// Tasks → Waiting on You: action cards and needs-input tasks across all chats (the badge is items.length).
+api.get('/waiting', (c) => {
+  const items = listWaiting(c.get('user').id);
+  return c.json({ items, count: items.length });
 });
 
 api.get('/tasks', (c) => {

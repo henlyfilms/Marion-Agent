@@ -205,7 +205,12 @@ function runSide(botId: string, trigger: Trigger) {
 /** Resolves when every concurrent side run has finished (used by tests and graceful shutdown). */
 export const settleSideRuns = async () => { while (sideJobs.size) await Promise.all([...sideJobs]); };
 
+/** Tests only: observe (and swallow) triggers instead of running real turns. */
+let enqueueOverride: ((botId: string, trigger: Trigger) => void) | null = null;
+export function setEnqueueForTests(fn: ((botId: string, trigger: Trigger) => void) | null) { enqueueOverride = fn; }
+
 export function enqueue(botId: string, trigger: Trigger) {
+  if (enqueueOverride) { enqueueOverride(botId, trigger); return; }
   if (trigger.type === 'user' && trigger.voice) { enqueueVoice(botId, trigger); return; }
   if (runsConcurrently(botId, trigger)) { runSide(botId, trigger); return; }
   if (trigger.type === 'user' && trigger.queued) {
@@ -1171,15 +1176,22 @@ function describeArgs(args: any): string {
   return flat.join('\n\n').slice(0, 1200);
 }
 
-/** Resolve an approval card from the UI. */
-export function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'always' | 'deny') {
+/**
+ * Resolve an approval card from the UI (chat or Tasks → Waiting on You: the same card, the same rules).
+ * Returns false when it was already resolved (a second tap, the other surface, or a superseded/expired card): only the
+ * first decision counts, and only it resumes the bot.
+ */
+export function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'always' | 'deny'): boolean {
   const ap = db.prepare('SELECT a.*, b.user_id FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=?').get(approvalId) as any;
   if (!ap || ap.user_id !== userId) throw new Error('not found');
-  if (ap.status !== 'pending') return;
+  if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') throw new Error('bad decision');
+  if (ap.status !== 'pending') return false;
   const status = decision === 'deny' ? 'denied' : decision === 'always' && !['ask_grok', 'github_create_repo'].includes(ap.tool) ? 'always' : 'allowed';
-  db.prepare('UPDATE approvals SET status=?, resolved_at=? WHERE id=?').run(status, now(), approvalId);
+  // Claimed atomically: a racing second decision changes nothing.
+  if (!db.prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'").run(status, now(), approvalId).changes) return false;
   if (status === 'always') db.prepare("INSERT OR REPLACE INTO policies(user_id,tool,mode) VALUES (?,?,'always_allow')").run(userId, ap.tool);
   const card = getRow(ap.bot_id, ap.row_seq);
   if (card && card.body.type === 'card' && card.body.card === 'approval') updateRow(ap.bot_id, ap.row_seq, { ...card.body, status });
   enqueue(ap.bot_id, { type: 'resume' });
+  return true;
 }
