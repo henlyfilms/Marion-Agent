@@ -212,7 +212,8 @@ const format = (results: MemberResult[]) => results.map(r => r.failed
 
 export async function teamDelegate(botId: string, args: any, signal: AbortSignal, triggerAttachments?: UploadedAttachment[]) {
   const settings = team(botId);
-  const list: { member?: string; task?: string }[] = Array.isArray(args?.assignments) ? args.assignments.slice(0, 6) : [];
+  // No cap on assignments: in parallel mode every one runs at the same time.
+  const list: { member?: string; task?: string }[] = Array.isArray(args?.assignments) ? args.assignments : [];
   if (!list.length || list.some(a => !a || typeof a.task !== 'string' || !a.task.trim())) throw new Error('Give each assignment a task.');
   const chain = args?.mode === 'chain';
   const picked = new Set<string>();
@@ -228,8 +229,9 @@ export async function teamDelegate(botId: string, args: any, signal: AbortSignal
   const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const owner = (db.prepare('SELECT user_id FROM bots WHERE id=?').get(botId) as { user_id: string } | undefined)?.user_id ?? '';
   const asked = list.map(a => String(a.task ?? '')).join('\n\n');
-  const track = (task: string) => (member: TeamMember): SessionTrack => ({
-    id: `team:${botId}:${runId}:${member.id}`, kind: 'team', userId: owner, botId, request: task || asked,
+  // Parallel assignments get their own session each (`slot`), even when two go to the same member at the same time.
+  const track = (task: string, slot?: number) => (member: TeamMember): SessionTrack => ({
+    id: `team:${botId}:${runId}:${member.id}${slot === undefined ? '' : `:${slot}`}`, kind: 'team', userId: owner, botId, request: task || asked,
     title: sessionTitle(task || asked), role: 'member', agent: member.label, groupId: `team:${botId}:${runId}`,
   });
   // The owner's screenshots and screen-recording frames go to Claude, Codex and Gemini members too.
@@ -256,8 +258,8 @@ export async function teamDelegate(botId: string, args: any, signal: AbortSignal
       }
     } else {
       working(botId, plan.map(step => step.member.label));
-      const settled = await Promise.all(plan.map(step =>
-        runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task, media.note), signal, media.images, inRepo(track(step.task)), folder)));
+      const settled = await Promise.all(plan.map((step, slot) =>
+        runMember(settings.members, step.member, m => memberPrompt(botId, m, settings.members, step.task, media.note), signal, media.images, inRepo(track(step.task, slot)), folder)));
       for (const result of settled) { show(botId, result); results.push(result); }
     }
   } finally {
@@ -278,7 +280,7 @@ export async function teamDiscuss(botId: string, args: any, signal: AbortSignal,
   const rounds = Math.min(3, Math.max(1, Number(args?.rounds) || 2));
   const names: string[] = Array.isArray(args?.members) && args.members.length ? args.members : settings.members.map(m => m.label);
   const chosen: TeamMember[] = [];
-  for (const name of names.slice(0, 4)) {
+  for (const name of names) {
     const member = resolveMember(settings.members, name, settings.balanceUsage, new Set(chosen.map(m => m.id)));
     if (member) chosen.push(member);
   }

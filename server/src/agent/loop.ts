@@ -70,13 +70,29 @@ import { mergeQueuedUser, PRIORITY_NOTE } from './chat-intent.js';
 const MAX_STEPS = 60;
 /** Recent history items a concurrent side run starts from. */
 const SIDE_WINDOW = 24;
+/**
+ * What the bot answered in concurrent runs, kept for its memory until written into the stored history. Sized for big parallel
+ * bursts (50+ subagent reports at once) with fuller text per exchange, while still bounded: past the cap the oldest notes are
+ * dropped and the flushed memory says how many.
+ */
+const SIDE_NOTES = 200;
+/** Characters kept per side note: what was asked, and what the bot answered. */
+const SIDE_NOTE_ASK_CHARS = 4000;
+const SIDE_NOTE_REPLY_CHARS = 8000;
 const KEEP_IMAGES = 3;
 /** Images handed to a subscription CLI in one turn (a screen-recording lesson sends up to 12 frames). */
 const MAX_PROVIDER_IMAGES = 16;
 /** Conversation items replayed to subscription CLIs each turn (older context lives in the compaction summary). */
 const SUBSCRIPTION_WINDOW = 26;
 
-// ---------- per-bot serial queue ----------
+// ---------- per-bot runs: one main lane plus any number of concurrent runs ----------
+//
+// Nothing a bot is sent ever waits behind its running work. If the bot is idle, a message starts a "main" run (it owns the
+// stored chat history and approvals); while anything runs, every new message (from the user, another bot, a subagent
+// report, a routine or a system notice) starts its own concurrent "side" run at once, with its own abort controller and
+// its own in-memory history, so a 10-minute task never blocks a reply. Only two things keep strict order: resuming an
+// approved action (it continues the paused main run's saved state) and voice-call turns (in order among themselves only;
+// see enqueueVoice). The bot stays "working" until the last of its runs ends (activeRuns ref count).
 
 const queues = new Map<string, Promise<void>>();
 const aborts = new Map<string, AbortController>();
@@ -122,16 +138,19 @@ const abortAll = (botId: string) => {
   for (const c of [...(sideAborts.get(botId) ?? [])]) stop(c);
   return { count, labels };
 };
-/** Contexts of concurrent runs that answer the user (not another bot): they can't pause for approval. */
+/** Contexts of concurrent runs that are not answering another bot (user, routine, system): they can't pause for approval. */
 const userSideRuns = new WeakSet<object>();
 /** What the bot answered other bots in parallel; shown to it at the start of its next main turn so its memory stays whole. */
 const sideNotes = new Map<string, string[]>();
+/** Side notes dropped past the SIDE_NOTES cap since the last flush (so the memory says so instead of silently losing them). */
+const droppedSideNotes = new Map<string, number>();
 
 function chain(botId: string, job: () => Promise<void>) {
   const prev = queues.get(botId) ?? Promise.resolve();
   const next = prev.then(job).catch((e) => console.error('[agent] turn failed', botId, e));
   queues.set(botId, next);
   next.finally(() => { if (queues.get(botId) === next) queues.delete(botId); });
+  return next;
 }
 
 /** User messages that waited behind the running turn; they all run together as one merged turn. */
@@ -148,24 +167,32 @@ const consumeStopAnnounced = (botId: string) => {
 };
 
 /**
- * A question from another bot is answered right away, in parallel, while this bot is busy with a turn, a relayed agent or
- * an orchestration. Replies to this bot's own earlier messages (autoReply) and reports from its own subagents still queue,
- * because they continue the main work and must be seen in order.
+ * Whether this trigger starts its own concurrent run right now instead of taking the main lane. True for everything sent
+ * to a busy bot (a turn, a relayed agent, an orchestration or an owner-started CLI session is running): the user's messages,
+ * questions and replies from other bots, reports from its own subagents (any number of them at once), routines and system
+ * notices are all answered right away, in parallel with the running work. Not for an approved action (`resume` continues
+ * the paused main run), the legacy merged-wait path (`queued`), voice turns (ordered by enqueueVoice) or group chats.
  */
 export function runsConcurrently(botId: string, trigger: Trigger) {
-  // The user's own messages never wait behind a running turn or relay: each one is answered right away, in parallel.
-  // (Voice calls keep their own strict turn order, and group chats dispatch to their members.)
-  if (trigger.type === 'user') {
-    if (trigger.voice || trigger.queued || !queues.has(botId)) return false;
-    const row = getBotRow(botId);
-    return Boolean(row) && row.kind !== 'room';
-  }
-  if (trigger.type !== 'bot' || trigger.autoReply) return false;
-  if (!(queues.has(botId) || activeRuns.has(botId))) return false;
+  if (trigger.type === 'resume') return false;
+  if (trigger.type === 'user' && (trigger.voice || trigger.queued)) return false;
+  if (!isBotBusy(botId)) return false;
   const row = getBotRow(botId);
-  if (!row || row.kind === 'room') return false;
-  const from = getBotRow(trigger.fromBotId);
-  return !(from && from.parent_bot_id === botId);
+  return Boolean(row) && row.kind !== 'room';
+}
+
+/** Voice turns of a call: strictly in order among themselves, but never stuck behind the bot's other (text) work. */
+const voiceChains = new Map<string, Promise<void>>();
+function enqueueVoice(botId: string, trigger: Extract<Trigger, { type: 'user' }>) {
+  const prev = voiceChains.get(botId) ?? Promise.resolve();
+  // Decided when this turn's slot comes up (synchronously, so nothing can slip in between the check and the start):
+  // a bot with other work running answers it in a concurrent run, an idle one takes the main lane (approvals, usage footer,
+  // full stored history). This voice chain's own entry is already set by then, so it must not count: isBotBusy() would
+  // always be true here. Earlier voice turns have finished (they are chained), so only the main queue and active runs count.
+  const next = prev.then(() => (mainLaneBusy(botId) && getBotRow(botId)?.kind !== 'room' ? runSide(botId, trigger) : chain(botId, () => runTurn(botId, trigger))))
+    .catch((e) => console.error('[agent] voice turn failed', botId, e));
+  voiceChains.set(botId, next);
+  next.finally(() => { if (voiceChains.get(botId) === next) voiceChains.delete(botId); });
 }
 
 const sideJobs = new Set<Promise<void>>();
@@ -179,6 +206,7 @@ function runSide(botId: string, trigger: Trigger) {
 export const settleSideRuns = async () => { while (sideJobs.size) await Promise.all([...sideJobs]); };
 
 export function enqueue(botId: string, trigger: Trigger) {
+  if (trigger.type === 'user' && trigger.voice) { enqueueVoice(botId, trigger); return; }
   if (runsConcurrently(botId, trigger)) { runSide(botId, trigger); return; }
   if (trigger.type === 'user' && trigger.queued) {
     pendingUser.set(botId, [...(pendingUser.get(botId) ?? []), trigger]);
@@ -259,7 +287,9 @@ export function runInBotQueue<T>(botId: string, job: () => Promise<T>): Promise<
   return result;
 }
 
-export const isBotBusy = (botId: string) => queues.has(botId) || activeRuns.has(botId);
+/** A main-lane turn is queued/running or any run (main, side, owner-started session) is active; ignores voice chains. */
+const mainLaneBusy = (botId: string) => queues.has(botId) || activeRuns.has(botId);
+export const isBotBusy = (botId: string) => queues.has(botId) || activeRuns.has(botId) || voiceChains.has(botId);
 
 // ---------- messages that arrive while the bot is busy ----------
 
@@ -301,7 +331,7 @@ function startedWaiting(botId: string) {
   return state.count;
 }
 /** How many bots have a turn running or waiting (the desktop app waits for 0 before it swaps in a new server build). */
-export const busyBotCount = () => new Set([...queues.keys(), ...activeRuns.keys()]).size;
+export const busyBotCount = () => new Set([...queues.keys(), ...activeRuns.keys(), ...voiceChains.keys()]).size;
 
 function enqueueBotMessage(fromBotId: string, toBotId: string, text: string, depth: number, opts: { autoReply?: boolean; attachments?: UploadedAttachment[] } = {}) {
   const from = getBotRow(fromBotId);
@@ -458,7 +488,7 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
   if (trigger.type !== 'resume' && !(trigger.type === 'system' && trigger.text.startsWith(CONTINUE_MARK))) {
     try { db.prepare('INSERT INTO inflight_turns(id,bot_id,generation,label,started_at) VALUES (?,?,?,?,?)').run(inflightId, botId, bot.generation, runLabels.get(ctrl) ?? '', now()); } catch { /* best effort */ }
   }
-  if (side && trigger.type === 'user') userSideRuns.add(ctx);
+  if (side && trigger.type !== 'bot') userSideRuns.add(ctx);
   ctx.turn = { id: `${botId}:${bot.generation}:${startSeq}${side ? `:side${++sideCounter}` : ''}`, startedAt: now(), request: trigger.type === 'user' ? (trigger.handoffGoal ?? trigger.text) : '', handoff: trigger.type === 'user' && trigger.handoffGoal !== undefined };
   if (!side) {
     // The main turn picks up what the bot answered other bots while it was busy.
@@ -587,11 +617,13 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
     }
     const sameChat = getBotRow(botId)?.generation === bot.generation;
     if (sameChat && !side) addUsageFooter(botId, bot.generation, startSeq, usage);
-    const voiceReply = !side && voice && sameChat && {
+    const sideReply = side ? sideHistoryReply(sideHistory!, sideSeed) : undefined;
+    // A voice turn answered in a concurrent run speaks its own reply (the main run may be writing to the chat meanwhile).
+    const voiceReply = voice && sameChat && {
       call: voice.call, seq: voice.seq, generation: bot.generation,
       text: ctrl.signal.aborted ? 'I stopped.' : failure ? 'Something went wrong. The details are in the chat.'
-        : stillPending ? `I need your approval in the chat for ${getLive(botId).awaiting?.reason ?? 'that action'}.`
-        : (replyTextSince(botId, bot.generation, startSeq) || waitingOnUser(botId, bot.generation, startSeq)).slice(0, 4000),
+        : !side && stillPending ? `I need your approval in the chat for ${getLive(botId).awaiting?.reason ?? 'that action'}.`
+        : (side ? sideReply || '' : replyTextSince(botId, bot.generation, startSeq) || waitingOnUser(botId, bot.generation, startSeq)).slice(0, 4000),
     };
     // A question card the bot (or a CLI it relayed) asked stays flagged as "needs input" until answered.
     const question = !side && !stillPending && sameChat && !ctrl.signal.aborted
@@ -606,11 +638,13 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
       ...(!side && sameChat && usage.length ? { modelUsage: usage } : {}),
     });
     emitBot(botId);
-    const sideReply = side ? sideHistoryReply(sideHistory!, sideSeed) : undefined;
-    if (side && sideReply && (trigger.type === 'bot' || trigger.type === 'user') && sameChat) {
+    if (side && sideReply && trigger.type !== 'resume' && sameChat) {
       const notes = sideNotes.get(botId) ?? [];
-      notes.push(`${trigger.type === 'bot' ? trigger.fromName : 'The user'} asked: ${trigger.text.slice(0, 600)}\nYou answered: ${sideReply.slice(0, 1200)}`);
-      sideNotes.set(botId, notes.slice(-6));
+      const who = trigger.type === 'bot' ? trigger.fromName : trigger.type === 'user' ? 'The user' : trigger.type === 'routine' ? `The routine "${trigger.name}"` : 'A system notice';
+      const asked = trigger.type === 'routine' ? trigger.prompt : trigger.text;
+      notes.push(`${who} asked: ${asked.slice(0, SIDE_NOTE_ASK_CHARS)}\nYou answered: ${sideReply.slice(0, SIDE_NOTE_REPLY_CHARS)}`);
+      if (notes.length > SIDE_NOTES) droppedSideNotes.set(botId, (droppedSideNotes.get(botId) ?? 0) + notes.length - SIDE_NOTES);
+      sideNotes.set(botId, notes.slice(-SIDE_NOTES));
     }
     // The last run just ended: write what was answered in parallel into the stored history now (never while an approval is pending).
     if (!othersLeft && !stillPending && sameChat) flushSideNotes(botId);
@@ -641,24 +675,32 @@ function scheduleResume(botId: string, generation: number, label: string, reason
 export function resumeInterruptedTurns() {
   const rows = db.prepare('SELECT bot_id, generation, label, started_at FROM inflight_turns ORDER BY started_at').all() as { bot_id: string; generation: number; label: string; started_at: number }[];
   db.prepare('DELETE FROM inflight_turns').run();
-  const seen = new Set<string>();
+  // A bot can have had several runs in flight at once: one resume per bot names all of them.
+  const cut = new Map<string, { generation: number; labels: string[] }>();
   for (const r of rows) {
     const bot = getBotRow(r.bot_id);
-    if (!bot || bot.hidden || bot.generation !== r.generation || bot.kind === 'room' || seen.has(r.bot_id)) continue;
+    if (!bot || bot.hidden || bot.generation !== r.generation || bot.kind === 'room') continue;
     if (now() - r.started_at > 6 * 3600_000) continue;
-    seen.add(r.bot_id);
-    resumeAttempts.delete(r.bot_id); // a restart is a fresh start, not another failed try
-    scheduleResume(r.bot_id, r.generation, r.label, '', true);
+    const entry = cut.get(r.bot_id) ?? { generation: r.generation, labels: [] };
+    if (r.label && !entry.labels.includes(r.label)) entry.labels.push(r.label);
+    cut.set(r.bot_id, entry);
   }
-  return seen.size;
+  for (const [botId, { generation, labels }] of cut) {
+    resumeAttempts.delete(botId); // a restart is a fresh start, not another failed try
+    scheduleResume(botId, generation, labels.join('; ').slice(0, 600), '', true);
+  }
+  return cut.size;
 }
 
 /** Move what the bot answered in parallel into its stored history. Only call when no run is active and no approval is pending. */
 function flushSideNotes(botId: string) {
   const notes = sideNotes.get(botId);
+  const dropped = droppedSideNotes.get(botId) ?? 0;
   sideNotes.delete(botId);
+  droppedSideNotes.delete(botId);
   if (!notes?.length) return;
-  appendHistory(botId, [{ role: 'user', content: `[While you were busy you also answered in parallel. Those messages and your replies, for your memory only:]\n${notes.join('\n')}` }]);
+  const omitted = dropped ? ` (${dropped} older parallel exchange${dropped === 1 ? ' was' : 's were'} left out to save memory)` : '';
+  appendHistory(botId, [{ role: 'user', content: `[While you were busy you also answered in parallel. Those messages and your replies, for your memory only${omitted}:]\n${notes.join('\n')}` }]);
 }
 
 /** Route replies between bots and tell the user what happened. Never throws. */
@@ -704,8 +746,8 @@ function sideHistoryReply(history: any[], seed: number) {
 
 /**
  * Tools that are independent of each other and of the bot's screen, so several in one model response can run at the same time:
- * relayed agents and orchestrations (the per-folder lock still keeps two sessions out of the same project folder),
- * subagent and bot messages, and other model questions. Screen, shell and file tools always run one after another.
+ * relayed agents and orchestrations (any number, even on the same provider or in the same folder; nothing waits for another
+ * session), subagent and bot messages, and other model questions. Screen, shell and file tools always run one after another.
  */
 const PARALLEL_SAFE = new Set(['ask_subscription', 'orchestrate', 'ask_grok', 'send_to_bot', 'spawn_subagent', 'message_subagent', 'team_delegate', 'team_discuss']);
 
@@ -778,7 +820,7 @@ async function processCalls(ctx: ToolCtx, st: PendingState): Promise<boolean> {
 
     let res: ToolResult;
     if (decision === 'block') {
-      res = { output: userSideRuns.has(ctx) && !ap ? 'This action needs the user\'s approval, which is not possible while you answer this extra message in parallel with your other work. Tell the user what you would do and that it needs their OK; they can send "work on this first" to have you stop the other work and handle it right now.'
+      res = { output: userSideRuns.has(ctx) && !ap ? 'This action needs the user\'s approval, which is not possible while you handle this in parallel with your other work. Tell the user what you would do and that it needs their OK; they can ask again once the other work has finished, or say stop to end it first.'
         : ctx.side && !ap ? 'This action needs the user\'s approval, which is not possible while you answer another bot in parallel. Say so in your reply instead of retrying.'
         : 'The user declined this action. Do not retry it. Find another way, or tell the user what you could not do.', summary: 'Not allowed' };
       updateRow(botId, c.rowSeq, { ...body, status: 'denied', summary: 'Not allowed' });
@@ -1029,7 +1071,7 @@ async function callModel(
 ): Promise<{ output: any[] }> {
   const { model, effort } = selection;
   const { botId, userId } = ctx;
-  // Runs inside the bot's serial queue, so compaction can't race a turn.
+  // Compaction is guarded (it only replaces history it read unchanged), so it can't race a concurrent run.
   const history = await modelHistory(ctx, voice);
   // The model is only called when no approval is pending, so every orphaned call can be repaired.
   const prompt = await systemPrompt(userId, botId, Boolean(voice));

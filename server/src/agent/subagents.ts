@@ -16,17 +16,14 @@ export function initSubagents() {
   }
 }
 
-/** Helpers working at the same time. Finished (idle) helpers that were not removed yet do not use up a slot. */
-export const MAX_ACTIVE_SUBAGENTS = 6;
-const MAX_TOTAL_SUBAGENTS = 20;
-
-export function createSubagent(parentId: string, goal: string, label?: string, isBusy: (botId: string) => boolean = () => true) {
+/**
+ * Start a helper. There is no cap on how many helpers a Bot has or how many work at the same time: each one is its own
+ * hidden bot row with a unique id (one synchronous INSERT, so helpers started together never collide), its own chat,
+ * history and live status, and runs its own turns independently of its parent and its siblings.
+ */
+export function createSubagent(parentId: string, goal: string, label?: string) {
   const p = db.prepare('SELECT * FROM bots WHERE id=?').get(parentId) as any;
   if (!p) throw new Error('parent not found');
-  const helpers = db.prepare('SELECT id FROM bots WHERE parent_bot_id=? AND hidden=1').all(parentId) as { id: string }[];
-  const active = helpers.filter(h => isBusy(h.id)).length;
-  if (active >= MAX_ACTIVE_SUBAGENTS) throw new Error(`${active} subagents are already working at once. Wait for one to report back (or stop one), then start the next.`);
-  if (helpers.length >= MAX_TOTAL_SUBAGENTS) throw new Error(`This Bot has ${helpers.length} subagents. Remove finished ones with stop_subagent first.`);
   const id = newId('sub');
   const name = `${p.name} · ${(label || goal).replace(/\s+/g, ' ').slice(0, 32)}`;
   const instructions =

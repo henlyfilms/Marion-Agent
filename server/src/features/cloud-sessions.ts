@@ -469,6 +469,8 @@ export function relayCloudTerminal(program: string, folder: string, goal: string
     let url: string | null = null;
     let trusted = false;
     let asking = false;
+    /** The owner's folder-trust card is open: an abort now (conversation reset, interrupt) leaves it unanswered. */
+    let trustWaiting = false;
     /** Raw output since the trust selection's last key (null = no selection running). */
     let sinceTrustKey: string | null = null;
     /** Decided outcome while the CLI is still reacting to the last key (e.g. Esc on a declined trust prompt). */
@@ -499,7 +501,8 @@ export function relayCloudTerminal(program: string, folder: string, goal: string
       if (waitingOn) return new CloudLaunchError(`${fallback} Claude Code was still waiting on ${waitingOn}.`);
       return new Error((error || out.split('\n').map(line => line.trim()).filter(Boolean).slice(-6).join(' ') || fallback).slice(0, 800));
     };
-    const onAbort = () => finish(signal.reason instanceof Error ? signal.reason : new Error('Stopped.'));
+    const onAbort = () => finish(ending ?? (trustWaiting ? new CloudLaunchError(FOLDER_TRUST_ABORTED)
+      : signal.reason instanceof Error ? signal.reason : new Error('Stopped.')));
     signal.addEventListener('abort', onAbort, { once: true });
     // The startup clock stops while the owner answers a card, and starts over once they did.
     let startup: NodeJS.Timeout | undefined;
@@ -512,17 +515,20 @@ export function relayCloudTerminal(program: string, folder: string, goal: string
     startClock();
     const cap = setTimeout(() => finish(url ? null : failure('Claude Cloud did not start.')), maxMs);
     const type = (keys: string) => { if (!settled && !child.stdin.destroyed) child.stdin.write(keys); };
-    /** Ink reads one key per input event: separate keys get a short gap. */
-    const press = (keys: string[]) => keys.forEach((key, i) => setTimeout(() => type(key), 150 * (i + 1)));
-    const ask = <T,>(question: Promise<T>, fallback: T, answer: (ok: T) => void) => {
+    /** Unexpected failures while handling an answer fail the launch now: never a paused clock or an unhandled rejection. */
+    const crashed = (error: unknown) => { if (!settled) finish(error instanceof Error ? error : new Error(String(error))); };
+    const ask = <T,>(question: () => Promise<T>, fallback: T, answer: (ok: T) => void) => {
       asking = true;
       pauseClock();
-      void question.catch(() => fallback).then(ok => {
+      let pending: Promise<T>;
+      // A hook that throws instead of rejecting counts as no answer, like a rejection.
+      try { pending = Promise.resolve(question()); } catch (error) { pending = Promise.reject(error); }
+      void pending.catch(() => fallback).then(ok => {
         asking = false;
         if (settled) return;
         startClock();
         answer(ok);
-      });
+      }).catch(crashed);
     };
     const trustFolder = () => {
       // Re-read the terminal after every key; Enter only once ❯ is confirmed on "Yes, I trust this folder". The selection
@@ -543,7 +549,7 @@ export function relayCloudTerminal(program: string, folder: string, goal: string
         sinceTrustKey = null;
         if (result.ok) startClock();
         else if (!settled) finish(new Error(`Claude Code asked to trust its launch folder, but Marion could not confirm "Yes, I trust this folder" was selected (${result.reason}), so it did not press Enter.`));
-      });
+      }).catch(crashed);
     };
     const onData = (chunk: Buffer) => {
       raw = (raw + chunk.toString('utf8')).slice(-400_000);
@@ -564,7 +570,9 @@ export function relayCloudTerminal(program: string, folder: string, goal: string
         // A dedicated folder-trust card when the caller has one; otherwise the generic prompt card. Never a blind Enter.
         const askTrust = hooks.onTrust ?? hooks.onPrompt;
         if (!askTrust) return finish(new CloudLaunchError('Claude Code asked to trust its launch folder and nobody can answer it here.'));
-        ask<TrustAnswer | boolean>(askTrust(trustDetail(recent)), 'aborted', given => {
+        trustWaiting = true;
+        ask<TrustAnswer | boolean>(() => askTrust(trustDetail(recent)), 'aborted', given => {
+          trustWaiting = false;
           const answer = trustAnswer(given);
           if (answer === 'approved') return trustFolder();
           // Esc answers "no" in Claude Code; give it a moment to read the key before the terminal closes. A reset
@@ -581,7 +589,7 @@ export function relayCloudTerminal(program: string, folder: string, goal: string
       if (choice && !asking && !answered.has(choice[0]) && !isTrustPrompt(choice[0])) {
         answered.add(choice[0]);
         if (!hooks.onPrompt) type('\x1b');
-        else ask(hooks.onPrompt(choice[0].replace(/\s+\n/g, '\n').trim().slice(0, 1500)), false, ok => type(ok ? '\r' : '\x1b'));
+        else ask(() => hooks.onPrompt!(choice[0].replace(/\s+\n/g, '\n').trim().slice(0, 1500)), false, ok => type(ok ? '\r' : '\x1b'));
       }
       if (url) {
         for (const line of cleanTerminal(chunk.toString('utf8')).split('\n')) {
@@ -757,7 +765,10 @@ export function startCloudSession(userId: string, botId: string, generation: num
     } catch (error) {
       const stopped = signal.aborted;
       outcome = stopped ? 'stopped' : 'failed';
-      const message = stopped
+      // Interrupted (conversation reset) while the folder-trust card was open: say so, not a plain stop. The work
+      // card's own Stop button stays a stop.
+      const trustAborted = error instanceof CloudLaunchError && error.message === FOLDER_TRUST_ABORTED && !stop.signal.aborted;
+      const message = trustAborted ? FOLDER_TRUST_ABORTED : stopped
         ? (cloudUrl ? 'Stopped in Marion; the Cloud session may still be running on Claude.' : 'Stopped before the Cloud session started.')
         : (error as Error).message;
       finishAgentSession(track, 'claude', { status: stopped ? 'stopped' : 'failed', error: message, startedAt, endedAt: Date.now() });

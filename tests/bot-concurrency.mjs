@@ -1,6 +1,6 @@
 // A busy bot still answers other bots right away: a question from another bot runs in parallel with the bot's long task
 // (relayed agent / orchestration / user turn), the bot stays "working" until ALL runs finish, then goes idle, and the answer
-// reaches the asker. Subagent reports and replies to the bot's own questions stay in order. Safety: stop aborts every run.
+// reaches the asker. Subagent reports and replies to the bot's own questions never wait either. Safety: stop aborts every run.
 // Offline and in-process: a stubbed model endpoint stands in for the model, no ports. Needs `npm run build` first.
 // Usage: node tests/bot-concurrency.mjs
 import assert from 'node:assert/strict';
@@ -127,17 +127,17 @@ try {
   await idle(marion.id);
   await idle(barry.id);
 
-  // 5. A subagent's report to its parent stays queued behind the parent's turn (it continues the parent's work).
+  // 5. A subagent's report to its parent no longer waits behind the parent's long turn: it is handled right away, in parallel.
   const sub = createSubagent(marion.id, 'research things');
   await startLong('B');
-  const before5 = requests.length;
-  loop.enqueue(marion.id, { type: 'bot', fromBotId: sub.id, fromName: sub.name, text: 'report from sub', depth: 1 });
-  await new Promise(resolve => setTimeout(resolve, 150));
-  assert.equal(requests.length, before5, 'a subagent report must wait for the parent\'s turn');
-  // 6. Replies to the bot's own earlier question also stay in order.
+  loop.enqueue(marion.id, { type: 'bot', fromBotId: sub.id, fromName: sub.name, text: 'report from sub', depth: 1, autoReply: true });
+  await waitFor(() => requests.some(r => r.includes('report from sub')), 'a subagent report must not wait for the parent\'s turn');
+  // 6. Replies to the bot's own earlier question are handled right away too.
   loop.enqueue(marion.id, { type: 'bot', fromBotId: barry.id, fromName: 'Barry', text: 'reply for you', depth: 1, autoReply: true });
-  await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal(requests.length, before5, 'an auto-reply must wait for the turn');
+  await waitFor(() => requests.some(r => r.includes('reply for you')), 'an auto-reply must not wait for the turn');
+  await waitFor(() => loop.activeRunCount(marion.id) === 1, 'the parallel report and reply did not finish');
+  assert.ok(!finished.includes('B') && getLive(marion.id).isRunning, 'the long turn must still be running (and the bot working)');
+  assert.deepEqual(aborted, [], 'parallel runs must not abort the main turn');
 
   // 7. Stop aborts the main turn and every side run, with a single "Stopped." acknowledgement.
   askFromBarry('long job S3 please');
@@ -150,7 +150,7 @@ try {
   const after = await rows(marion.id);
   assert.equal(after.filter(r => r.body.type === 'notice' && /^Stopped/.test(r.body.text)).length, 0, 'a stop must not add extra Stopped notices');
 
-  console.log('PASS: bot-to-bot questions run in parallel with a busy bot, status stays working until the last run ends, order-sensitive messages queue, stop aborts all.');
+  console.log('PASS: bot-to-bot questions, subagent reports and replies run in parallel with a busy bot, status stays working until the last run ends, stop aborts all.');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

@@ -159,8 +159,8 @@ async function compactWithSummary(botId: string, old: any[]): Promise<any[]> {
 const compactCooldown = new Map<string, number>();
 
 /**
- * Compact a bot's history if it is over budget. Must run inside the bot's serial queue
- * (it is called from the agent loop before each model call), so it never races a turn.
+ * Compact a bot's history if it is over budget. Safe beside concurrent runs: the write is guarded
+ * (it only replaces history that is still exactly what it read), so it never loses items appended meanwhile.
  * Returns the history to send.
  */
 /** Characters of history at which this bot auto-compacts (its own setting, else the app default). 0 = never. */

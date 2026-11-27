@@ -1,5 +1,5 @@
 // Texting a busy bot: every new message is answered right away in parallel with the running job (nothing queues or
-// merges), nothing is dropped, and two relayed sessions never share a project folder at the same time.
+// merges), nothing is dropped, and relayed sessions never wait for each other, even in the same project folder.
 // Offline and in-process: a stubbed model endpoint stands in for the model, no ports. Needs `npm run build` first.
 // Usage: node tests/busy-ack.mjs
 import assert from 'node:assert/strict';
@@ -18,8 +18,8 @@ process.env.MARION_LOCAL_MODEL_URL = 'http://127.0.0.1:9/v1';
 process.env.MARION_LOCAL_MODEL_API_KEY = '';
 process.env.MARION_LOCAL_MODEL = 'fake';
 
-// ---- (b) folder serialization ----
-const { acquireFolder, withFolder } = await import('../server/dist/agent/folder-lock.js');
+// ---- (b) relayed sessions in one folder run concurrently ----
+const { acquireFolder, folderInUse, withFolder } = await import('../server/dist/agent/folder-lock.js');
 const scratch = await mkdtemp(join(tmpdir(), 'marion-busy-ack-'));
 const projectA = join(scratch, 'project-a');
 const projectB = join(scratch, 'project-b');
@@ -28,37 +28,36 @@ await mkdir(projectB, { recursive: true });
 {
   const log = [];
   let running = 0;
-  let overlapSeen = false;
-  const session = (name, folder, ms) => withFolder({ path: folder, write: true }, undefined, () => log.push(`${name} waits`), async () => {
+  let peak = 0;
+  const shared = [];
+  const session = (name, folder, ms) => withFolder({ path: folder, write: true }, undefined, others => shared.push(`${name}:${others}`), async () => {
     running++;
-    if (folder !== projectB && running > 1) overlapSeen = true;
+    peak = Math.max(peak, running);
     log.push(`${name} start`);
     await new Promise(resolve => setTimeout(resolve, ms));
     log.push(`${name} end`);
     running--;
   });
-  // Same folder, a folder inside it, and an unrelated folder; started together.
-  await Promise.all([session('one', projectA, 80), session('two', projectA, 10), session('three', join(projectA, 'sub'), 10)]);
-  assert.ok(!overlapSeen, `two sessions shared a folder: ${log.join(', ')}`);
-  assert.deepEqual(log.filter(line => line.endsWith('start') || line.endsWith('end')),
-    ['one start', 'one end', 'two start', 'two end', 'three start', 'three end'], 'sessions must run first come, first served');
-  assert.deepEqual(log.filter(line => line.endsWith('waits')), ['two waits', 'three waits']);
-  // A different folder does not wait.
-  const release = await acquireFolder(projectA);
-  let waited = false;
-  const other = await acquireFolder(projectB, undefined, () => { waited = true; });
-  assert.equal(waited, false, 'an unrelated folder must not wait');
-  other();
-  // A stopped waiter leaves the line without blocking the next one.
+  // Same folder, a folder inside it, and an unrelated folder; started together. Nobody waits: all four run at once.
+  await Promise.all([session('one', projectA, 80), session('two', projectA, 10), session('three', join(projectA, 'sub'), 10), session('four', projectB, 10)]);
+  assert.equal(peak, 4, `sessions must overlap, even in one folder: ${log.join(', ')}`);
+  assert.deepEqual(log.slice(0, 4), ['one start', 'two start', 'three start', 'four start'], 'every session starts at once');
+  // The chat is told a session shares its folder (never that it waits); an unrelated folder says nothing.
+  assert.deepEqual(shared, ['two:1', 'three:2']);
+  assert.equal(folderInUse(projectA), false, 'every hold is released');
+  // Each hold is its own token: releasing one (even twice) never releases another session's hold on the same folder.
+  const first = await acquireFolder(projectA);
+  const second = await acquireFolder(projectA);
+  first(); first();
+  assert.equal(folderInUse(projectA), true, 'the second session still holds the folder');
+  second();
+  assert.equal(folderInUse(projectA), false);
+  // A run that was already stopped does not start.
   const stop = new AbortController();
-  const stopped = acquireFolder(projectA, stop.signal).then(() => 'got it', () => 'stopped');
   stop.abort(new Error('Stopped.'));
-  assert.equal(await stopped, 'stopped');
-  const next = acquireFolder(projectA).then(done => done);
-  release();
-  (await next)();
-  // Read-only tasks never wait.
-  assert.equal(await withFolder({ path: projectA, write: false }, undefined, undefined, async () => 'ok'), 'ok');
+  assert.equal(await acquireFolder(projectA, stop.signal).then(() => 'got it', () => 'stopped'), 'stopped');
+  // Read-only tasks are not registered.
+  assert.equal(await withFolder({ path: projectA, write: false }, undefined, undefined, async () => folderInUse(projectA) ? 'held' : 'ok'), 'ok');
 }
 
 // ---- (a) busy bot, through the real message route ----
@@ -144,7 +143,7 @@ try {
   await waitFor(() => requests.length >= 5, 'idle message never ran');
   await waitFor(async () => !(await rows()).some(row => row.body.streaming), 'idle reply never finished');
   assert.equal((await acks()).length, 0, 'an idle bot must not acknowledge');
-  console.log('PASS: a busy bot answers new messages right away in parallel (no queue, no ack), and relayed sessions share no folder.');
+  console.log('PASS: a busy bot answers new messages right away in parallel (no queue, no ack), and relayed sessions run concurrently, even in one folder.');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

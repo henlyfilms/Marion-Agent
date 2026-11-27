@@ -127,6 +127,12 @@ try {
   await S.subscriptionReply({ provider: 'gemini', model: 'gemini-neon-preview', effort: 'high' }, 'hi', signal, []);
   runs = agyRuns().slice(before);
   assert.equal(runs.length, 1, 'one run, no refusal'); assert.equal(flag(runs[0], '--model'), 'gemini-neon-preview'); assert.equal(flag(runs[0], '--effort'), undefined);
+  // Regression (d302777): unlisted Gemini uses `unlisted: 'none'`, so even with no saved effort the flag is omitted entirely (not high).
+  assert.equal(S.runEffort(undefined, null, false, false, 'none'), null, 'unlisted Gemini, no saved effort: no --effort');
+  before = agyRuns().length;
+  await S.subscriptionReply({ provider: 'gemini', model: 'gemini-neon-preview', effort: null }, 'hi', signal, []);
+  runs = agyRuns().slice(before);
+  assert.equal(runs.length, 1); assert.ok(!runs[0].includes('--effort'), 'unlisted Gemini model launched without --effort');
   // `agy models` fails: no catalog, so no --effort either (even for a model that normally has levels).
   writeFileSync(modelsDown, ''); S.forgetGeminiCatalog();
   before = agyRuns().length;

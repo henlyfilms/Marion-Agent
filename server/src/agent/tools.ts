@@ -8,7 +8,7 @@ import { modelLabel, subscriptionModels, subscriptionReply, subscriptionSelectio
 import { resolveRunSelection } from './provider-defaults.js';
 import { env } from '../env.js';
 import { db, now } from '../db.js';
-import { newId } from '../lib/ids.js';
+import { newId, runId as relayRunId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { desktop, isDockerEngineDown } from '../desktop.js';
 import { BOX_ROOT, screenFor } from '../computer.js';
@@ -482,11 +482,11 @@ export const TOOLS: ToolDef[] = [
       if (media.images.length) card.step(who, 'note', `Sent ${media.images.length} image${media.images.length === 1 ? '' : 's'} from your message`);
       try {
         let used: number | undefined;
-        // One relayed session at a time per project folder, so two runs never edit it (or its git state) together.
-        const text = await withFolder(folder, ctx.signal, () => card.step(who, 'note', `Waiting for another session in ${folder?.label} to finish first`), () => subscriptionReply(selection, task, ctx.signal ?? new AbortController().signal, media.images, {
+        // No waiting: any number of relayed sessions run at once, even in the same folder; the card just says it shares it.
+        const text = await withFolder(folder, ctx.signal, others => card.step(who, 'note', `Running alongside ${others} other session${others === 1 ? '' : 's'} in ${folder?.label}`), () => subscriptionReply(selection, task, ctx.signal ?? new AbortController().signal, media.images, {
           folder, handoffProgress: plan.carried ? [plan.carried] : [], handoffContinuation: ctx.turn?.handoff, onStep: card.feed(who), onModel: model => card.setModel('worker-0', model), onTaskUsage: card.usage('worker-0'), onUsage: counts => { used = (counts.input ?? 0) + (counts.output ?? 0) || undefined; },
           session: {
-            id: `ask:${ctx.botId}:${generation}:${askedAt}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
+            id: `ask:${ctx.botId}:${generation}:${askedAt}:${relayRunId()}`, kind: 'ask_subscription', userId: ctx.userId, botId: ctx.botId,
             request: prompt, title: miniTitle(prompt, args.title), folder: checkout ? { path: `https://github.com/${checkout.repo}`, label: checkout.repo } : folder && { path: folder.path, label: folder.label },
             groupId: `${ctx.botId}:${generation}:${provider}:${plan.session.startedAt}`, rotated: plan.rotated,
           },
@@ -533,8 +533,8 @@ export const TOOLS: ToolDef[] = [
         const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : checkout?.folder;
         const repoLine = checkout ? checkout.note : repo ? `GitHub repository: ${repo} (https://github.com/${repo}).` : '';
         const goal = repoLine ? `${String(args.goal ?? '').trim().slice(0, 18_000)}\n\n${repoLine}` : args.goal;
-        // The whole team run holds the folder, so no other relayed session edits it meanwhile.
-        return await withFolder(folder, ctx.signal, () => appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Waiting for another session in ${folder?.label} to finish first.` }), () => orchestrate(ctx, { ...args, goal }, folder));
+        // Never waits for other sessions in the folder: the team starts right away, alongside anything else running there.
+        return await withFolder(folder, ctx.signal, others => appendRow(ctx.botId, 'notice', { type: 'notice', tone: 'info', text: `Running alongside ${others} other session${others === 1 ? '' : 's'} in ${folder?.label}.` }), () => orchestrate(ctx, { ...args, goal }, folder));
       } finally {
         await checkout?.cleanup();
       }
@@ -591,7 +591,7 @@ export const TOOLS: ToolDef[] = [
     description: 'Team mode: hand pieces of work to the models on your team and get their results back. mode "parallel" runs independent pieces at the same time; mode "chain" runs them in order and each member sees what the previous one wrote (e.g. draft → review → fix). member is a team member\'s name, a provider (codex, gemini, claude, local), or "auto" to pick whoever has the most plan usage left.',
     parameters: obj({
       assignments: {
-        type: 'array', minItems: 1, maxItems: 6,
+        type: 'array', minItems: 1,
         items: obj({ member: { type: 'string', description: 'Team member name, provider, or "auto"' }, task: { type: 'string', description: 'A complete, self-contained task with everything the member needs' } }, ['member', 'task']),
       },
       mode: { type: 'string', enum: ['parallel', 'chain'] },
@@ -606,7 +606,7 @@ export const TOOLS: ToolDef[] = [
     description: 'Team mode: have team members talk a problem through together, taking turns and responding to each other for 1–3 rounds, ending with a shared recommendation. Use for plans, designs, reviews and hard decisions.',
     parameters: obj({
       topic: { type: 'string', description: 'What the team should discuss, with all needed context' },
-      members: { type: 'array', items: { type: 'string' }, description: 'Member names to include (default: the whole team, up to 4)' },
+      members: { type: 'array', items: { type: 'string' }, description: 'Member names to include (default: the whole team)' },
       rounds: { type: 'integer', minimum: 1, maximum: 3 },
     }, ['topic']),
     activity: 'messaging_named',
@@ -861,15 +861,14 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'spawn_subagent',
-    description: 'Start a subagent: a helper copy of you with its own context and its own computer screen, to work on one goal in parallel (e.g. research one company each). It reports back to you as a message when done. Up to 6 can work at the same time; finished ones do not count, so spawn as many as the work needs and remove each once you have its result.',
+    description: 'Start a subagent: a helper copy of you with its own context and its own computer screen, to work on one goal in parallel (e.g. research one company each). It reports back to you as a message when done. There is no limit: start as many as the work needs, all working at the same time, and remove each once you have its result.',
     parameters: obj({ goal: { type: 'string', description: 'Self-contained task with everything the subagent needs to know' }, label: { type: 'string', description: 'Short name, e.g. "Acme research"' } }, ['goal']),
     activity: 'messaging_named',
     label: 'Starting a helper',
     impl: async (a, ctx) => {
       if (ctx.depth >= 2) return { output: 'Subagents cannot start more subagents. Do the work yourself.' };
       try {
-        const { isBotBusy } = await import('./loop.js');
-        const sub = createSubagent(ctx.botId, String(a.goal), a.label, isBotBusy);
+        const sub = createSubagent(ctx.botId, String(a.goal), a.label);
         ctx.enqueueBotMessage(ctx.botId, sub.id, String(a.goal), ctx.depth + 1);
         return { output: JSON.stringify({ ok: true, subagent_id: sub.id, name: sub.name, note: 'It will report back to you as a message. Continue with other work or end your turn.' }), summary: `Started ${sub.name}` };
       } catch (e: any) {

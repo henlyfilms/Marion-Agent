@@ -20,7 +20,6 @@ import type { ChatModel, ChatModelSelection, ChatProvider, WorkAgent } from '../
  */
 
 const MAX_PHASES = 5;
-const MAX_TASKS = 4;
 const RESULT_CHARS = 6000;
 const providerNames: Record<ChatProvider, string> = { local: 'Local', codex: 'Codex', gemini: 'Gemini', claude: 'Claude' };
 
@@ -75,9 +74,11 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
   const defaults = savedDefaults(ctx.userId);
   const leadModel = pickModel(models, String(args?.orchestrator ?? ''), defaults);
   if (!leadModel) throw new Error(`No model matches "${args?.orchestrator}". Available: ${models.map(m => m.label).slice(0, 20).join(', ')}.`);
-  const workerNames: string[] = (Array.isArray(args?.workers) ? args.workers : [args?.workers]).map(String).filter(Boolean).slice(0, MAX_TASKS);
+  // No cap on the team size or on how many tasks run at once: every named worker (and worker_count) is used.
+  const workerNames: string[] = (Array.isArray(args?.workers) ? args.workers : [args?.workers]).filter((name: unknown) => name != null).map(String).filter(Boolean);
   if (!workerNames.length) throw new Error('Name at least one subagent model.');
-  const count = Math.max(1, Math.min(MAX_TASKS, Number(args?.worker_count) || workerNames.length));
+  const requested = Math.floor(Number(args?.worker_count));
+  const count = Math.max(1, Number.isFinite(requested) && requested > 0 ? requested : workerNames.length);
   const taken = new Set<string>();
   const lead = toAgent(leadModel, 'orchestrator', 0, taken, defaults);
   const workers: Agent[] = [];
@@ -118,7 +119,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
     const planText = await call(lead, [
       `You are ${lead.label}, the ORCHESTRATOR of a team of AI models inside Marion Agent. You plan, assign and review; the subagents do the work.`,
       `Subagents:\n${roster}`, where, `The owner's goal:\n${goal}`,
-      `Split the goal into 1–${MAX_PHASES} phases, in order. Each phase has 1–${MAX_TASKS} tasks that can run at the same time; assign each to a subagent by its exact name, spreading the work. Each task must be self-contained: the subagent sees only its task.`,
+      `Split the goal into 1–${MAX_PHASES} phases, in order. Each phase has one or more tasks that all run at the same time (as many as the work needs, no limit); assign each to a subagent by its exact name, spreading the work. Each task must be self-contained: the subagent sees only its task.`,
       'If you truly cannot start without the owner answering something, set "question" instead of phases.',
       'Reply with JSON only: {"phases":[{"title":"short phase name","tasks":[{"worker":"subagent name","task":"full instructions"}]}],"question":null}',
     ].join('\n\n'), signal, card, folder && { ...folder, write: false }, true);
@@ -132,7 +133,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
     }
     const phases: { title: string; tasks: { worker: Agent; task: string }[] }[] = (Array.isArray(plan?.phases) ? plan.phases : []).slice(0, MAX_PHASES).map((phase: any, index: number) => ({
       title: String(phase?.title ?? `Phase ${index + 1}`).slice(0, 80),
-      tasks: (Array.isArray(phase?.tasks) ? phase.tasks : []).slice(0, MAX_TASKS).map((task: any, t: number) => ({
+      tasks: (Array.isArray(phase?.tasks) ? phase.tasks : []).map((task: any, t: number) => ({
         worker: workers.find(w => w.label.toLowerCase() === String(task?.worker ?? '').toLowerCase()) ?? workers[t % workers.length],
         task: String(task?.task ?? '').slice(0, 12_000),
       })).filter((task: { task: string }) => task.task.trim()),
@@ -177,7 +178,7 @@ export async function orchestrate(ctx: { userId: string; botId: string; signal?:
           round === 0 ? 'Approve if it is correct and complete. Otherwise list precise fixes, each for one subagent.' : 'This is the final check for this phase: approve unless something is badly wrong.',
           'Reply with JSON only: {"approved":true,"note":"one short sentence","fixes":[{"worker":"subagent name","task":"what to fix"}]}',
         ].join('\n\n'), signal, card, folder && { ...folder, write: false })) ?? { approved: true, note: 'Looks good' };
-        const fixes = (Array.isArray(review.fixes) ? review.fixes : []).slice(0, MAX_TASKS)
+        const fixes = (Array.isArray(review.fixes) ? review.fixes : [])
           .map((fix: any, t: number) => ({ worker: workers.find(w => w.label.toLowerCase() === String(fix?.worker ?? '').toLowerCase()) ?? workers[t % workers.length], task: String(fix?.task ?? '') }))
           .filter((fix: { task: string }) => fix.task.trim());
         if (review.approved !== false || !fixes.length || round === 1) {

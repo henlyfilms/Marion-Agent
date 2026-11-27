@@ -108,6 +108,7 @@ try {
   const { wantsCloud, exactRepo, repoHint, matchRepos, resolveCloudRepo, tokenScopes, ghDeviceAuth, CLOUD_PROMPT_LINE } = repoMod;
   const { cloudGoal } = await import('../server/dist/features/cloud-sessions.js');
   const { launchCloudWork, actOnCloudCard, setCloudDeps, pendingCloudPermissions } = await import('../server/dist/features/cloud-cards.js');
+  const { interrupt } = await import('../server/dist/agent/loop.js');
   const { startCloudSession } = await import('../server/dist/features/cloud-sessions.js');
   const { listSessions } = await import('../server/dist/features/agent-sessions.js');
   const { TOOLS, policyFor } = await import('../server/dist/agent/tools.js');
@@ -664,6 +665,35 @@ try {
     { startupMs: 60_000, trust: { get pollMs() { throw new Error('terminal read failed'); } } }),
     error => /could not confirm "Yes, I trust this folder" was selected \(terminal read failed\)/.test(error.message));
   assert.ok(Date.now() - throwStart < 10_000, 'failed right away, not after the startup clock');
+  // The owner's trust hook throws (synchronously) or rejects: no answer, so the launch ends right away as aborted
+  // (not a decline), never with the startup clock paused until maxMs.
+  for (const [how, onTrust] of [['throws', () => { throw new Error('card broke'); }], ['rejects', async () => { throw new Error('card broke'); }]]) {
+    const askStart = Date.now();
+    await assert.rejects(CS.relayCloudTerminal('claude', trustDir, 'SQUASHED ask ' + how, new AbortController().signal,
+      { onUrl: () => {}, onProgress: () => {}, onTrust }, { startupMs: 60_000, maxMs: 120_000 }),
+      error => error instanceof CS.CloudLaunchError && error.message === CS.FOLDER_TRUST_ABORTED, 'ask ' + how);
+    assert.ok(Date.now() - askStart < 10_000, `ask ${how}: failed right away, not after the startup clock`);
+  }
+  // The generic prompt hook throwing (no dedicated trust hook) is handled the same way.
+  await assert.rejects(CS.relayCloudTerminal('claude', trustDir, 'SQUASHED prompt throws', new AbortController().signal,
+    { onUrl: () => {}, onProgress: () => {}, onPrompt: () => { throw new Error('card broke'); } }, { startupMs: 60_000, maxMs: 120_000 }),
+    error => error.message === CS.FOLDER_TRUST_ABORTED);
+  // Fix 4: the launch signal aborts (interrupt / conversation reset) while the folder-trust card is open: the
+  // trust-specific error, not "Stopped." and not the owner's decline.
+  const resetCtrl = new AbortController();
+  let trustOpen = false;
+  const resetRun = CS.relayCloudTerminal('claude', trustDir, 'SQUASHED reset mid-card', resetCtrl.signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: () => { trustOpen = true; return new Promise(() => {}); } }, { startupMs: 60_000 });
+  await waitFor(() => trustOpen, 'the trust question');
+  resetCtrl.abort(new Error('Stopped.'));
+  await assert.rejects(resetRun, error => error instanceof CS.CloudLaunchError && error.message === CS.FOLDER_TRUST_ABORTED
+    && error.message !== CS.FOLDER_TRUST_DECLINED && error.cardShown === false);
+  // An abort with no trust card open keeps its own reason.
+  const plainCtrl = new AbortController();
+  const plainRun = CS.relayCloudTerminal('claude', trustDir, 'SQUASHED plain abort', plainCtrl.signal,
+    { onUrl: () => {}, onProgress: () => {}, onTrust: async () => true }, { startupMs: 60_000 });
+  plainCtrl.abort(new Error('Stopped.'));
+  await assert.rejects(plainRun, error => error.message === 'Stopped.' && !(error instanceof CS.CloudLaunchError));
   await delay(50);
   process.off('unhandledRejection', onUnhandled);
   assert.deepEqual(unhandled, [], 'no unhandled rejection');
@@ -704,6 +734,18 @@ try {
   assert.match(card(stopSeq).note, /stopped/);
   assert.equal(pendingCloudPermissions(), 0, 'stop removes the wait');
   assert.throws(() => actOnCloudCard(userId, botId, stopSeq, 'allow', { local: false }), /already done/);
+  // Conversation reset (POST /bots/:id/fresh calls interrupt() first) while the trust card is open: FOLDER_TRUST_ABORTED,
+  // not "Stopped before the Cloud session started" and not the owner's decline.
+  const resetRun2 = launchCloudWork({ userId, botId, generation, goal: 'SQUASHED interrupt', query: 'octo/widget' });
+  await trustCardSeq();
+  const resetCard = await waitFor(() => { const c = workCards().at(-1); return c.status === 'running' && c.stop?.sessionId && c; }, 'the running work card');
+  interrupt(botId);
+  await assert.rejects(resetRun2, error => error.message === CS.FOLDER_TRUST_ABORTED && error.message !== CS.FOLDER_TRUST_DECLINED);
+  await waitFor(() => workCards().find(c => c.stop?.sessionId === resetCard.stop.sessionId)?.status !== 'running', 'the work card to finish');
+  const resetSteps = workCards().find(c => c.stop?.sessionId === resetCard.stop.sessionId).steps.filter(st => st.kind === 'error').map(st => st.text);
+  assert.ok(resetSteps.includes(CS.FOLDER_TRUST_ABORTED) && !resetSteps.some(t => /Stopped before the Cloud session started/.test(t)),
+    'the work card names the trust abort, not a plain stop: ' + JSON.stringify(resetSteps));
+  await waitFor(() => pendingCloudPermissions() === 0, 'the trust wait to drop on interrupt');
   const diedRun = launchCloudWork({ userId, botId, generation, goal: 'SQUASHED TRUST_THEN_DIE', query: 'octo/widget' });
   const diedSeq = await trustCardSeq();
   await assert.rejects(diedRun, /crashed while waiting/);
