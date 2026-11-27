@@ -6,11 +6,15 @@
 // the moment it is asked for (Waiting while a card holds it, then Running/Done under the same id).
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const scratch = mkdtempSync(resolve('data/cloud-repo-'));
+// The repo's ignored data/ folder, created when missing (fresh worktrees have none) and found from this file, not the cwd.
+const dataDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+mkdirSync(dataDir, { recursive: true });
+const scratch = mkdtempSync(join(dataDir, 'cloud-repo-'));
 try {
   process.env.HOME = scratch;
   process.env.DB_PATH = join(scratch, 'test.db');

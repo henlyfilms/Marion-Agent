@@ -127,42 +127,93 @@ export function recoverAgentSessions() {
   db.prepare("UPDATE agent_sessions SET status='stopped', ended_at=?, error=COALESCE(error,'Never started.'), updated_at=? WHERE status='waiting' AND updated_at < ?")
     .run(at, at, at - 7 * 24 * 3600_000);
   db.prepare('DELETE FROM agent_sessions WHERE status != ? AND updated_at < ?').run('running', at - KEEP_MS);
-  recoverStaleRows();
+  // Transcript rows are recovered on their own too (index.ts), so a failure above can't leave them spinning.
+  try { recoverStaleRows(); } catch (error) { console.warn('[agent-sessions] could not finalize stale rows', (error as Error).message); }
   return rows.length;
 }
 
 /** When this server process started: transcript rows from before then cannot still be running. */
 const processStartedAt = Date.now() - Math.round(process.uptime() * 1000);
 const RESTART_NOTE = 'Interrupted: Marion Agent restarted before this finished.';
+const ENDED_NOTE = 'Interrupted: the run ended before this finished.';
+
+/**
+ * Tool-call rows that still belong to a live turn even though no run is executing: a turn paused for the owner's
+ * approval persists its queued calls in pending_turns (they survive a restart and continue once the owner answers),
+ * and their rows stay `running` until then. Recovery must never touch them.
+ */
+function pendingRowSeqs(botId?: string) {
+  const rows = (botId ? db.prepare('SELECT bot_id, state FROM pending_turns WHERE bot_id=?').all(botId) : db.prepare('SELECT bot_id, state FROM pending_turns').all()) as { bot_id: string; state: string }[];
+  const keep = new Set<string>();
+  for (const row of rows) {
+    try {
+      const state = JSON.parse(row.state) as { calls?: { rowSeq?: unknown }[] };
+      for (const call of state.calls ?? []) if (typeof call?.rowSeq === 'number') keep.add(`${row.bot_id}:${call.rowSeq}`);
+    } catch { /* unreadable state: nothing to protect */ }
+  }
+  return keep;
+}
+
+/** Finalize one running tool-call row or work card; returns whether it changed. Tolerates older/partial card shapes. */
+function finalizeRunningRow(row: { bot_id: string; seq: number; kind: string; body: string }, note: string, at: number) {
+  const body = JSON.parse(row.body) as ToolCallBody | WorkCardBody;
+  if (row.kind === 'tool-call') {
+    updateRow(row.bot_id, row.seq, { ...(body as ToolCallBody), type: 'tool-call', status: 'error', summary: (body as ToolCallBody).summary || note });
+    return true;
+  }
+  if (row.kind === 'card' && (body as WorkCardBody).card === 'work') {
+    const card = body as WorkCardBody;
+    updateRow(row.bot_id, row.seq, {
+      ...card, type: 'card', status: 'stopped', endedAt: card.endedAt ?? at, stop: undefined,
+      agents: (Array.isArray(card.agents) ? card.agents : []).map(agent => agent?.usage ? { ...agent, usage: { ...agent.usage, live: false } } : agent),
+      phases: (Array.isArray(card.phases) ? card.phases : []).map(phase => phase?.status === 'running' ? { ...phase, status: 'failed' as const } : phase),
+      steps: [...(Array.isArray(card.steps) ? card.steps : []), { at, agent: 'Marion', kind: 'error' as const, text: note }].slice(-60),
+    });
+    return true;
+  }
+  return false;
+}
+
+const RUNNING_ROWS = `SELECT r.bot_id, r.seq, r.kind, r.body FROM rows r JOIN bots b ON b.id = r.bot_id AND b.generation = r.generation
+  WHERE json_extract(r.body,'$.status') = 'running'
+    AND (r.kind = 'tool-call' OR (r.kind = 'card' AND json_extract(r.body,'$.card') = 'work'))`;
 
 /**
  * Tool calls and work cards that were `running` when the server stopped (crash, update, restart) would spin forever in
  * the chat: finalize them. Only rows created before this process started are touched, so a turn that resumed after
- * the restart keeps its own live rows. Returns how many rows were finalized.
+ * the restart keeps its own live rows; queued calls of a turn paused for approval (pending_turns) are left alone, since
+ * that turn continues when the owner answers. Any age, seq or older card shape is covered. Returns how many rows were finalized.
  */
 export function recoverStaleRows(before = processStartedAt) {
-  const stale = db.prepare(`SELECT r.bot_id, r.seq, r.body FROM rows r JOIN bots b ON b.id = r.bot_id AND b.generation = r.generation
-    WHERE r.created_at < ? AND json_extract(r.body,'$.status') = 'running'
-      AND (r.kind = 'tool-call' OR (r.kind = 'card' AND json_extract(r.body,'$.card') = 'work'))`).all(before) as { bot_id: string; seq: number; body: string }[];
+  const stale = db.prepare(`${RUNNING_ROWS} AND r.created_at < ? ORDER BY r.bot_id, r.seq`).all(before) as { bot_id: string; seq: number; kind: string; body: string }[];
+  const keep = pendingRowSeqs();
   const at = now();
   let fixed = 0;
   for (const row of stale) {
-    try {
-      const body = JSON.parse(row.body) as ToolCallBody | WorkCardBody;
-      if (body.type === 'tool-call') {
-        updateRow(row.bot_id, row.seq, { ...body, status: 'error', summary: body.summary || RESTART_NOTE });
-      } else if (body.type === 'card' && body.card === 'work') {
-        updateRow(row.bot_id, row.seq, {
-          ...body, status: 'stopped', endedAt: body.endedAt ?? at, stop: undefined,
-          agents: body.agents.map(agent => agent.usage ? { ...agent, usage: { ...agent.usage, live: false } } : agent),
-          phases: body.phases.map(phase => phase.status === 'running' ? { ...phase, status: 'failed' } : phase),
-          steps: [...body.steps, { at, agent: 'Marion', kind: 'error' as const, text: RESTART_NOTE }].slice(-60),
-        });
-      } else continue;
-      fixed++;
-    } catch (error) {
-      console.warn('[agent-sessions] could not finalize a stale row', (error as Error).message);
-    }
+    if (keep.has(`${row.bot_id}:${row.seq}`)) continue;
+    try { if (finalizeRunningRow(row, RESTART_NOTE, at)) fixed++; }
+    catch (error) { console.warn('[agent-sessions] could not finalize a stale row', row.bot_id, row.seq, (error as Error).message); }
+  }
+  return fixed;
+}
+
+/**
+ * The bot's last run just ended (no run executing, no approval pending): any tool-call row of its current chat still
+ * `running` has no owner left (every tool call is written by a run), so finalize it now instead of waiting for a
+ * restart. Work cards can outlive a turn (a Cloud session keeps updating its card), so they are only finalized when
+ * the bot has no relayed session running or waiting either. Returns how many rows were finalized.
+ */
+export function recoverOrphanRows(botId: string) {
+  const rows = db.prepare(`${RUNNING_ROWS} AND r.bot_id = ? ORDER BY r.seq`).all(botId) as { bot_id: string; seq: number; kind: string; body: string }[];
+  if (!rows.length) return 0;
+  const keep = pendingRowSeqs(botId);
+  const liveSession = db.prepare("SELECT 1 FROM agent_sessions WHERE bot_id=? AND status IN ('running','waiting') LIMIT 1").get(botId);
+  const at = now();
+  let fixed = 0;
+  for (const row of rows) {
+    if (keep.has(`${row.bot_id}:${row.seq}`) || (row.kind === 'card' && liveSession)) continue;
+    try { if (finalizeRunningRow(row, ENDED_NOTE, at)) fixed++; }
+    catch (error) { console.warn('[agent-sessions] could not finalize an orphaned row', row.bot_id, row.seq, (error as Error).message); }
   }
   return fixed;
 }

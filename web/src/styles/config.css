@@ -287,3 +287,17 @@
 .voices-manager__file input { display: none; }
 .voices-manager__file:hover { background: var(--color-bg-hover); }
 .voices-manager__actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Tasks → Waiting on You: the chat's own action cards, answerable here. */
+.waiting-section { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+.waiting-section__head { display: flex; align-items: center; gap: 8px; }
+.waiting-section__title { margin: 0; font-size: 13px; font-weight: 600; line-height: 18px; color: var(--color-text-primary); }
+.waiting-section__count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-full); background: var(--color-warn); color: #FFFFFF; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+.waiting-section__empty { font-size: 12px; line-height: 16px; color: var(--color-text-tertiary); }
+.waiting-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.waiting-item { display: flex; flex-direction: column; gap: 6px; }
+.waiting-item__meta { display: flex; align-items: center; gap: 5px; font-size: 12px; line-height: 16px; color: var(--color-text-tertiary); }
+.waiting-item__bot { color: var(--color-text-secondary); font-weight: 500; }
+.waiting-item__open { margin-left: auto; }
+.question-card__reply { display: flex; gap: 8px; margin-top: 10px; }
+.question-card__input { flex: 1 1 0; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-bg-input, transparent); color: var(--color-text-primary); font: inherit; font-size: 13px; }

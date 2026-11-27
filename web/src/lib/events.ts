@@ -12,6 +12,8 @@ export function resyncAfterReconnect() {
   if (st.selectedBotId) { st.loadRows(st.selectedBotId).catch(() => {}); st.loadRoutines(st.selectedBotId).catch(() => {}); }
   // Task events sent while we were away are lost: every open Tasks list refetches.
   useConfigUI.getState().invalidateTasks();
+  // Anything answered, added or expired while disconnected (e.g. a server restart): Waiting on You and its badge reload.
+  window.dispatchEvent(new CustomEvent('marion-agent:event', { detail: { type: 'waiting' } }));
 }
 
 /** One EventSource for the whole app, reconnecting with backoff and resyncing on reconnect (see eventStream). */

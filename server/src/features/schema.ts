@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_sessions_user ON agent_sessions(user_id, started_at);
+-- Tasks → Waiting on You reads open cards straight from the transcript rows (the single source of truth).
+CREATE INDEX IF NOT EXISTS rows_open_cards ON rows(bot_id, generation) WHERE kind='card' AND json_extract(body,'$.status') IN ('pending','working');
 CREATE INDEX IF NOT EXISTS agent_sessions_bot ON agent_sessions(bot_id, started_at);
 CREATE TABLE IF NOT EXISTS life_sync (
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,

@@ -3,7 +3,7 @@ import { getSetting, setSetting } from './schema.js';
 
 /**
  * App-wide switches for how bots work (Settings → General → Bots):
- * - appControl: every bot can change Marion Agent itself (bots, colors, models, teams) with marion_app.
+ * - appControl: every bot can change Marion Agent itself (bots, colors, models, chat reasoning effort, teams) with marion_app.
  * - liveFeed: work cards show what Claude, Codex and Gemini are doing, step by step.
  * - recordingDays: how long Teach-by-recording drafts are kept.
  * All three default on / 7 days.

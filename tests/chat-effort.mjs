@@ -106,6 +106,25 @@ try {
   const botRow = (id) => db.prepare('SELECT chat_provider, chat_model, chat_effort FROM bots WHERE id=?').get(id);
 
   await ok(await call(configApi, 'PUT', '/settings/chat-provider', { provider: 'gemini' }));
+
+  await test('unset default: with NO saved effort anywhere, an inheriting chat resolves and launches on Medium (never a silent High)', async () => {
+    const S = await import('../server/dist/agent/subscriptions.js');
+    assert.equal(S.DEFAULT_SUBSCRIPTION_EFFORT, 'medium', 'DEFAULT_SUBSCRIPTION_EFFORT');
+    assert.equal(S.preferredEffort(['low', 'medium', 'high']), 'medium', 'preferredEffort prefers Medium');
+    assert.equal(S.preferredEffort(['low', 'medium', 'high', 'xhigh', 'max']), 'medium');
+    assert.equal(S.preferredEffort(['low', 'high']), 'low', 'no Medium: the step down, never High');
+    assert.equal(S.runEffort(undefined, null), 'medium', 'an unlisted model with no saved effort runs on Medium');
+    assert.equal(S.runEffort({ efforts: ['low', 'medium', 'high'] }, null), 'medium');
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM subscription_model_preferences').get().n, 0, 'no provider default saved');
+    const userId = db.prepare('SELECT id FROM users LIMIT 1').get().id;
+    for (const provider of ['gemini', 'claude', 'codex']) assert.equal(S.subscriptionSelection(userId, provider).effort, 'medium', `${provider}: unsaved preference → Medium`);
+    const fresh = (await ok(await call(api, 'POST', '/bots', { name: 'Gate4unset', job: 'Helps', description: 'Helps.', instructions: 'Help.' }))).bot;
+    assert.deepEqual(botRow(fresh.id), { chat_provider: null, chat_model: null, chat_effort: null }, 'no override');
+    const shown = await ok(await call(configApi, 'GET', `/bots/${fresh.id}/chat-model`));
+    assert.equal(shown.selection.effort, 'medium', 'the chat reports Medium with nothing saved');
+    assertSingleLaunch(await launch(fresh.id), { model: 'gemini-4-neon', effort: 'medium' });
+  });
+
   const pref = await ok(await call(configApi, 'PUT', '/settings/subscription-model/gemini', { model: 'gemini-4-neon', effort: 'medium' }));
   assert.deepEqual(pref.selection, { provider: 'gemini', model: 'gemini-4-neon', effort: 'medium' });
   const bot = (await ok(await call(api, 'POST', '/bots', { name: 'Gate4', job: 'Helps', description: 'Helps.', instructions: 'Help.' }))).bot;
@@ -159,6 +178,14 @@ try {
       assert.equal(flag(runs[1].args, '--effort'), null, 'the retry dropped --effort');
       assert.throws(() => assertSingleLaunch(runs, { model: 'gemini-4-neon', effort: 'medium' }), /launch count must be 1/);
     } finally { unlinkSync(refuse); }
+  });
+
+  await test('marion_app effort actions (get_chat_effort / set_chat_effort / set_chat_default_effort): tests/chat-effort-app.mjs', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const child = spawnSync(process.execPath, [fileURLToPath(new URL('./chat-effort-app.mjs', import.meta.url))], { encoding: 'utf8', env: { ...process.env, DB_PATH: '' } });
+    assert.equal(child.status, 0, `chat-effort-app failed:\n${child.stdout}\n${child.stderr}`);
+    assert.match(child.stdout, /chat-effort-app: all checks passed/);
   });
 
   console.log(`PASS chat-effort (${passed} tests)`);

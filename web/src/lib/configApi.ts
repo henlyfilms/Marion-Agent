@@ -1,5 +1,5 @@
 import type { OrchestrationSettings, TeamMember } from '@shared/types';
-import type { Bot, ChatModel, ChatModelSelection, ChatModelSettings, ChatProvider, ComputerState, LibraryFile, Memory, Routine, Skill, Task, Toolkit, UniversalMemory, UniversalSkill } from '@shared/types';
+import type { Bot, ChatModel, ChatModelSelection, ChatModelSettings, ChatProvider, ComputerState, LibraryFile, Memory, Routine, Skill, Task, Toolkit, UniversalMemory, UniversalSkill, WaitingItem } from '@shared/types';
 import { ApiError } from './api';
 
 async function req<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -87,6 +87,8 @@ export const configApi = {
   deleteRoutine: (id: string) => req<{ ok: true }>('DELETE', `/routines/${id}`),
 
   tasks: () => req<{ tasks: Task[] }>('GET', '/tasks'),
+  /** Tasks → Waiting on You: the open action cards and needs-input tasks (count = the Tasks badge). */
+  waiting: () => req<{ items: WaitingItem[]; count: number }>('GET', '/waiting'),
   botTasks: (botId: string) => req<{ tasks: Task[] }>('GET', `/bots/${botId}/tasks`),
   setTaskState: (id: string, state: 'working' | 'done') => req<{ task: Task }>('PATCH', `/tasks/${encodeURIComponent(id)}`, { state }),
 

@@ -1,4 +1,5 @@
 import { isUsageLimitError } from './usage-limit.js';
+import { recoverOrphanRows } from '../features/agent-sessions.js';
 import { localInput, localModel, localModelLoaded, selectedLocalModel } from './models.js';
 import { chatModelForBot } from './chat-model.js';
 import { RunnerSettingsInvalid, blockedSettingsKey, runnerSettingsKey as runnerSettingsKeyOf, checkRunnerSettings, downstreamText, normalizeEffort, runnerSettingsFailure, runnerSettingsText } from './runner-settings.js';
@@ -206,7 +207,12 @@ function runSide(botId: string, trigger: Trigger) {
 /** Resolves when every concurrent side run has finished (used by tests and graceful shutdown). */
 export const settleSideRuns = async () => { while (sideJobs.size) await Promise.all([...sideJobs]); };
 
+/** Tests only: observe (and swallow) triggers instead of running real turns. */
+let enqueueOverride: ((botId: string, trigger: Trigger) => void) | null = null;
+export function setEnqueueForTests(fn: ((botId: string, trigger: Trigger) => void) | null) { enqueueOverride = fn; }
+
 export function enqueue(botId: string, trigger: Trigger) {
+  if (enqueueOverride) { enqueueOverride(botId, trigger); return; }
   if (trigger.type === 'user' && trigger.voice) { enqueueVoice(botId, trigger); return; }
   if (runsConcurrently(botId, trigger)) { runSide(botId, trigger); return; }
   if (trigger.type === 'user' && trigger.queued) {
@@ -672,6 +678,8 @@ async function runTurn(botId: string, trigger: Trigger, side = false) {
     }
     // The last run just ended: write what was answered in parallel into the stored history now (never while an approval is pending).
     if (!othersLeft && !stillPending && sameChat) flushSideNotes(botId);
+    // Nothing runs for this bot any more: a tool call (or work card without a live session) still `running` is orphaned.
+    if (!othersLeft && !stillPending && sameChat) { try { recoverOrphanRows(botId); } catch (error) { console.warn('[agent] could not finalize orphaned rows', botId, (error as Error).message); } }
     if (completed) resumeAttempts.delete(botId);
     else if (failure && !settingsBlocked && !ctrl.signal.aborted && sameChat && !stillPending) scheduleResume(botId, bot.generation, runLabel, failure);
     afterTurn(botId, bot, trigger, { completed: completed && !ctrl.signal.aborted && !stillPending, failure, startSeq, depth, messaged: ctx.messaged!, ...(side ? { reply: sideReply ?? '' } : {}) });
@@ -1012,8 +1020,18 @@ type ToolRequest = { name: string; arguments: Record<string, unknown>; done_repl
 /** A provider reply read as a Marion tool request: none (a normal answer), a valid call, or why the request is invalid. */
 export function parseToolRequest(reply: string, toolNames: readonly string[]):
   { kind: 'none' } | { kind: 'call'; call: ToolRequest } | { kind: 'invalid'; reason: string } {
-  if (!/^(?:```(?:json)?\s*)?MARION_TOOL:/.test(reply)) return { kind: 'none' };
-  const body = /^(?:```(?:json)?\s*)?MARION_TOOL:\s*({[\s\S]+})\s*(?:```)?$/.exec(reply)?.[1];
+  const text = reply.trim();
+  // A request may be wrapped in one code fence: ``` / ```json / ```tool / ~~~ … (closed or not).
+  const inner = /^(?:```|~~~)/.test(text)
+    ? text.replace(/^(?:```|~~~)[\w-]*[^\S\n]*\n?/, '').replace(/\s*(?:```|~~~)\s*$/, '').trim()
+    : text;
+  if (!/^MARION_TOOL:/.test(inner)) {
+    // A tool request anywhere else (prose before it: "Sure. MARION_TOOL: {…}") is never shown to the user as text: it is
+    // corrected once like any invalid request, then the turn ends with a clean error.
+    if (/\bMARION_TOOL\s*:/.test(text)) return { kind: 'invalid', reason: 'MARION_TOOL: must start the reply, with nothing before it' };
+    return { kind: 'none' };
+  }
+  const body = /^MARION_TOOL:\s*({[\s\S]+})$/.exec(inner)?.[1];
   if (!body) return { kind: 'invalid', reason: 'MARION_TOOL: was not followed by one JSON object' };
   const call = safeParse(body);
   if (!call || typeof call !== 'object' || Array.isArray(call)) return { kind: 'invalid', reason: 'the JSON after MARION_TOOL: did not parse' };
@@ -1032,7 +1050,8 @@ export async function resolveToolRequest(ask: (feedback?: string) => Promise<str
   if (parsed.kind === 'invalid') {
     reply = await ask(`Your previous reply was an invalid Marion tool request: ${parsed.reason}. Reply again. Either answer the user normally, or respond with only MARION_TOOL: followed by one valid JSON object {"name": "<one of the available tools>", "arguments": { ... }}, with nothing else.`);
     parsed = parseToolRequest(reply, toolNames);
-    if (parsed.kind === 'invalid') throw new Error(`The selected provider returned an invalid Marion tool request twice (${parsed.reason}).`);
+    // The error is shown in the chat: it names the problem, never the raw MARION_TOOL marker or JSON.
+    if (parsed.kind === 'invalid') throw new Error(`The selected provider returned an invalid Marion tool request twice (${parsed.reason.replace(/MARION_TOOL:?/g, 'the tool request')}).`);
   }
   return parsed.kind === 'call' ? { reply, call: parsed.call } : { reply };
 }
@@ -1195,15 +1214,22 @@ function describeArgs(args: any): string {
   return flat.join('\n\n').slice(0, 1200);
 }
 
-/** Resolve an approval card from the UI. */
-export function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'always' | 'deny') {
+/**
+ * Resolve an approval card from the UI (chat or Tasks → Waiting on You: the same card, the same rules).
+ * Returns false when it was already resolved (a second tap, the other surface, or a superseded/expired card): only the
+ * first decision counts, and only it resumes the bot.
+ */
+export function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'always' | 'deny'): boolean {
   const ap = db.prepare('SELECT a.*, b.user_id FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=?').get(approvalId) as any;
   if (!ap || ap.user_id !== userId) throw new Error('not found');
-  if (ap.status !== 'pending') return;
+  if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') throw new Error('bad decision');
+  if (ap.status !== 'pending') return false;
   const status = decision === 'deny' ? 'denied' : decision === 'always' && !['ask_grok', 'github_create_repo'].includes(ap.tool) ? 'always' : 'allowed';
-  db.prepare('UPDATE approvals SET status=?, resolved_at=? WHERE id=?').run(status, now(), approvalId);
+  // Claimed atomically: a racing second decision changes nothing.
+  if (!db.prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'").run(status, now(), approvalId).changes) return false;
   if (status === 'always') db.prepare("INSERT OR REPLACE INTO policies(user_id,tool,mode) VALUES (?,?,'always_allow')").run(userId, ap.tool);
   const card = getRow(ap.bot_id, ap.row_seq);
   if (card && card.body.type === 'card' && card.body.card === 'approval') updateRow(ap.bot_id, ap.row_seq, { ...card.body, status });
   enqueue(ap.bot_id, { type: 'resume' });
+  return true;
 }

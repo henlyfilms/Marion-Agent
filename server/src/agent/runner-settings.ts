@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import { isUsageLimitError } from './usage-limit.js';
+import { isSignInFailure } from './sign-in.js';
 import type { ChatModelSelection } from '../types.js';
 
 /**
@@ -65,10 +66,15 @@ export function checkRunnerSettings(selection: RunnerSelection): RunnerSettingsI
   return null;
 }
 
-/** What a CLI says when the model it was given doesn't exist or isn't available (not effort refusals: those retry). */
+/** What a CLI says when the model it was given doesn't exist or isn't available (not effort refusals: those retry once). */
 const MODEL_REJECTED = new RegExp([
   String.raw`issue\s+with\s+the\s+selected\s+model`,
-  String.raw`\b(?:unknown|invalid|unsupported|unrecognized)\s+model\b(?!\s+selection\s*\([^)]*--effort)`,
+  String.raw`\b(?:unknown|invalid|unsupported|unrecognized)\s+model\b`,
+  // agy: `invalid model selection (--model "gemini-4-neon" --effort ""): model gemini-4-neon is not recognized as a known
+  // model or custom model in settings` — the model itself is unknown (never an effort refusal, never retried).
+  String.raw`\binvalid\s+model\s+selection\b`,
+  String.raw`\bmodel\s+"?[\w.:/@-]+"?\s+is\s+not\s+(?:recognized|recognised)\b`,
+  String.raw`\bnot\s+(?:recognized|recognised)\s+as\s+a\s+known\s+model\b`,
   String.raw`\bmodel\s+"?[\w.:/@-]+"?\s+(?:is\s+)?(?:not\s+found|does\s+not\s+exist|is\s+unavailable|not\s+available)`,
   String.raw`Codex model \S+ is unavailable for this account`,
   String.raw`could not use \S+ with this account\. Choose another model`,
@@ -98,7 +104,9 @@ export type DownstreamClass = 'quota' | 'auth' | 'provider';
 export function downstreamClass(error: unknown): DownstreamClass {
   if (isUsageLimitError(error)) return 'quota';
   const message = String((error as Error)?.message ?? error ?? '');
-  if ((error as Error)?.name === 'GoogleSignInRequired' || /\b(?:sign\s*in|log\s*in|login|unauthori[sz]ed|authenticat\w*|expired\s+(?:token|session|subscription))\b/i.test(message)) return 'auth';
+  // The same narrowed classifier as the Gemini sign-in card: proxy auth (407), an account mismatch, "log in to file" and
+  // `--login` paths/flags are not a sign-in.
+  if ((error as Error)?.name === 'GoogleSignInRequired' || isSignInFailure(message)) return 'auth';
   return 'provider';
 }
 

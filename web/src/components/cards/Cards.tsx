@@ -66,8 +66,13 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
 
 // ---------------- question ----------------
 
-export function QuestionCard({ row, body }: { row: Row; body: Card<'question'> }) {
+/**
+ * `reply`: also offer a reply field on the card (Tasks → Waiting on You has no composer; in chat the composer is the
+ * free-text reply). It posts through the same answer route as the options.
+ */
+export function QuestionCard({ row, body, reply = false }: { row: Row; body: Card<'question'>; reply?: boolean }) {
   const { busy, error, run } = useBusy();
+  const [draft, setDraft] = useState('');
   const pending = body.status === 'pending';
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   return (
@@ -94,6 +99,13 @@ export function QuestionCard({ row, body }: { row: Row; body: Card<'question'> }
           );
         })}
       </div>
+      {pending && reply && (
+        <form className="question-card__reply" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) void run('reply', () => api.answer(row.botId, row.seq, draft.trim())); }}>
+          <input className="question-card__input" value={draft} onChange={(e) => setDraft(e.target.value)} disabled={!!busy}
+            placeholder="Or reply in your own words" aria-label={`Reply to: ${body.question}`} maxLength={4000} />
+          <button type="submit" className="btn btn--primary" disabled={!!busy || !draft.trim()}>Reply</button>
+        </form>
+      )}
       {pending && (
         <div className="question-card__foot">
           <button type="button" className="link-btn" disabled={!!busy} onClick={() => run('dismiss', () => api.dismiss(row.botId, row.seq))}>Skip</button>
@@ -296,12 +308,13 @@ export function SignInCard({ row, body }: { row: Row; body: Card<'sign-in'> }) {
   );
 }
 
-export function CardRow({ row }: { row: Row }) {
+/** One card, the same component in chat and in Tasks → Waiting on You (`inTasks` adds the reply field to questions). */
+export function CardRow({ row, inTasks = false }: { row: Row; inTasks?: boolean }) {
   const b = row.body;
   if (b.type !== 'card') return null;
   switch (b.card) {
     case 'approval': return <ApprovalCard body={b} />;
-    case 'question': return <QuestionCard row={row} body={b} />;
+    case 'question': return <QuestionCard row={row} body={b} reply={inTasks} />;
     case 'connect': return <ConnectCard row={row} body={b} />;
     case 'draft': return <DraftCard body={b} />;
     case 'handoff': return <UsageHandoffCard row={row} body={b} />;

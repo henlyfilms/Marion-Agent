@@ -17,6 +17,7 @@ import { isDesktop } from '../lib/desktop-access.js';
 import type { ChatModel, ChatModelSelection, ChatProvider, WorkUsage } from '../types.js';
 import { TaskUsageMeter } from './task-usage.js';
 import { normalizeEffort } from './runner-settings.js';
+import { isGoogleSignInFailure } from './sign-in.js';
 export { modelLabel } from '../model-label.js';
 
 export type SubscriptionProvider = Exclude<ChatProvider, 'local'>;
@@ -30,63 +31,24 @@ const claudeEfforts = [...extendedEfforts, 'max'];
  * orchestrate all resolve through here): Claude Opus 5.5, Codex 6.2 Sol and Gemini 4 Neon, all on high effort.
  */
 export const DEFAULT_SUBSCRIPTION_MODELS = { claude: 'claude-opus-5-5', codex: 'gpt-6.2-sol', gemini: 'gemini-4-neon' } as const;
-export const DEFAULT_SUBSCRIPTION_EFFORT = 'high';
+export const DEFAULT_SUBSCRIPTION_EFFORT = 'medium';
 /** Gemini (Antigravity) needs a Google sign-in: the chat shows an in-app sign-in card instead of a plain failure. */
 export class GoogleSignInRequired extends Error {
   readonly provider = 'gemini' as const;
   constructor() { super('Gemini needs you to sign in with your personal Google account (agy acp --login).'); this.name = 'GoogleSignInRequired'; }
 }
-/**
- * Whether Gemini's (agy's) own last words mean "sign in with Google". Only whole login phrases count — "not authenticated",
- * "please sign in", "login required", "agy acp --login" … — so startup, logging ("logging", "log in to file"), sandbox
- * and loopback failures that merely contain those letters are reported as themselves, not as a sign-in card.
- * Two look-alikes are excluded too: proxy authentication (HTTP 407, "Proxy Authentication Required", proxy credentials)
- * is the network's sign-in, not Google's; and a bare `--login` only counts as agy's own hint (`agy acp --login`), never
- * a CLI/shell flag error ("unknown option '--login'", "bash --login: …"). Clauses about either are dropped before
- * matching, and once a proxy-auth failure is present only Google-specific wording still counts.
- */
-const GOOGLE_SIGN_IN = [
-  /\b(?:not|un)[\s-]?authenticated\b/i,
-  /\bauthentication (?:is )?(?:required|needed|failed|expired)\b/i,
-  /\b(?:please|must|need to|needs you to|required to)\s+(?:re-?)?(?:sign|log)[\s-]?in\b/i,
-  /\b(?:sign|log)[\s-]?in (?:is )?(?:required|needed|expired)\b/i,
-  /\bnot (?:signed|logged)[\s-]?in\b/i,
-];
-/** Wording that can only mean Google / agy's own sign-in or OAuth — still trusted when a proxy failure is also present. */
-const GOOGLE_SPECIFIC_SIGN_IN = [
-  /\bGoogleSignInRequired\b/,
-  /\b(?:sign|log)[\s-]?in with (?:your )?(?:personal )?google\b/i,
-  /\bagy(?:\s+acp)?\s+--login\b/i,
-  /\bgoogle\b[^\n]{0,40}\b(?:oauth|credentials?|token|account|sign[\s-]?in|log[\s-]?in)\b[^\n]{0,30}\b(?:expired|invalid|revoked|missing|required)\b/i,
-  /\b(?:oauth|google)\b[^\n]{0,20}\b(?:access|refresh|id)?[\s-]?token\b[^\n]{0,10}\b(?:has\s+)?(?:expired|been revoked|is invalid|invalid|missing)\b/i,
-  /\binvalid_grant\b/i,
-];
-/** HTTP 407 / proxy authentication: the network proxy wants credentials, Google sign-in would not help. */
-const PROXY_AUTH = /\bproxy[\s-]+(?:auth\w*|credentials?|log[\s-]?in|sign[\s-]?in)\b|\bproxy\b[^\n]{0,60}\b(?:(?:un|not\s)authenticated|auth(?:entication|orization)? (?:is )?(?:required|failed|needed))\b|\b(?:HTTP(?:\/[\d.]+)?|status(?:[\s_-]?code)?|code|error)\s*[:=]?\s*407\b|\b407\s+proxy\b|\bCONNECT\s+tunnel\s+failed\b[^\n]{0,40}\b407\b|\bproxy\s+response\s*\(?\s*407\b|\b(?:HTTPS?|ALL)_PROXY\b[^\n]{0,120}\b(?:returned|response|responded|status)\b[^\n]{0,20}\(?\s*407\b/i;
-/** A CLI or shell rejecting a `--login` flag, or a login shell (`bash --login`), is not agy asking for Google sign-in. */
-const LOGIN_FLAG_ERROR = /\b(?:unknown|unrecognized|unrecognised|invalid|unsupported|illegal|unexpected|bad)\s+(?:command[\s-]line\s+)?(?:option|flag|argument|switch|parameter)s?\b[^\n]*--?login\b|--?login['"`]?:?\s+(?:is\s+)?(?:an?\s+)?(?:unknown|unrecognized|unrecognised|invalid|unsupported|not (?:a\s+)?(?:supported|recognized|recognised|defined|valid))\b|\bflag provided but not defined:\s*-?-login\b|\b(?:ba|z|k|da|fi|c|tc)?sh\s+(?:-\w+\s+)*--login\b/i;
-export const isGoogleSignInFailure = (diagnostic: string) => {
-  // Proxy detection is scoped to whole clauses: only a clause that is itself a proxy-auth failure counts, so a harmless
-  // "Connecting via proxy …" line never suppresses a later sign-in error.
-  const clauses = diagnostic.split(/\r?\n|;\s*|\.\s+/);
-  const proxy = clauses.some(clause => PROXY_AUTH.test(clause));
-  const relevant = clauses
-    .filter(clause => !PROXY_AUTH.test(clause) && !LOGIN_FLAG_ERROR.test(clause))
-    .join('\n');
-  if (GOOGLE_SPECIFIC_SIGN_IN.some(pattern => pattern.test(relevant))) return true;
-  return !proxy && GOOGLE_SIGN_IN.some(pattern => pattern.test(relevant));
-};
+export { isGoogleSignInFailure } from './sign-in.js';
 /** Forget the cached Gemini model list (after a sign-in, so the next check asks the CLI again). */
 export function forgetGeminiCatalog() { geminiCatalog = undefined; }
-/** High when the model offers it, else the closest step down (medium), else whatever it has. */
+/** Medium when the model offers it (the token-optimizer default for every chat), else the closest step down (low), else whatever it has. Never a silent High. */
 export function preferredEffort(efforts: readonly string[]): string | null {
-  return efforts.includes(DEFAULT_SUBSCRIPTION_EFFORT) ? DEFAULT_SUBSCRIPTION_EFFORT : efforts.includes('medium') ? 'medium' : efforts[0] ?? null;
+  return efforts.includes(DEFAULT_SUBSCRIPTION_EFFORT) ? DEFAULT_SUBSCRIPTION_EFFORT : efforts.includes('low') ? 'low' : efforts[0] ?? null;
 }
 /**
  * The `--effort` a CLI run gets, or null for none. A model from the catalog only ever gets one of its own levels (a
  * saved effort it doesn't offer falls back to its preferred one; a model with no levels gets no flag: Antigravity
  * exits with "--effort is not supported for model …" otherwise). A model missing from the catalog keeps the saved
- * effort, else high, unless `unlisted: 'none'` (Gemini: when `agy models` failed or does not list the model, its levels
+ * effort, else medium, unless `unlisted: 'none'` (Gemini: when `agy models` failed or does not list the model, its levels
  * are unknown, so no flag rather than a blind --effort high). `noEffort`: the CLI already refused the flag for this model.
  */
 export function runEffort(chosen: Pick<ChatModel, 'efforts'> | undefined, saved: string | null | undefined, fast = false, noEffort = false,
@@ -103,8 +65,9 @@ export function runEffort(chosen: Pick<ChatModel, 'efforts'> | undefined, saved:
  * the Go stdlib's singular "flag provided but not defined: -effort" too) and its effort errors (from the binary):
  * `--effort is not supported for model %q`, `--effort=%s is not supported for model %q`, `--effort is not supported
  * for the current model`, `invalid --effort %q (valid: %s)`, `%s has no %q effort (available: %s)`, `unrecognized
- * effort %q for thinking level`, `--model %s conflicts with --effort=%s`, `invalid model selection (--model %q
- * --effort %q)`; plus the usual unknown-option / invalid-level wording of other CLIs.
+ * effort %q for thinking level`, `--model %s conflicts with --effort=%s`; plus the usual unknown-option / invalid-level wording of other CLIs.
+ * Never an effort refusal: `invalid model selection (--model %q --effort %q): model … is not recognized as a known model`
+ * — the model is unknown (runner-settings failure), and a retry without --effort would only launch it again.
  */
 const EFFORT_REFUSED = new RegExp([
   String.raw`--effort\b[^\n]*not\s+supported`,
@@ -116,20 +79,23 @@ const EFFORT_REFUSED = new RegExp([
   String.raw`\bhas\s+no\s+"?[\w.-]+"?\s+effort\b`,
   String.raw`unrecognized\s+effort\b`,
   String.raw`conflicts\s+with\s+--?effort\b`,
-  String.raw`invalid\s+model\s+selection\s*\([^)]*--effort\b`,
   String.raw`\beffort\s+isn't\s+adjustable\b`,
   String.raw`invalid\s+(?:value|argument)[^\n]*(?:for\s+)?(?:flag\s+)?--?effort\b`,
   String.raw`unsupported\s+(?:reasoning\s+)?effort\b`,
   String.raw`\beffort(?:\s+level)?\s+(?:\S+\s+)?(?:is\s+)?not\s+(?:supported|allowed)\b`,
 ].join('|'), 'i');
-export const effortUnsupported = (error: unknown) => EFFORT_REFUSED.test(String((error as Error)?.message ?? error));
+const MODEL_UNKNOWN = /\binvalid\s+model\s+selection\b|\bmodel\b[^\n]{0,80}\bis\s+not\s+(?:recognized|recognised)\b|\bnot\s+(?:recognized|recognised)\s+as\s+a\s+known\s+model\b/i;
+export const effortUnsupported = (error: unknown) => {
+  const message = String((error as Error)?.message ?? error);
+  return !MODEL_UNKNOWN.test(message) && EFFORT_REFUSED.test(message);
+};
 /** The default model first, so name matches ("codex", "gemini") and pickers land on it. */
 const defaultFirst = <T>(models: T[], isDefault: (model: T) => boolean) => [...models].sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)));
 const claudeModels: ChatModel[] = [
   // Opus 5.5 on high effort is the default for every Claude run; the first entry feeds all fallbacks
   // (saved-preference fallback, picker default, "claude" name match, team defaults). Sonnet only when chosen explicitly.
-  { provider: 'claude', id: 'claude-opus-5-5', label: 'Claude Opus 5.5', efforts: claudeEfforts, defaultEffort: 'high' },
-  { provider: 'claude', id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', efforts: claudeEfforts, defaultEffort: 'high' },
+  { provider: 'claude', id: 'claude-opus-5-5', label: 'Claude Opus 5.5', efforts: claudeEfforts, defaultEffort: DEFAULT_SUBSCRIPTION_EFFORT },
+  { provider: 'claude', id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', efforts: claudeEfforts, defaultEffort: DEFAULT_SUBSCRIPTION_EFFORT },
 ];
 
 export type SubscriptionSelection = ChatModelSelection & { provider: SubscriptionProvider };
@@ -569,10 +535,14 @@ async function runSubscriptionReply(
     if (selection.provider !== 'codex') options = { ...options, noEffort: true };
   }
   try {
-    try { return await spawnSubscriptionReply(selection, prompt, signal, images, options); }
+    // Whether the first launch really passed --effort: only then can a retry without it change anything. A launch without
+    // --effort that fails (e.g. agy rejecting an unknown model) is never relaunched — one launch, one failure.
+    let passedEffort = false;
+    const first: ReplyOptions = { ...options, onModel: (model) => { passedEffort = !!model.effort; options.onModel?.(model); } };
+    try { return await spawnSubscriptionReply(selection, prompt, signal, images, first); }
     catch (error) {
       // The CLI refused --effort for this model (e.g. a Gemini model without effort levels): run once more without it.
-      if (signal.aborted || options.noEffort || selection.provider === 'codex' || !effortUnsupported(error)) throw error;
+      if (signal.aborted || options.noEffort || !passedEffort || selection.provider === 'codex' || !effortUnsupported(error)) throw error;
       console.warn(`[subscriptions] ${selection.provider} refused --effort for ${selection.model}; retrying without it`);
       return await spawnSubscriptionReply(selection, prompt, signal, images, { ...options, noEffort: true });
     }
@@ -613,9 +583,9 @@ async function spawnSubscriptionReply(
       const runModel = chosen?.id ?? model;
       if (meter) meter.model = runModel;
       args.push('--model', runModel);
-      // No saved effort (older bots, first run): high, like everywhere else; never a level the model doesn't offer.
+      // No saved effort (older bots, first run): medium, like everywhere else; never a level the model doesn't offer.
       // Gemini without a catalog entry (`agy models` failed, or this account doesn't list the model): its levels are
-      // unknown, so no --effort at all rather than a blind --effort high that may crash the run.
+      // unknown, so no --effort at all rather than a blind --effort that may crash the run.
       const selectedEffort = runEffort(chosen, effort, options.fast, options.noEffort, provider === 'gemini' ? 'none' : 'saved');
       if (selectedEffort) args.push('--effort', selectedEffort);
       options.onModel?.({ ...selection, model: runModel, label: chosen?.label ?? (runModel === model ? selection.label : undefined) ?? runModel, effort: selectedEffort });

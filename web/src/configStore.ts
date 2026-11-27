@@ -98,6 +98,9 @@ window.addEventListener('marion-agent:event', (e) => {
   if (ev.type === 'memories') bump(`memories:${ev.botId}`);
   // A relayed agent started, finished or rotated, or a bot began a new conversation: Sessions views reload.
   if (ev.type === 'sessions' || ev.type === 'cleared') bump('sessions');
+  // Tasks → Waiting on You and its badge: a card appeared, was answered (here or in chat) or expired, a task changed, a
+  // conversation was cleared, or a chat was hidden or deleted.
+  if (ev.type === 'waiting' || ev.type === 'tasks' || ev.type === 'cleared' || ev.type === 'roster') bump('waiting');
 });
 
 // Picking a bot anywhere (sidebar, search) goes back to its chat.

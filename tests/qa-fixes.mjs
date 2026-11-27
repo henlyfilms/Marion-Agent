@@ -93,13 +93,13 @@ try {
 
   // ---------- 2. Gemini --effort only for models that take it ----------
   assert.equal(S.runEffort({ efforts: [] }, 'high'), null, 'no effort levels → no --effort');
-  assert.equal(S.runEffort({ efforts: ['low', 'medium', 'high'] }, 'xhigh'), 'high', 'unsupported saved effort → preferred');
+  assert.equal(S.runEffort({ efforts: ['low', 'medium', 'high'] }, 'xhigh'), 'medium', 'unsupported saved effort → preferred (Medium)');
   assert.equal(S.runEffort({ efforts: ['low', 'medium', 'high'] }, 'medium'), 'medium');
   assert.equal(S.runEffort({ efforts: ['medium'] }, null), 'medium');
   assert.equal(S.runEffort({ efforts: ['low', 'high'] }, 'high', true), 'low', 'fast mode');
   assert.equal(S.runEffort({ efforts: [] }, 'high', true), null);
   assert.equal(S.runEffort(undefined, 'max'), 'max', 'unknown model keeps the saved effort');
-  assert.equal(S.runEffort(undefined, null), 'high');
+  assert.equal(S.runEffort(undefined, null), 'medium');
   assert.equal(S.runEffort({ efforts: ['high'] }, 'high', false, true), null, 'noEffort');
   assert.ok(S.effortUnsupported(new Error('Gemini exited with code 1: --effort is not supported for model "gemini-4-neon"')));
   assert.ok(!S.effortUnsupported(new Error('Gemini exited with code 1: quota')));
@@ -107,11 +107,16 @@ try {
   // the effort errors in its binary; then the Go stdlib's singular form and common unknown-option / invalid-level wording.
   for (const refused of ['invalid --effort "ultra" (valid: low|medium|high|xhigh|max)', 'gemini-4-neon has no "high" effort (available: low, medium)',
     '--effort=high is not supported for model "gemini-4-neon"', '--effort is not supported for the current model', 'unrecognized effort "ultra" for thinking level',
-    '--model gemini-4-neon conflicts with --effort=high', 'invalid model selection (--model "gemini-4-neon" --effort "high"): no such variant',
+    '--model gemini-4-neon conflicts with --effort=high',
     'flags provided but not defined: -effort', 'flag provided but not defined: -effort', 'flag provided but not defined: --effort',
     'Error: invalid effort level "ultra" (want low|medium|high|xhigh|max)', 'invalid value "ultra" for flag -effort: unknown level',
     "error: unknown option '--effort'", 'Error: Unknown argument: effort --effort', 'effort level "max" is not supported for model gemini-x', 'Unsupported reasoning effort: max']) {
     assert.ok(S.effortUnsupported(new Error('Gemini exited with code 2: ' + refused)), refused);
+  }
+  // Gate 5 (Rev 3): agy's "invalid model selection" means the model is unknown — never an effort refusal (no retry).
+  for (const unknown of ['invalid model selection (--model "gemini-4-neon" --effort "high"): no such variant',
+    'invalid model selection (--model "gemini-4-neon" --effort ""): model gemini-4-neon is not recognized as a known model or custom model in settings']) {
+    assert.equal(S.effortUnsupported(new Error('Gemini exited with code 1: ' + unknown)), false, unknown);
   }
   for (const other of ['flags provided but not defined: -model', 'invalid model "gemini-x"', 'Error: You are not authenticated.', 'Connection refused'])
     assert.ok(!S.effortUnsupported(new Error('Gemini exited with code 1: ' + other)), other);

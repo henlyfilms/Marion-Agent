@@ -202,6 +202,8 @@ export const useStore = create<State>((set, get) => ({
         return;
       case 'roster':
         s.loadBots().catch(console.error);
+        // A chat was hidden, deleted or restored: its cards leave or rejoin Waiting on You (configStore.ts).
+        window.dispatchEvent(new CustomEvent('marion-agent:event', { detail: ev }));
         return;
       case 'chat-order':
         set(st => ({
@@ -232,6 +234,7 @@ export const useStore = create<State>((set, get) => ({
         if (s.routines[ev.botId] || ev.botId === s.selectedBotId) s.loadRoutines(ev.botId).catch(console.error);
         return;
       case 'tasks':
+      case 'waiting':
       case 'sessions':
       case 'memories':
         // Picked up by configStore.ts (Tasks view, Library/Tasks tabs, bot settings).

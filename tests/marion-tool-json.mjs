@@ -5,7 +5,10 @@
 // separately:
 //   a) valid first reply           → attempts 1, executions 1, no correction prompt
 //   b) malformed → valid           → attempts 2, executions 1, the 2nd attempt carries the correction
-//   c) malformed → malformed       → attempts 2, executions 0, the turn ends with a clear error notice
+//   c) malformed → malformed       → attempts 2, executions 0, the turn ends with a clear error notice; no persisted row
+//                                    contains MARION_TOOL
+//   d–h) wrappers: ```tool / ~~~ fences dispatch like a bare request; a prose prefix ("Sure. MARION_TOOL: {…}") is
+//        corrected once, and twice ends with a clean error — never shown as text, never leaking MARION_TOOL JSON
 // No network, no listener, no real model calls.
 // Usage: npm run build && node tests/marion-tool-json.mjs
 import assert from 'node:assert/strict';
@@ -141,6 +144,57 @@ try {
     const errors = r.rows.filter(x => x.body.type === 'notice' && x.body.tone === 'error');
     assert.equal(errors.length, 1, 'one error notice');
     assert.match(errors[0].body.text, /invalid Marion tool request twice/, errors[0].body.text);
+    const leaked = r.rows.filter(x => JSON.stringify(x.body).includes('MARION_TOOL'));
+    assert.equal(leaked.length, 0, `no persisted chat row contains MARION_TOOL: ${JSON.stringify(leaked.map(x => x.body))}`);
+  });
+
+  const noLeak = (r) => {
+    const leaked = r.rows.filter(x => JSON.stringify(x.body).includes('MARION_TOOL'));
+    assert.equal(leaked.length, 0, `no persisted chat row contains MARION_TOOL: ${JSON.stringify(leaked.map(x => x.body))}`);
+  };
+  const FENCED = (open, close) => `${open}\n${VALID}\n${close}`;
+
+  await test('d) ```tool fence → dispatches once (attempts 1, executions 1), no MARION_TOOL row', async () => {
+    const r = await replay('d', [FENCED('```tool', '```')]);
+    assert.equal(r.attempts.length, 1, 'provider attempts');
+    assert.equal(r.executions.length, 1, 'tool executions');
+    assert.deepEqual(r.executions[0].args, { query: 'gate two' });
+    assert.ok(!r.rows.some(x => x.body.type === 'notice' && x.body.tone === 'error'), 'no error');
+    noLeak(r);
+  });
+
+  await test('e) ~~~ fence → dispatches once (attempts 1, executions 1), no MARION_TOOL row', async () => {
+    const r = await replay('e', [FENCED('~~~', '~~~')]);
+    assert.equal(r.attempts.length, 1, 'provider attempts');
+    assert.equal(r.executions.length, 1, 'tool executions');
+    noLeak(r);
+  });
+
+  await test('f) prose prefix → valid → corrected once, dispatches once (attempts 2, executions 1), never shown as text', async () => {
+    const r = await replay('f', [`Sure. ${VALID}`, VALID]);
+    assert.equal(r.attempts.length, 2, 'provider attempts');
+    assert.deepEqual(r.attempts.map(a => a.corrected), [false, true]);
+    assert.equal(r.executions.length, 1, 'tool executions');
+    noLeak(r);
+  });
+
+  await test('g) prose prefix twice → zero executions and one clean error (attempts 2), no MARION_TOOL row', async () => {
+    const r = await replay('g', [`Sure. ${VALID}`, `Okay, running it now: ${VALID}`, VALID]);
+    assert.equal(r.attempts.length, 2, 'provider attempts (no third try)');
+    assert.equal(r.executions.length, 0, 'tool executions');
+    const errors = r.rows.filter(x => x.body.type === 'notice' && x.body.tone === 'error');
+    assert.equal(errors.length, 1, 'one error notice');
+    assert.match(errors[0].body.text, /invalid Marion tool request twice/);
+    assert.ok(!r.rows.some(x => x.body.type === 'message' && x.body.role !== 'user'), 'no assistant text message was posted');
+    noLeak(r);
+  });
+
+  await test('h) malformed inside a ```tool fence twice → clean error, no MARION_TOOL row', async () => {
+    const r = await replay('h', [FENCED('```tool', '```').replace('}}', '}'), FENCED('~~~json', '~~~').replace('}}', '}')]);
+    assert.equal(r.attempts.length, 2);
+    assert.equal(r.executions.length, 0);
+    assert.equal(r.rows.filter(x => x.body.type === 'notice' && x.body.tone === 'error').length, 1);
+    noLeak(r);
   });
 
   console.log(`PASS marion-tool-json (${passed} tests)`);

@@ -16,6 +16,7 @@ import { delimiter, join } from 'node:path';
 const bin = mkdtempSync(join(tmpdir(), 'marion-greek-'));
 const log = join(bin, 'launches.jsonl');
 const claudeMode = join(bin, 'claude-mode');
+const agyMode = join(bin, 'agy-mode');
 process.env.DB_PATH = ':memory:';
 process.env.MARION_NO_SCHEDULER = '1';
 process.env.MARION_DESKTOP_TOKEN = 'test-token';
@@ -35,6 +36,19 @@ const args = process.argv.slice(2);
 const entry = (provider, input) => fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ provider, args, gate: [...input.matchAll(/GREEK-[a-z0-9]+/g)].at(-1)?.[0] ?? null }) + '\\n');
 `;
 writeFileSync(join(bin, 'agy'), `${header}
+// reject-bare: like a real agy whose catalog can't be read, and which rejects bare model ids it doesn't know (wording of agy 1.5.x).
+const agyMode = fs.existsSync(${JSON.stringify(agyMode)}) ? fs.readFileSync(${JSON.stringify(agyMode)}, 'utf8').trim() : 'ok';
+if (agyMode === 'reject-bare' && args[0] === 'models') { console.error('Error: could not load models'); process.exit(1); }
+if (agyMode === 'reject-bare') {
+  const input = fs.readFileSync(0, 'utf8');
+  entry('gemini', input);
+  const model = args[args.indexOf('--model') + 1];
+  const at = args.indexOf('--effort');
+  if (!/^gemini-4-neon-(low|medium|high)$/.test(model)) {
+    console.error('Error: invalid model selection (--model "' + model + '" --effort "' + (at >= 0 ? args[at + 1] : '') + '"): model ' + model + ' is not recognized as a known model or custom model in settings');
+    process.exit(1);
+  }
+}
 if (args[0] === 'models') { for (const l of ['low', 'medium', 'high']) console.log('gemini-4-neon-' + l + '\\tGemini 4 Neon (' + l + ')'); process.exit(0); }
 const input = fs.readFileSync(0, 'utf8');
 entry('gemini', input);
@@ -227,14 +241,68 @@ try {
     const sel = { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' };
     assert.ok(RS.runnerSettingsFailure(new Error('Claude Code could not use claude-x with this account. Choose another model.'), sel));
     assert.ok(RS.runnerSettingsFailure(new Error('Codex model gpt-x is unavailable for this account. Choose another model.'), sel));
-    for (const downstream of ['Claude Code reported an error: API Error: 529 Overloaded', 'Claude usage limit reached', 'Sign in to Claude Code in Terminal',
-      'Gemini exited with code 1: invalid model selection (--model gemini-x --effort high)']) {
+    for (const downstream of ['Claude Code reported an error: API Error: 529 Overloaded', 'Claude usage limit reached', 'Sign in to Claude Code in Terminal']) {
       assert.equal(RS.runnerSettingsFailure(new Error(downstream), sel), null, downstream);
+    }
+    // agy's "invalid model selection": the model itself is unknown → a runner-settings (model) failure, never an effort retry.
+    for (const rejected of ['Gemini exited with code 1: invalid model selection (--model gemini-x --effort high)',
+      'Gemini exited with code 1: invalid model selection (--model "gemini-4-neon" --effort ""): model gemini-4-neon is not recognized as a known model or custom model in settings']) {
+      assert.equal(RS.runnerSettingsFailure(new Error(rejected), sel)?.setting, 'model', rejected);
     }
     assert.equal(RS.downstreamClass(new Error('Claude usage limit reached')), 'quota');
     assert.equal(RS.downstreamClass(new Error('Sign in to Claude Code in Terminal')), 'auth');
     assert.equal(RS.downstreamClass(new Error('API Error: 529 Overloaded')), 'provider');
     assert.match(RS.downstreamText(new Error('Claude usage limit reached'), 'claude', 'R'), /the Claude request hit a usage limit/);
+  });
+
+  await test('gate5-gemini-unrecognized-model: agy rejecting a bare unknown model id → exactly 1 launch, no --effort retry, runner-settings card (routine, chat, bot-to-bot)', async () => {
+    const REAL = 'Gemini exited with code 1: invalid model selection (--model "gemini-4-neon" --effort ""): model gemini-4-neon is not recognized as a known model or custom model in settings';
+    const SUB = await import('../server/dist/agent/subscriptions.js');
+    const sel = { provider: 'gemini', model: 'gemini-4-neon', effort: 'medium' };
+    const failures = [];
+    const check = (ok, message) => { if (!ok) failures.push(message); };
+    // Classifier units (the real agy wording).
+    check(!SUB.effortUnsupported(new Error(REAL)), 'effortUnsupported(real agy unknown-model error) must be false');
+    check(!SUB.effortUnsupported(new Error('invalid model selection (--model "gemini-x" --effort "high"): model gemini-x is not recognized as a known model or custom model in settings')), 'unknown model with --effort is still not an effort refusal');
+    const classified = RS.runnerSettingsFailure(new Error(REAL), sel);
+    check(classified?.setting === 'model', `runnerSettingsFailure(real agy wording) must be a model settings failure, got ${classified ? classified.setting : 'null'}`);
+    // Genuine effort refusals still retry without --effort.
+    check(SUB.effortUnsupported(new Error('--effort is not supported for model "gemini-4-flash"')), 'a real effort refusal is still an effort refusal');
+
+    writeFileSync(agyMode, 'reject-bare');
+    SUB.forgetGeminiCatalog();
+    try {
+      const expectFlags = ['--mode', '--sandbox', '--disable-slash-commands', '--settings', '--input-format', '--output-format', '--model'];
+      const verify = (label, runs, botId) => {
+        check(runs.length === 1, `${label}: expected exactly 1 agy launch, got ${runs.length}: ${JSON.stringify(runs.map(r => r.args.filter(a => a.startsWith('--'))))}`);
+        if (runs[0]) {
+          check(JSON.stringify(runs[0].args.filter(a => a.startsWith('--'))) === JSON.stringify(expectFlags), `${label}: exact flags ${JSON.stringify(runs[0].args.filter(a => a.startsWith('--')))}`);
+          check(flag(runs[0].args, '--model') === 'gemini-4-neon', `${label}: --model gemini-4-neon`);
+          check(runs[0].args.indexOf('--effort') === -1, `${label}: no --effort (catalog unknown)`);
+        }
+        const card = cards(botId);
+        check(card.length === 1, `${label}: expected 1 runner-settings card, got ${card.length}: ${JSON.stringify(notices(botId).map(n => n.text))}`);
+        if (card[0]) { check(card[0].blocker.setting === 'model', `${label}: card setting=model`); check(/gemini-4-neon/.test(card[0].text), `${label}: card names the model`); }
+        check(notices(botId).filter(n => n.tone === 'error').length === 1, `${label}: one error notice (no double exit): ${JSON.stringify(notices(botId).map(n => n.text))}`);
+      };
+      // Scheduled routine.
+      const g = await greek('neonroutine', { provider: 'gemini', model: 'gemini-4-neon', effort: 'medium' });
+      await g.fire();
+      verify('routine', g.launches(), g.bot.id);
+      await g.fire();
+      check(g.launches().length <= 1, `routine: no relaunch with unchanged settings (${g.launches().length})`);
+      // Regular chat message.
+      const c = await greek('neonchat', { provider: 'gemini', model: 'gemini-4-neon', effort: 'medium' });
+      await ok(await api.request(`${origin}/bots/${c.bot.id}/messages`, { method: 'POST', headers, body: JSON.stringify({ text: `${c.prefix}1 hello` }) }));
+      await sleep(100); await waitIdle(c.bot.id);
+      verify('chat', c.launches(), c.bot.id);
+      // Bot-to-bot message.
+      const b = await greek('neonbot', { provider: 'gemini', model: 'gemini-4-neon', effort: 'medium' });
+      enqueue(b.bot.id, { type: 'bot', fromBotId: c.bot.id, fromName: c.bot.name, text: `${b.prefix}1 from another bot`, depth: 1 });
+      await sleep(100); await waitIdle(b.bot.id);
+      verify('bot-to-bot', b.launches(), b.bot.id);
+    } finally { rmSync(agyMode, { force: true }); SUB.forgetGeminiCatalog(); }
+    if (failures.length) { console.error('GATE5 FAILURES:\n  ' + failures.join('\n  ')); assert.fail(`${failures.length} gate-5 check(s) failed`); }
   });
 
   console.log(`PASS greek-runner-settings (${passed} tests)`);

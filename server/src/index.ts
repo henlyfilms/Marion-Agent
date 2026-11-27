@@ -15,7 +15,8 @@ import { migrateUniversalMemories } from './features/universal-memory.js';
 import { featuresApi } from './routes-features.js';
 import { startLifeSync } from './features/life-link.js';
 import { startLifeOutbox } from './features/life-outbox.js';
-import { recoverAgentSessions } from './features/agent-sessions.js';
+import { recoverAgentSessions, recoverStaleRows } from './features/agent-sessions.js';
+import { sweepStaleWaiting } from './features/waiting.js';
 import { busyCount, isRetiring, reportedAppBuild, retire, setAppBuild, setOwnerPid, startOrphanWatch } from './lib/lifecycle.js';
 import { startAutoUpdate } from './features/app-update.js';
 import { appEnv, env } from './env.js';
@@ -113,6 +114,13 @@ if (appEnv('NO_SCHEDULER') !== '1') {
   catch (error) { console.warn('[marion-agent] could not resume interrupted turns', (error as Error).message); }
 }
 try { recoverAgentSessions(); } catch (error) { console.warn('[marion-agent] could not tidy relayed sessions', (error as Error).message); }
+// Tool calls / work cards left `running` by the previous process, on their own so a session-cleanup failure can't skip them.
+try { const n = recoverStaleRows(); if (n) console.log(`[marion-agent] finalized ${n} interrupted tool call/work card row(s)`); }
+catch (error) { console.warn('[marion-agent] could not finalize interrupted rows', (error as Error).message); }
+// Cards nobody can answer any more (a Cloud permission whose launch died with the old process, a closed Cloud request, an
+// approval with no paused turn) close now, so Tasks → Waiting on You and its badge only count what still needs the owner.
+try { const n = sweepStaleWaiting(); if (n) console.log(`[marion-agent] closed ${n} stale waiting card(s)`); }
+catch (error) { console.warn('[marion-agent] could not tidy waiting cards', (error as Error).message); }
 startIdleWatcher();
 startOrphanWatch();
 if (appEnv('NO_SCHEDULER') !== '1') startAutoUpdate();

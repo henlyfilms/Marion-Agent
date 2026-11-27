@@ -1,6 +1,8 @@
 // Question cards ("Pick an option or reply in your own words"): a reply typed in the composer must answer the waiting
 // question exactly once, like an option click, and resolve the card. Also covers option clicks, Skip, Stop, stale cards,
-// replies in a different chat, and that a typed reply can never approve an approval card.
+// replies in a different chat, and that a typed reply can never approve an approval card. Gate 3 follow-ups: attachments
+// on a free-text reply (and attachment preparation failing: the card stays pending, no turn), whitespace-only input,
+// "stop" typed while idle, dictated replies, voice-call messages, group chats, and reload persistence.
 // Offline and in-process: a stubbed model endpoint stands in for the model, no ports. Needs `npm run build` first.
 // Usage: node tests/question-freetext.mjs
 import assert from 'node:assert/strict';
@@ -68,7 +70,8 @@ await import('../server/dist/features/schema.js');
 const { initSubagents } = await import('../server/dist/agent/subagents.js');
 const { initRooms } = await import('../server/dist/agent/rooms.js');
 initSubagents(); initRooms();
-const { api } = await import('../server/dist/routes.js');
+const { api, routeHooks } = await import('../server/dist/routes.js');
+const { roomsApi } = await import('../server/dist/routes-rooms.js');
 const { isBotBusy } = await import('../server/dist/agent/loop.js');
 const { showQuestionCard } = await import('../server/dist/agent/work-feed.js');
 const { getLive } = await import('../server/dist/store.js');
@@ -275,6 +278,133 @@ try {
     assert.equal(toolRuns.length, 0, 'the approval-gated tool never ran');
     assert.equal((await questions()).find(r => r.seq === q.seq).body.status, 'answered', 'only the question was answered');
     pass('free-text replies cannot bypass approvals');
+  }
+
+  // 6. Gate 3 follow-ups, on fresh chats (nothing pending from the sections above).
+  {
+    const make = async (name) => (await (await post('/bots', { name, job: 'Helps', description: 'Helps.', instructions: 'Help.' })).json()).bot;
+    const third = await make('Third');
+    const fourth = await make('Fourth');
+    const cookieOnly = { cookie: headers.cookie };
+    const sendForm = (id, text, files) => {
+      const form = new FormData();
+      form.set('text', text);
+      for (const [name, body, type] of files) form.append('attachments', new Blob([body], { type }), name);
+      return api.request(`${origin}/bots/${id}/messages`, { method: 'POST', headers: cookieOnly, body: form });
+    };
+
+    // a) Attachments on a free-text reply: the reply answers the card once, keeps the attachment, one turn.
+    {
+      const card = await ask(third.id);
+      const base = requests.length;
+      const res = await sendForm(third.id, 'rock-solid-batch, see the notes', [['notes.txt', 'apply to server only', 'text/plain']]);
+      assert.equal(res.status, 200, await res.clone().text());
+      await waitFor(() => requests.length === base + 1, 'the attachment reply never ran');
+      await idle(third.id); await settle();
+      const after = (await questions(third.id)).find(r => r.seq === card.seq);
+      assert.equal(after.body.status, 'answered');
+      assert.equal(after.body.answer, 'rock-solid-batch, see the notes');
+      assert.ok(requests.at(-1).user.includes(`[Answer to "${QUESTION}"] rock-solid-batch, see the notes`), requests.at(-1).user);
+      const msg = (await rows(third.id)).find(r => r.body.type === 'message' && r.body.text === 'rock-solid-batch, see the notes');
+      assert.equal(msg?.body.attachments?.[0]?.name, 'notes.txt', 'the attachment is kept on the reply');
+      pass('a free-text reply with an attachment answers the card once and keeps the attachment');
+    }
+
+    // b) Attachment preparation throws: the card is NOT left answered with no turn queued.
+    {
+      const card = await ask(third.id);
+      const base = requests.length;
+      const real = routeHooks.forModel;
+      routeHooks.forModel = async () => { throw new Error('frames failed'); };
+      try {
+        const res = await sendForm(third.id, 'rock-solid-batch', [['notes.txt', 'x', 'text/plain']]);
+        assert.ok(res.status >= 500, `attachment failure surfaces as an error (${res.status})`);
+      } finally { routeHooks.forModel = real; }
+      await settle(); await idle(third.id);
+      assert.equal(requests.length, base, 'no turn was queued');
+      assert.equal((await questions(third.id)).find(r => r.seq === card.seq).body.status, 'pending', 'the card stays pending after an attachment error');
+      // A retry then answers it normally.
+      assert.equal((await send('rock-solid-batch', third.id)).status, 200);
+      await waitFor(() => requests.length === base + 1, 'the retry never ran');
+      await idle(third.id);
+      assert.equal((await questions(third.id)).find(r => r.seq === card.seq).body.status, 'answered');
+      pass('an attachment error never leaves the question card answered with no turn queued');
+    }
+
+    // c) Whitespace-only input: rejected, the card stays pending, no turn.
+    {
+      const card = await ask(third.id);
+      const base = requests.length;
+      for (const blank of ['   ', '\n\t ']) assert.equal((await send(blank, third.id)).status, 400, 'whitespace-only is empty');
+      assert.equal((await post(`/bots/${third.id}/cards/${card.seq}/answer`, { answer: '   ' })).status, 400, 'a blank option answer is refused');
+      await settle();
+      assert.equal(requests.length, base);
+      assert.equal((await questions(third.id)).find(r => r.seq === card.seq).body.status, 'pending');
+      pass('whitespace-only input never answers a question card');
+
+      // d) "stop" typed while idle: never an answer, no turn; the card stays pending.
+      assert.equal(isBotBusy(third.id), false, 'idle');
+      for (const word of ['stop', 'Stop.']) assert.equal((await send(word, third.id)).status, 200);
+      await settle(); await idle(third.id);
+      assert.equal(requests.length, base, 'an idle stop starts no turn');
+      const still = (await questions(third.id)).find(r => r.seq === card.seq);
+      assert.equal(still.body.status, 'pending', 'an idle "stop" does not answer the open question card');
+      pass('"stop" typed while idle does not answer an open question card');
+
+      // e) Dictation: a dictated reply (capitalised, punctuated) is a typed reply and answers the card once.
+      const dictated = 'Rock-solid-batch, please.';
+      assert.equal((await send(dictated, third.id)).status, 200);
+      await waitFor(() => requests.length === base + 1, 'the dictated reply never ran');
+      await idle(third.id); await settle();
+      const done = (await questions(third.id)).find(r => r.seq === card.seq);
+      assert.equal(done.body.status, 'answered');
+      assert.equal(done.body.answer, dictated);
+      assert.equal(answered(third.name).length >= 1, true);
+      pass('a dictated reply answers the waiting question once');
+    }
+
+    // f) A voice-call message is not a typed answer: the card stays pending.
+    {
+      const card = await ask(third.id);
+      const res = await post(`/bots/${third.id}/messages`, { text: 'rock-solid-batch', call: 'gate3-call' });
+      assert.equal(res.status, 200, await res.clone().text());
+      await settle(); await idle(third.id); await settle();
+      const after = (await questions(third.id)).find(r => r.seq === card.seq);
+      assert.equal(after.body.status, 'pending', 'a voice-call message does not answer the card');
+      assert.ok(!requests.filter(r => r.who === 'Third').at(-1).user.includes('[Answer to'), 'the voice turn is not an answer');
+      assert.equal((await post(`/bots/${third.id}/cards/${card.seq}/dismiss`)).status, 200);
+      pass('voice-call messages do not answer a question card');
+    }
+
+    // g) Group chats are excluded: a message in a group never answers a question card (the group's or a member's).
+    {
+      const room = await (await roomsApi.request(`${origin}/`, { method: 'POST', headers, body: JSON.stringify({ name: 'Gate 3 group', botIds: [third.id, fourth.id] }) })).json();
+      assert.ok(room.id, `group created: ${JSON.stringify(room)}`);
+      const memberCard = await ask(fourth.id);
+      const userId = db.prepare('SELECT user_id FROM bots WHERE id=?').get(third.id).user_id;
+      showQuestionCard(room.id, userId, QUESTION, OPTIONS);
+      const roomCard = await lastQuestion(room.id);
+      assert.equal(roomCard.body.status, 'pending');
+      assert.equal((await send('rock-solid-batch', room.id)).status, 200);
+      await settle(); await idle(third.id); await idle(fourth.id); await settle();
+      assert.equal((await questions(room.id)).find(r => r.seq === roomCard.seq).body.status, 'pending', 'a group message does not answer the group card');
+      assert.equal((await questions(fourth.id)).find(r => r.seq === memberCard.seq).body.status, 'pending', "a group message does not answer a member's card");
+      pass('group-chat messages never answer a question card');
+
+      // h) Reload persistence: the answered state and the answer survive a fresh read (GET rows and the DB row).
+      const base = requests.length;
+      assert.equal((await send('a new worktree', fourth.id)).status, 200);
+      await waitFor(() => requests.length > base, 'the reply never ran');
+      await idle(fourth.id); await settle();
+      const reloaded = (await (await api.request(`${origin}/bots/${fourth.id}/rows`, { headers })).json()).rows.find(r => r.seq === memberCard.seq);
+      assert.equal(reloaded.body.status, 'answered');
+      assert.equal(reloaded.body.answer, 'a new worktree');
+      const stored = JSON.parse(db.prepare('SELECT body FROM rows WHERE bot_id=? AND seq=?').get(fourth.id, memberCard.seq).body);
+      assert.equal(stored.status, 'answered', 'persisted in the database');
+      assert.equal((await post(`/bots/${fourth.id}/cards/${memberCard.seq}/answer`, { answer: OPTIONS[0] })).status, 409, 'still answered after reload');
+      assert.equal((await rows(fourth.id)).filter(r => r.body.type === 'message' && r.body.role === 'user' && r.body.text === 'a new worktree').length, 1);
+      pass('an answered question card stays answered after a reload');
+    }
   }
 
   console.log(`\nAll ${passed.length} question-card checks passed.`);

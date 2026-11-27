@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { copyText } from '../../lib/clipboard';
 import { SegmentPill } from '../SegmentPill';
-import type { Bot, Task } from '@shared/types';
+import type { Bot, Task, WaitingItem } from '@shared/types';
+import { api } from '../../lib/api';
+import { CardRow } from '../cards/Cards';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { configApi } from '../../lib/configApi';
 import { relativeShort } from '../../lib/time';
@@ -75,6 +77,94 @@ function useTasks(botId?: string): Task[] | null {
   return tasks;
 }
 
+// ---------- Waiting on You ----------
+
+// One list for the section and the sidebar badge, so reopening Tasks shows it instantly.
+let waitingCache: WaitingItem[] | null = null;
+/** Tests (server-rendered fixtures): start from a known list, as a reopened Tasks view would. */
+export function seedWaiting(items: WaitingItem[] | null) { waitingCache = items; }
+
+/**
+ * What waits on the owner (action cards and needs-input tasks), straight from the server's single source (the chat's own
+ * card rows). Reloads on every 'waiting' bump: a card appears, is answered here or in chat, expires, or a chat goes away.
+ */
+export function useWaiting(): WaitingItem[] | null {
+  const v = useVersion('waiting');
+  const [items, setItems] = useState<WaitingItem[] | null>(() => waitingCache);
+  useEffect(() => {
+    let alive = true;
+    // A burst of card updates (an answer writes the card, then the reply) reloads once.
+    const timer = setTimeout(() => {
+      configApi.waiting()
+        .then((r) => { waitingCache = r.items; if (alive) setItems(r.items); })
+        .catch(() => { if (alive) setItems((current) => current ?? []); });
+    }, v ? 120 : 0);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [v]);
+  return items;
+}
+
+/** A task a bot marked "needs input" with no card asking: reply here as you would in its chat. */
+function TaskReply({ item, bot }: { item: Extract<WaitingItem, { kind: 'task' }>; bot?: Bot }) {
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setBusy(true); setError(null);
+    try { await api.send(item.botId, text); setDraft(''); }
+    catch (e) { setError((e as Error).message || 'Something went wrong'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="card question-card waiting-task">
+      <div className="question-card__head">
+        <div className="question-card__q">{item.task.title}</div>
+        {item.task.note && <div className="question-card__hint">{item.task.note}</div>}
+      </div>
+      <form className="question-card__reply" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+        <input className="question-card__input" value={draft} onChange={(e) => setDraft(e.target.value)} disabled={busy}
+          placeholder={`Reply to ${bot?.name ?? item.botName}`} aria-label={`Reply to ${item.botName} about: ${item.task.title}`} maxLength={4000} />
+        <button type="submit" className="btn btn--primary" disabled={busy || !draft.trim()}>Reply</button>
+      </form>
+      {error && <div className="card__error">{error}</div>}
+    </div>
+  );
+}
+
+function WaitingEntry({ item, bot }: { item: WaitingItem; bot?: Bot }) {
+  const r = relativeShort(item.at);
+  return (
+    <li className="waiting-item" data-kind={item.kind === 'card' ? item.card : 'task'}>
+      <div className="waiting-item__meta">
+        {bot && <BotAvatarFor bot={bot} size={14} />}
+        <span className="waiting-item__bot">{item.botName}</span>
+        <span aria-hidden>·</span>
+        <span>{r === 'now' ? 'just now' : r === 'Yesterday' ? 'yesterday' : `${r} ago`}</span>
+        {bot && <button type="button" className="link-btn link-btn--small waiting-item__open" onClick={() => openBotChat(bot.id)}>Open chat</button>}
+      </div>
+      {item.kind === 'card' ? <CardRow row={item.row} inTasks /> : <TaskReply item={item} bot={bot} />}
+    </li>
+  );
+}
+
+/** Tasks → Waiting on You: only what the owner has to answer or act on, answerable right here. */
+export function WaitingSection({ items, byId }: { items: WaitingItem[] | null; byId: Map<string, Bot> }) {
+  if (items === null) return null;
+  return (
+    <section className="waiting-section" aria-labelledby="waiting-title">
+      <div className="waiting-section__head">
+        <h2 id="waiting-title" className="waiting-section__title">Waiting on You</h2>
+        {items.length > 0 && <span className="waiting-section__count">{items.length}</span>}
+      </div>
+      {items.length === 0
+        ? <div className="waiting-section__empty">Nothing needs you right now.</div>
+        : <ul className="waiting-list">{items.map((item) => <WaitingEntry key={item.key} item={item} bot={byId.get(item.botId)} />)}</ul>}
+    </section>
+  );
+}
+
 function sortTasks(list: Task[]) {
   const rank = { needs_input: 0, working: 1, done: 2 } as const;
   return [...list].sort((a, b) => rank[a.state] - rank[b.state] || b.updatedAt - a.updatedAt);
@@ -84,6 +174,7 @@ function sortTasks(list: Task[]) {
 export function TasksView() {
   const bots = useStore((s) => s.bots);
   const tasks = useTasks();
+  const waiting = useWaiting();
   const [filter, setFilter] = useState<Filter>('open');
   const byId = useMemo(() => new Map(bots.map((b) => [b.id, b])), [bots]);
   const counts = useMemo(() => ({ open: tasks?.filter((t) => t.state !== 'done').length ?? 0, done: tasks?.filter((t) => t.state === 'done').length ?? 0 }), [tasks]);
@@ -104,6 +195,7 @@ export function TasksView() {
       </header>
       <div className="tasks-view__scroll">
         <div className="tasks-view__inner">
+          <WaitingSection items={waiting} byId={byId} />
           {tasks === null ? <div className="session-skeleton" aria-label="Loading tasks">{[0, 1, 2, 3].map(i => <span key={i} />)}</div> : shown.length === 0 ? (
             <div className="tasks-empty">
               <Glyph name="tasks" size={28} opacity={0.35} />
@@ -119,16 +211,24 @@ export function TasksView() {
   );
 }
 
-/** Sidebar entry for the Tasks view, with a count of tasks waiting on the user. */
+/** The Tasks badge: the same pill as the Sessions badge (`sidebar-island__count`), hidden at 0. */
+export function WaitingBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return <span className="sidebar-island__count is-waiting" aria-label={`${count} waiting on you`}>{count}</span>;
+}
+
+/**
+ * Sidebar entry for the Tasks view. Its badge (the same pill as Sessions) counts what waits on the owner in Waiting on
+ * You, updates live, and is hidden at 0.
+ */
 export function TasksIsland() {
   const view = useConfigUI((s) => s.view);
-  const tasks = useTasks();
-  const waiting = tasks?.filter((t) => t.state === 'needs_input').length ?? 0;
+  const waiting = useWaiting()?.length ?? 0;
   return (
     <button type="button" className={`sidebar-island${view === 'tasks' ? ' is-active' : ''}`} onClick={() => useConfigUI.getState().setView(view === 'tasks' ? 'chat' : 'tasks')} title="Tasks" aria-pressed={view === 'tasks'}>
       <span className="sidebar-island__icon"><Glyph name="tasks" size={18} /></span>
       <span className="sidebar-island__label">Tasks</span>
-      {waiting > 0 && <span className="sidebar-island__count" aria-label={`${waiting} waiting on you`}>{waiting}</span>}
+      <WaitingBadge count={waiting} />
     </button>
   );
 }

@@ -1,4 +1,4 @@
-// marion_app: bots can list, create, rename, recolor, reshape, star, delete/restore bots; the setting turns it off.
+// marion_app: bots can list, create, rename, recolor, reshape, star, delete/restore bots and set chat effort; the setting turns it off.
 // Usage: npm run build && node tests/app-control.mjs
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -42,6 +42,16 @@ await runAppControl(ctx, { action: 'restore_bot', bot: 'Scout' });
 assert.equal(row('Scout').deleted_at, null);
 assert.match((await runAppControl(ctx, { action: 'delete_bot', bot: 'me' })).output, /can't delete itself/);
 await assert.rejects(runAppControl(ctx, { action: 'update_bot', bot: 'Moose', color: 'plaid' }), /isn't a bot color/);
+// Chat reasoning effort on the local model (web workspace): legacy per-bot effort, chat-only default, per-bot override.
+const effortOf = async name => JSON.parse((await runAppControl(ctx, { action: 'get_chat_effort', bot: name })).output).bots[0];
+assert.deepEqual([(await effortOf('Moose')).chat_effort, (await effortOf('Moose')).chat_effort_source], ['medium', 'local_bot_effort']);
+await runAppControl(ctx, { action: 'set_chat_default_effort', effort: 'high' });
+assert.deepEqual([(await effortOf('Moose')).chat_effort, (await effortOf('Moose')).chat_effort_source, (await effortOf('Moose')).chat_provider], ['high', 'chat_default', 'local']);
+await runAppControl(ctx, { action: 'set_chat_effort', bot: 'Moose', effort: 'low' });
+assert.deepEqual([(await effortOf('Moose')).chat_effort, (await effortOf('Moose')).chat_effort_source], ['low', 'bot_override']);
+assert.equal(row('Moose').chat_provider, null, 'effort changes never pin a model');
+assert.match((await runAppControl(ctx, { action: 'set_chat_effort', bot: 'Moose', effort: 'max' })).output, /supports low, medium, high, xhigh/);
+assert.equal(row('Moose').chat_effort, 'low');
 saveAgentSettings('u1', { appControl: false });
 assert.ok(!functionSchemas('u1', barry.id).some(t => t.name === 'marion_app'), 'setting off hides the tool');
 assert.match((await runAppControl(ctx, { action: 'list_bots' })).output, /turned off/);

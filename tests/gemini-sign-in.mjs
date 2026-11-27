@@ -342,6 +342,42 @@ try {
     }
   });
 
+  await test('gate 1 (Rev 3): account mismatch / 407 "Login required" / log-in-to-file / /tmp/--login are not sign-in; Gemini Enterprise saved-credentials is; downstreamClass agrees', async () => {
+    const RS = await import('../server/dist/agent/runner-settings.js');
+    const failures = [];
+    const ACCOUNT_MISMATCH = [
+      'Wrong Google account: please log in with henry@example.com instead of other@example.com',
+      'Account mismatch: not authenticated as the workspace owner (signed in as other@example.com)',
+    ];
+    const NOT_AUTH = [
+      ...ACCOUNT_MISMATCH,
+      'Proxy returned 407. Login required.',
+      'error: could not log in to file /var/log/agy.log (permission denied)',
+      'open /tmp/--login: no such file or directory',
+    ];
+    const ENTERPRISE = "You're signed in to Gemini Enterprise, but couldn't load the saved credentials. Run agy acp --login again.";
+    const ENTERPRISE_BARE = "signed in to Gemini Enterprise, but couldn't load the saved credentials";
+    for (const text of NOT_AUTH) {
+      if (S.isGoogleSignInFailure(text)) failures.push(`isGoogleSignInFailure false-positive (sign-in card): ${text}`);
+      const { e, cards } = await tracked(text);
+      if (e instanceof S.GoogleSignInRequired || cards !== 0) failures.push(`caller false-positive: ${text} → ${e?.name}, ${cards} sign-in card(s)`);
+      const cls = RS.downstreamClass(new Error(`Gemini exited with code 1: ${text}`));
+      if (cls === 'auth') failures.push(`downstreamClass = auth for: ${text}`);
+    }
+    for (const text of [ENTERPRISE, ENTERPRISE_BARE]) {
+      if (!S.isGoogleSignInFailure(text)) failures.push(`missed sign-in: ${text}`);
+      const { e, cards } = await tracked(text);
+      if (!(e instanceof S.GoogleSignInRequired) || cards !== 1) failures.push(`caller missed sign-in: ${text} → ${e?.name}, ${cards} card(s)`);
+      if (RS.downstreamClass(new Error(text)) !== 'auth') failures.push(`downstreamClass != auth for: ${text}`);
+    }
+    // Still auth (regression).
+    for (const text of ['Sign in to Claude Code in Terminal', 'Gemini: not authenticated. Run agy acp --login', 'Unauthorized: token expired']) {
+      if (RS.downstreamClass(new Error(text)) !== 'auth') failures.push(`downstreamClass lost auth for: ${text}`);
+    }
+    if (RS.downstreamClass(new S.GoogleSignInRequired()) !== 'auth') failures.push('downstreamClass(GoogleSignInRequired) != auth');
+    if (failures.length) { console.error('GATE1 FAILURES:\n  ' + failures.join('\n  ')); assert.fail(`${failures.length} gate-1 check(s) failed`); }
+  });
+
   console.log(`PASS gemini-sign-in (${passed} tests)`);
 } finally {
   rmSync(bin, { recursive: true, force: true });

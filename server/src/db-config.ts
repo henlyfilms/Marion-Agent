@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS chat_provider_preferences (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   provider TEXT NOT NULL CHECK (provider IN ('codex', 'gemini', 'claude'))
 );
+-- Chat-only default reasoning effort per chat provider: applies to chats that inherit their model (no per-bot model
+-- override). Builder, team, Ask and coding runs keep using subscription_model_preferences.
+CREATE TABLE IF NOT EXISTS chat_effort_defaults (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('local', 'codex', 'gemini', 'claude')),
+  effort TEXT NOT NULL,
+  PRIMARY KEY (user_id, provider)
+);
 CREATE TABLE IF NOT EXISTS subscription_model_preferences (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   provider TEXT NOT NULL CHECK (provider IN ('codex', 'gemini', 'claude')),

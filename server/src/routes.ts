@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { forModel } from './video-frames.js';
+
+/** Seams the tests replace (attachment preparation can fail; the question card must survive it). */
+export const routeHooks = { forModel };
 import { attachmentBodyLimit, getAttachment, getAttachmentInfo, getAttachmentSlice, parseByteRange, readAttachments, type UploadedAttachment } from './attachments.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { streamSSE } from 'hono/streaming';
@@ -32,6 +35,7 @@ import { chatProviders, chatSortOptions, type ChatModelSelection, type ChatSort,
 import { orderChats, tier } from './chat-order.js';
 import { AVATAR_SHAPE_IDS, isAvatarColor, isStemColor, isWorkFxChoice, normalizeAvatarShape } from './avatarShapes.js';
 import { createBotRecord, type BotSpec } from './features/bots.js';
+import { listWaiting, ownerReplied } from './features/waiting.js';
 
 export const api = new Hono<AuthVars>();
 
@@ -532,13 +536,21 @@ api.post('/bots/:id/messages', bodyLimit({
   const busy = current.kind !== 'room' && !call && isBotBusy(b.id);
   const intent = busy ? classifyIntent(text) : 'additive';
   if (intent === 'stop') { stopBot(b.id); return c.json({ row }); }
+  // A typed "stop" while idle is never an answer: the open question card stays pending and no turn starts.
+  if (!busy && current.kind !== 'room' && !call && text && classifyIntent(text) === 'stop' && pendingQuestion(b.id)) {
+    stopBot(b.id);
+    return c.json({ row });
+  }
+  // Screen recordings reach the models as frames (the chat keeps the original file). Done before the question card is
+  // claimed: if the attachments can't be prepared the card stays pending instead of answered with no turn queued.
+  const media = await routeHooks.forModel(attachments);
   // "Pick an option or reply in your own words": a typed reply answers the question card this chat is waiting on, exactly
-  // like an option click (one turn, the card resolves). Claimed here, before any await, so it can only be answered once.
+  // like an option click (one turn, the card resolves). Claimed after the last await, so it can only be answered once.
   // Only question cards: approval cards are never resolved by a message.
   const question = current.kind !== 'room' && !call && text ? pendingQuestion(b.id) : null;
   const answerNote = question ? answerQuestion(b.id, question, text) : '';
-  // Screen recordings reach the models as frames (the chat keeps the original file).
-  const media = await forModel(attachments);
+  // A reply in the chat is the answer to its other open question cards and the input its needs-input tasks waited for.
+  if (current.kind !== 'room') ownerReplied(b.id, text || 'Sent an attachment', { questions: !call });
   const mediaNote = media.note ? `[${media.note}]\n` : '';
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (current.kind === 'room') dispatchRoomMessage(b.id, text, enqueue, media.attachments, notes + mediaNote);
@@ -601,22 +613,29 @@ api.post('/approvals/:id', async (c) => {
   if (decision !== 'deny' && remoteAccessFor(c) &&
     db.prepare("SELECT 1 FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND b.user_id=? AND a.tool='github_create_repo'")
       .get(c.req.param('id'), c.get('user').id)) return c.json({ error: 'Approve GitHub repository creation on the Mac.' }, 403);
-  try { resolveApproval(c.get('user').id, c.req.param('id'), decision); } catch { return c.json({ error: 'not found' }, 404); }
-  return c.json({ ok: true });
+  if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') return c.json({ error: 'Choose allow, always or deny.' }, 400);
+  let first: boolean;
+  try { first = resolveApproval(c.get('user').id, c.req.param('id'), decision); } catch { return c.json({ error: 'not found' }, 404); }
+  // Already decided (in chat, in Tasks, or a second tap) or expired: nothing changes and the bot is not resumed twice.
+  return first ? c.json({ ok: true }) : c.json({ error: 'This was already answered.' }, 409);
 });
 
+// Question and connect cards are answered from chat or from Tasks → Waiting on You through these same routes. The body is
+// read before the card is checked so the check and the update run without an await in between: of two racing answers
+// only the first is taken.
 api.post('/bots/:id/cards/:seq/answer', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  const body = await c.req.json<{ answer?: unknown }>().catch(() => null);
-  const answer = typeof body?.answer === 'string' ? body.answer.trim() : '';
-  if (!answer) return c.json({ error: 'empty answer' }, 400);
+  const raw = await c.req.json<{ answer?: unknown }>().catch(() => null);
+  const answer = typeof raw?.answer === 'string' ? raw.answer.trim().slice(0, 4000) : '';
   // Read after the await: nothing can claim the card between this check and answerQuestion below.
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'card' || row.body.card !== 'question') return c.json({ error: 'not a question' }, 400);
   if (row.body.status !== 'pending') return c.json({ error: 'This question was already answered.' }, 409);
+  if (!answer) return c.json({ error: 'Write an answer first.' }, 400);
   const note = answerQuestion(b.id, row, answer);
   appendRow(b.id, 'message', { type: 'message', role: 'user', text: answer });
+  ownerReplied(b.id, answer, { questions: false });
   enqueue(b.id, { type: 'user', text: note + answer });
   return c.json({ ok: true });
 });
@@ -640,6 +659,7 @@ api.post('/bots/:id/cards/:seq/dismiss', (c) => {
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'card') return c.json({ error: 'not a card' }, 400);
   if (row.body.card === 'question' && row.body.status !== 'pending') return c.json({ error: 'This question was already answered.' }, 409);
+  if (row.body.card === 'connect' && row.body.status !== 'pending') return c.json({ error: 'This card is already done.' }, 409);
   const body: any = { ...row.body, status: row.body.card === 'connect' ? 'skipped' : 'dismissed' };
   updateRow(b.id, row.seq, body);
   if (row.body.card === 'question') settleQuestionWait(b.id);
@@ -685,6 +705,12 @@ api.delete('/routines/:id', async (c) => {
 api.get('/bots/:id/tasks', (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   return b ? c.json({ tasks: listTasks(b.id) }) : c.json({ error: 'not found' }, 404);
+});
+
+// Tasks → Waiting on You: action cards and needs-input tasks across all chats (the badge is items.length).
+api.get('/waiting', (c) => {
+  const items = listWaiting(c.get('user').id);
+  return c.json({ items, count: items.length });
 });
 
 api.get('/tasks', (c) => {
