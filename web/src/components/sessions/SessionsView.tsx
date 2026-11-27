@@ -9,7 +9,7 @@ import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { ProviderLogo } from '../ProviderLogo';
 import { openBotChat } from '../botMenuItems';
-import { MarionSessionList, isBuilder, useMarionSessions } from './MarionSessions';
+import { MarionSessionList, isBuilder, isCloud, useMarionSessions } from './MarionSessions';
 import type { MarionSessionFilter } from '../../lib/featuresApi';
 import type { MarionSession } from '@shared/types';
 
@@ -74,9 +74,9 @@ const SCOPES: { id: Scope; label: string }[] = [{ id: 'marion', label: 'Marion A
 const SCOPE_PREF = 'marion-agent:sessions-scope';
 const readScope = (): Scope => { try { return localStorage.getItem(SCOPE_PREF) === 'mac' ? 'mac' : 'marion'; } catch { return 'marion'; } };
 
-type MarionFilter = 'all' | 'builders' | 'chat' | 'relay' | SessionProvider;
+type MarionFilter = 'all' | 'builders' | 'cloud' | 'chat' | 'relay' | SessionProvider;
 const MARION_FILTERS: { id: MarionFilter; label: string; logo?: SessionProvider }[] = [
-  { id: 'all', label: 'All' }, { id: 'builders', label: 'Builders' }, { id: 'chat', label: 'Bot chats' }, { id: 'relay', label: 'Agents' },
+  { id: 'all', label: 'All' }, { id: 'builders', label: 'Builders' }, { id: 'cloud', label: 'Cloud' }, { id: 'chat', label: 'Bot chats' }, { id: 'relay', label: 'Agents' },
   { id: 'claude', label: 'Claude', logo: 'claude' }, { id: 'codex', label: 'Codex', logo: 'codex' }, { id: 'gemini', label: 'Gemini', logo: 'gemini' },
 ];
 const MARION_FILTER_PREF = 'marion-agent:sessions-marion-filter';
@@ -90,12 +90,13 @@ const readMarionFilter = (): MarionFilter => {
  */
 export function marionFilterQuery(filter: MarionFilter): MarionSessionFilter {
   if (filter === 'all') return { limit: 200 };
+  if (filter === 'cloud') return { kind: 'cloud', limit: 200 };
   if (filter === 'chat' || filter === 'relay' || filter === 'builders') return { type: filter, limit: 200 };
   return { provider: filter, limit: 200 };
 }
 
 export function matchesMarionFilter(filter: MarionFilter, s: Pick<MarionSession, 'type' | 'kind' | 'provider'>) {
-  return filter === 'all' || (filter === 'builders' ? isBuilder(s) : filter === s.type || filter === s.provider);
+  return filter === 'all' || (filter === 'builders' ? isBuilder(s) : filter === 'cloud' ? isCloud(s) : filter === s.type || filter === s.provider);
 }
 
 /** Everything across all bots: their chat sessions and every Claude, Codex and Gemini run they relayed. */
@@ -104,12 +105,16 @@ function MarionSessionsPane() {
   const sessions = useMarionSessions(marionFilterQuery(filter));
   // Live counts on every tab come from the running runs, whichever tab is open.
   const live = useMarionSessions({ type: 'relay', status: 'running' }, 10_000);
+  // Cloud requests waiting on a card count as live on the Cloud and Builders tabs too.
+  const waiting = useMarionSessions({ kind: 'cloud', status: 'waiting' }, 10_000);
   const setFilter = (f: MarionFilter) => { setFilterState(f); try { localStorage.setItem(MARION_FILTER_PREF, f); } catch { /* private mode */ } };
   const running = useMemo(() => {
-    const c: Record<MarionFilter, number> = { all: 0, builders: 0, chat: 0, relay: 0, claude: 0, codex: 0, gemini: 0 };
-    for (const s of live ?? []) if (s.status === 'running') { c.all++; c.relay++; if (isBuilder(s)) c.builders++; if (s.provider) c[s.provider]++; }
+    const c: Record<MarionFilter, number> = { all: 0, builders: 0, cloud: 0, chat: 0, relay: 0, claude: 0, codex: 0, gemini: 0 };
+    for (const s of [...(live ?? []), ...(waiting ?? [])]) if (s.status === 'running' || s.status === 'waiting') {
+      c.all++; c.relay++; if (isBuilder(s)) c.builders++; if (isCloud(s)) c.cloud++; if (s.provider) c[s.provider]++;
+    }
     return c;
-  }, [live]);
+  }, [live, waiting]);
   const shown = useMemo(() => (sessions ?? []).filter(s => matchesMarionFilter(filter, s)), [sessions, filter]);
   const bots = useStore(s => s.bots);
   const open = (botId: string) => { if (bots.some(b => b.id === botId)) openBotChat(botId); };
@@ -124,7 +129,9 @@ function MarionSessionsPane() {
             : shown.length === 0 ? (
               <div className="tasks-empty">
                 <div className="tasks-empty__title">No {filter === 'all' ? '' : `${MARION_FILTERS.find(f => f.id === filter)!.label} `}sessions yet</div>
-                <div className="tasks-empty__sub">{filter === 'builders'
+                <div className="tasks-empty__sub">{filter === 'cloud'
+                  ? 'Claude Cloud sessions your bots start on GitHub repositories show up here, live, including ones waiting for you to pick a repository or sign in.'
+                  : filter === 'builders'
                   ? 'Claude, Codex and Gemini agents your bots put to work (asked directly, orchestrated, team, Cloud) show up here, live.'
                   : 'Your bots’ chats and the Claude, Codex and Gemini runs they start show up here, live.'}</div>
               </div>
@@ -231,6 +238,7 @@ function MacSessionsPane() {
       </div>
       <div className="sessions-view__body">
         <div className="sessions-view__list">
+          {(filter === 'all' || filter === 'claude') && <MacCloudSessions />}
           {sessions === null ? <div className="session-skeleton" aria-hidden>{[0, 1, 2, 3, 4].map(i => <span key={i} />)}</div>
             : shown.length === 0 ? (
               <div className="tasks-empty">
@@ -246,6 +254,22 @@ function MacSessionsPane() {
         {open && <SessionDetail key={open.id} session={open} onClose={() => setOpenId(null)} />}
       </div>
     </>
+  );
+}
+
+/**
+ * Claude Cloud sessions started from this Mac. They run on GitHub, so Claude keeps no transcript on disk for them and the
+ * local list can't find them: they come from Marion Agent's own record and sit on top of the Claude sessions here.
+ */
+export function MacCloudSessions() {
+  const cloud = useMarionSessions({ kind: 'cloud', limit: 50 }, 10_000);
+  const bots = useStore(s => s.bots);
+  if (!cloud?.length) return null;
+  return (
+    <section className="mac-cloud" aria-label="Claude Cloud sessions">
+      <div className="mac-cloud__title">Claude Cloud <span>Runs on GitHub</span></div>
+      <MarionSessionList sessions={cloud} showBot onOpenBot={botId => { if (bots.some(b => b.id === botId)) openBotChat(botId); }} />
+    </section>
   );
 }
 

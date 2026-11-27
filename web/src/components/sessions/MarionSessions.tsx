@@ -11,18 +11,22 @@ import { ProviderLogo } from '../ProviderLogo';
 
 /**
  * Bot chat sessions and relayed agent sessions (Claude, Codex, Gemini) as Marion Agent itself keeps them.
- * Used by the global Sessions view and by each bot's Sessions panel.
+ * Used by the Sessions view (Marion Agent tab, and the Claude Cloud section on This Mac).
  */
 
 /** Relayed agents put to work (asked directly, orchestrated, team, Cloud, handoff): every relayed run except a bot's own chat model replying. */
 export const isBuilder = (s: Pick<MarionSession, 'type' | 'kind'>) => s.type === 'relay' && s.kind !== 'subscription_bot';
+/** Claude Cloud runs: started from Marion Agent, running on GitHub. */
+export const isCloud = (s: Pick<MarionSession, 'kind'>) => s.kind === 'cloud';
+/** Row subtitle of a Cloud run: where it runs and on which repository ("Claude Cloud · GitHub owner/repo"). */
+export const cloudLabel = (s: Pick<MarionSession, 'folder'>) => ['Claude Cloud', s.folder?.name ? `GitHub ${s.folder.name}` : ''].filter(Boolean).join(' · ');
 
 export const PROVIDER_NAMES = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' } as const;
 const KIND_NAMES: Record<string, string> = {
-  chat: 'Chat', ask_subscription: 'Asked directly', subscription_bot: 'Chat model', orchestration: 'Orchestrated', team: 'Team', cloud: 'Cloud', handoff: 'Handoff',
+  chat: 'Chat', ask_subscription: 'Asked directly', subscription_bot: 'Chat model', orchestration: 'Orchestrated', team: 'Team', cloud: 'Claude Cloud', handoff: 'Handoff',
 };
 const STATUS_NAMES: Record<string, string> = {
-  running: 'Running', completed: 'Done', failed: 'Failed', stopped: 'Stopped', active: 'Current', archived: 'Earlier',
+  running: 'Running', waiting: 'Waiting', completed: 'Done', failed: 'Failed', stopped: 'Stopped', active: 'Current', archived: 'Earlier',
 };
 
 const ago = (ts: number) => { const r = relativeShort(ts); return r === 'now' ? 'Just now' : /^\d/.test(r) ? `${r} ago` : r; };
@@ -65,7 +69,8 @@ export function StatusBadge({ status }: { status: MarionSession['status'] }) {
   return <span className={`msession-badge is-${status}`}>{status === 'running' && <i aria-hidden />}{STATUS_NAMES[status]}</span>;
 }
 
-const durationOf = (s: MarionSession) => s.status === 'running' ? Date.now() - s.startedAt : s.durationMs;
+const live = (s: MarionSession) => s.status === 'running' || s.status === 'waiting';
+const durationOf = (s: MarionSession) => live(s) ? Date.now() - s.startedAt : s.durationMs;
 
 function Logo({ s }: { s: MarionSession }) {
   const bot = useStore(state => state.bots.find(b => b.id === s.botId));
@@ -116,9 +121,10 @@ function Details({ s, onOpenBot }: { s: MarionSession; onOpenBot?: (botId: strin
         {relay && s.provider && <Detail label="Agent">{PROVIDER_NAMES[s.provider]}{s.agent && s.agent !== PROVIDER_NAMES[s.provider] ? ` · ${s.agent}` : ''}</Detail>}
         {relay && <Detail label="Started by">{KIND_NAMES[s.kind] ?? s.kind}{s.role ? ` · ${s.role}` : ''}</Detail>}
         {relay && (s.modelLabel || s.model) && <Detail label="Model">{s.modelLabel || s.model}{s.effort ? ` · ${s.effort}` : ''}</Detail>}
-        {s.kind === 'cloud' && <Detail label="Runs on">Claude Cloud</Detail>}
+        {s.kind === 'cloud' && <Detail label="Runs on">Claude Cloud (GitHub)</Detail>}
         {s.cloudUrl && <Detail label="Cloud session"><a href={s.cloudUrl} target="_blank" rel="noreferrer">Open in Claude ↗</a></Detail>}
-        {s.folder && <Detail label={s.kind === 'cloud' ? 'Repository' : 'Folder'}><span title={s.folder.path}>{s.folder.name}</span></Detail>}
+        {s.folder && <Detail label={s.kind === 'cloud' ? 'Repository' : 'Folder'}>{s.kind === 'cloud' && /^https:\/\/github\.com\//.test(s.folder.path)
+          ? <a href={s.folder.path} target="_blank" rel="noreferrer">{s.folder.name} ↗</a> : <span title={s.folder.path}>{s.folder.name}</span>}</Detail>}
         <Detail label="Started">{dividerLabel(s.startedAt)}</Detail>
         {s.status !== 'running' && s.endedAt && <Detail label="Ended">{dividerLabel(s.endedAt)}</Detail>}
         <Detail label="Duration">{elapsed(durationOf(s))}</Detail>
@@ -135,9 +141,10 @@ function Details({ s, onOpenBot }: { s: MarionSession; onOpenBot?: (botId: strin
 export function MarionSessionRow({ s, index, open, onToggle, showBot, onOpenBot }: {
   s: MarionSession; index: number; open: boolean; onToggle: () => void; showBot: boolean; onOpenBot?: (botId: string) => void;
 }) {
-  useTick(s.status === 'running');
+  useTick(live(s));
   const who = s.type === 'chat'
     ? `${showBot ? `${s.botName} · ` : ''}${s.messageCount ?? 0} message${s.messageCount === 1 ? '' : 's'}`
+    : isCloud(s) ? [showBot ? s.botName : '', cloudLabel(s)].filter(Boolean).join(' · ')
     : [showBot ? s.botName : '', s.provider ? PROVIDER_NAMES[s.provider] : '', KIND_NAMES[s.kind] ?? '', s.folder?.name ?? ''].filter(Boolean).join(' · ');
   return (
     <div className={`msession${open ? ' is-open' : ''}`} style={{ animationDelay: `${Math.min(index, 12) * 22}ms` }}>
@@ -150,7 +157,7 @@ export function MarionSessionRow({ s, index, open, onToggle, showBot, onOpenBot 
         <span className="msession-side">
           <StatusBadge status={s.status} />
           <span className="session-row__time">
-            {s.status === 'running' ? elapsed(durationOf(s)) : s.type === 'relay' && s.durationMs >= 1000 ? `${elapsed(s.durationMs)} · ${ago(s.updatedAt)}` : ago(s.updatedAt)}
+            {live(s) ? elapsed(durationOf(s)) : s.type === 'relay' && s.durationMs >= 1000 ? `${elapsed(s.durationMs)} · ${ago(s.updatedAt)}` : ago(s.updatedAt)}
           </span>
         </span>
       </button>

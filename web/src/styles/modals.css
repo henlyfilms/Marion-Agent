@@ -192,4 +192,3 @@ button.swatch-cell { outline: none; }
 .utility-settings, .utility-handoff { display: grid; gap: 10px; padding: 12px; min-width: 0; overflow-wrap: anywhere; }
 .utility-handoff { margin-block: 8px; width: min(100%, 400px); }
 .utility-handoff p, .utility-body p { margin: 0; }
-.utility-cloud-action { padding: 8px 12px; }

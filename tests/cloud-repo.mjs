@@ -1,7 +1,9 @@
 // Offline: strict Cloud mode. Fake GitHub CLI and fake Claude CLI, isolated database inside ignored app data.
 // Checks that Cloud requests resolve a GitHub repository and launch without any local folder, that every blocker
 // (missing, ambiguous, no access, gh sign-in/scopes/missing CLI, Claude GitHub connection) becomes an in-app card with
-// concrete fixes instead of a local fallback, and that approving the card carries on in the Cloud.
+// concrete fixes instead of a local fallback, and that approving the card carries on in the Cloud. Public repositories
+// work read-only (even without gh sign-in or the private scopes), and every Cloud request is one Sessions record from
+// the moment it is asked for (Waiting while a card holds it, then Running/Done under the same id).
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -52,6 +54,7 @@ try {
   const { getRow } = await import('../server/dist/store.js');
   const repoMod = await import('../server/dist/features/cloud-repo.js');
   const { wantsCloud, exactRepo, repoHint, matchRepos, resolveCloudRepo, tokenScopes, ghDeviceAuth, CLOUD_PROMPT_LINE } = repoMod;
+  const { cloudGoal } = await import('../server/dist/features/cloud-sessions.js');
   const { launchCloudWork, actOnCloudCard, setCloudDeps } = await import('../server/dist/features/cloud-cards.js');
   const { startCloudSession } = await import('../server/dist/features/cloud-sessions.js');
   const { listSessions } = await import('../server/dist/features/agent-sessions.js');
@@ -90,7 +93,7 @@ try {
     if (args[0] === 'repo' && args[1] === 'view') {
       const found = gh.repos.find(r => r.nameWithOwner.toLowerCase() === args[2].toLowerCase());
       if (!found) throw new Error(`GraphQL: Could not resolve to a Repository with the name '${args[2]}'.`);
-      return JSON.stringify({ nameWithOwner: found.nameWithOwner, url: found.url, isPrivate: true, viewerPermission: found.canPush ? 'WRITE' : 'READ' });
+      return JSON.stringify({ nameWithOwner: found.nameWithOwner, url: found.url, isPrivate: found.isPrivate !== false, viewerPermission: found.canPush ? 'WRITE' : 'READ' });
     }
     if (args[0] === 'repo' && args[1] === 'fork') { gh.repos.push(repo('octo/' + args[2].split('/')[1])); return ''; }
     throw new Error('unexpected gh ' + args.join(' '));
@@ -106,7 +109,10 @@ try {
     createRepo: async name => { created.push(name); gh.repos.push(repo(name)); },
     deviceAuth: async (args, onCode) => { device.push(args.join(' ')); onCode('ABCD-1234', 'https://github.com/login/device'); await delay(50); gh.authed = true; gh.scopes = ['gist', 'read:org', 'repo']; },
     launch: (...args) => { launches.push(args[4].nameWithOwner); return startCloudSession(...args); },
+    // Public repositories GitHub would return without any sign-in (no network in this test).
+    publicRepo: async name => name.toLowerCase() === 'torvalds/linux' ? { nameWithOwner: 'torvalds/linux', url: 'https://github.com/torvalds/linux', isPrivate: false, canPush: false } : null,
   });
+  const publicRepo = nameWithOwner => ({ ...repo(nameWithOwner, false), isPrivate: false });
 
   db.prepare('INSERT INTO users(id,email,name,created_at) VALUES (?,?,?,?)').run('owner', 'test@example.com', 'Owner', now());
   db.prepare('INSERT INTO bots(id,user_id,name,label,description,instructions,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
@@ -218,8 +224,15 @@ try {
 
   const stopped = await launchCloudWork({ userId, botId, generation, goal: 'Never mind', query: 'nothing-like-this' });
   const launchedBefore = launches.length;
+  const waitingId = card(stopped.seq).sessionId;
+  assert.ok(waitingId, 'the card names its Sessions record');
+  const waitingRow = listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:' + waitingId);
+  assert.equal(waitingRow?.status, 'waiting', 'a blocked Cloud request shows in Sessions right away');
+  assert.match(waitingRow.error, /Waiting for you/);
+  assert.ok(listSessions(userId, { type: 'builders' }).some(s => s.id === 'relay:' + waitingId), 'under Builders too');
   await actOnCloudCard(userId, botId, stopped.seq, 'cancel', { local: false }).done;
   assert.equal(card(stopped.seq).status, 'cancelled'); assert.equal(launches.length, launchedBefore);
+  assert.equal(listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:' + waitingId).status, 'stopped', 'cancelling closes the record');
 
   // A failed fix keeps the card open with the reason instead of falling back anywhere.
   gh.authed = false;
@@ -229,6 +242,41 @@ try {
   assert.equal(card(expired.seq).status, 'pending'); assert.match(card(expired.seq).note, /authorization expired/);
   gh.authed = true;
   console.log('PASS access blockers: gh sign-in (code shown on card), scopes, read-only fork, missing gh, cancel and failed fix all stay in-app');
+
+  // ---------- 5b. Public repositories and one Sessions record per Cloud request ----------
+  gh.repos.push(publicRepo('vercel/next.js'));
+  const pub = await launchCloudWork({ userId, botId, generation, goal: 'Explain the router', query: 'https://github.com/vercel/next.js' });
+  assert.equal(pub.started, true, 'a public repository without write access starts right away (no fork needed)');
+  assert.equal(pub.repo.canPush, false); assert.equal(pub.repo.isPrivate, false);
+  assert.match(cloudGoal('Explain the router', pub.repo), /read-only access: clone and inspect it/);
+  assert.doesNotMatch(cloudGoal('Explain the router', pub.repo), /push it, and open a pull request/);
+  assert.match(cloudGoal('x', repo('octo/widget')), /open a pull request/, 'writable repositories still get a PR');
+  gh.authed = false;
+  const signedOut = await launchCloudWork({ userId, botId, generation, goal: 'Summarise the scheduler', query: 'torvalds/linux' });
+  assert.equal(signedOut.started, true, 'a public owner/repo needs no gh sign-in');
+  const stillBlocked = await launchCloudWork({ userId, botId, generation, goal: 'x', query: 'octo/private-thing' });
+  assert.equal(stillBlocked.blocker, 'gh-auth', 'private or unknown repositories still need sign-in');
+  gh.authed = true; gh.scopes = ['gist'];
+  const noScopes = await launchCloudWork({ userId, botId, generation, goal: 'Read the docs', query: 'vercel/next.js' });
+  assert.equal(noScopes.started, true, 'the private-repo scopes are not needed for a public repository');
+  gh.scopes = ['gist', 'read:org', 'repo'];
+  const privateRead = await resolveCloudRepo('acme/readonly-lib', fakeGh, async () => null);
+  assert.equal(privateRead.ok, false); assert.equal(privateRead.blocker, 'no-access', 'private read-only repositories still offer a fork');
+  await waitFor(() => listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:' + pub.sessionId)?.status === 'completed', 'the public Cloud run to finish');
+  assert.equal(listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:' + pub.sessionId).folder.name, 'vercel/next.js');
+
+  // A request that waited on a card continues the same record once it starts.
+  const later = await launchCloudWork({ userId, botId, generation, goal: 'Tidy the widget docs', query: 'widget' });
+  const laterId = card(later.seq).sessionId;
+  assert.equal(listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:' + laterId).status, 'waiting');
+  await actOnCloudCard(userId, botId, later.seq, 'repo:octo/widget', { local: false }).done;
+  assert.equal(card(later.seq).sessionId, laterId, 'the card keeps the same session');
+  await waitFor(() => listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:' + laterId)?.status === 'completed', 'the waited request to finish');
+  const finished = listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:' + laterId);
+  assert.equal(finished.folder.name, 'octo/widget'); assert.equal(finished.error, null); assert.equal(finished.calls, 1);
+  assert.equal(listSessions(userId, { kind: 'cloud' }).filter(s => s.id === 'relay:' + laterId).length, 1, 'one row, not two');
+  assertNoLocal();
+  console.log('PASS public repositories: read-only Cloud work without fork, sign-in or scopes; Cloud requests are one Sessions record (Waiting → Done)');
 
   // ---------- 6. Claude Cloud's own GitHub connection, and mid-run permissions ----------
   gh.repos.push(repo('octo/unlinked'));

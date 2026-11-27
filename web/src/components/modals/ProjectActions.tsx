@@ -20,27 +20,6 @@ function ProjectModal({ title, onClose, children, onSubmit, busy }: {
   );
 }
 
-export function CloudSessionModal({ botId, onClose }: { botId: string; onClose: () => void }) {
-  const [goal, setGoal] = useState('');
-  const [repo, setRepo] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  return (
-    <ProjectModal title="Start Claude Cloud session" onClose={onClose} busy={busy} onSubmit={event => {
-      event.preventDefault(); if (busy) return;
-      setBusy(true); setError('');
-      void featuresApi.startCloudSession(botId, { goal, repo }).then(onClose,
-        cause => { setError(cause.message); setBusy(false); });
-    }}>
-      <p className="cfg-field__hint">Claude runs remotely on a GitHub repository; nothing on this Mac is used. Marion finds the repository on GitHub. If it can't (not found, several matches, sign-in or access needed), a card in the chat shows the fix to approve.</p>
-      <label>Task<textarea className="text-input" required maxLength={20_000} rows={4} value={goal} onChange={e => setGoal(e.target.value)} /></label>
-      <label>GitHub repository<input className="text-input" placeholder="owner/repo, a GitHub URL, or just its name" maxLength={300} value={repo} onChange={e => setRepo(e.target.value)} /></label>
-      {error && <p role="alert">{error}</p>}
-      <div><button className="btn btn--primary" disabled={busy || !goal.trim()}>{busy ? 'Starting…' : 'Start Cloud session'}</button></div>
-    </ProjectModal>
-  );
-}
-
 export function GitHubRepoModal() {
   const close = () => useStore.getState().setModal(null);
   const [name, setName] = useState('');

@@ -137,7 +137,11 @@ export async function cloudPointer(repo: CloudRepo) {
 }
 
 export function cloudGoal(goal: string, repo: CloudRepo) {
-  return `GitHub repository: ${repo.nameWithOwner} (${repo.url})\nWork only in the Cloud checkout of this repository. Commit to a new branch, push it, and open a pull request when you changed files. Finish with a short summary and the PR link.\n\n${goal}`;
+  const work = repo.canPush === false
+    // A public repository the owner can read but not push to: inspect it, and hand back changes instead of pushing.
+    ? 'This is a public repository with read-only access: clone and inspect it, read its files, issues and pull requests as needed, and do not push. If the task needs changes, make them in the Cloud checkout and finish with the full diff and a short summary (the owner can fork it to open a pull request).'
+    : 'Work only in the Cloud checkout of this repository. Commit to a new branch, push it, and open a pull request when you changed files. Finish with a short summary and the PR link.';
+  return `GitHub repository: ${repo.nameWithOwner} (${repo.url})\n${work}\n\n${goal}`;
 }
 
 /** Recognises Cloud launch failures that mean Claude Cloud itself can't reach the repository yet (GitHub app / connection). */
@@ -152,11 +156,15 @@ export interface CloudLaunchHooks {
   onConnectionNeeded?: (message: string) => void;
 }
 
-export function startCloudSession(userId: string, botId: string, generation: number, goal: string, repo: CloudRepo, hooks: CloudLaunchHooks = {}) {
+/** The session label of a Cloud run: the repository it works on, marked so the Sessions view says where it runs. */
+export const cloudFolder = (repo: CloudRepo) => ({ path: repo.url, label: repo.nameWithOwner });
+
+/** `sessionId` continues the record of a Cloud request that first waited on an in-app card, so it stays one session. */
+export function startCloudSession(userId: string, botId: string, generation: number, goal: string, repo: CloudRepo, hooks: CloudLaunchHooks = {}, sessionId?: string) {
   const program = executable('claude');
   if (!program) throw new Error('Install Claude Code and run claude auth login --claudeai first.');
   // The session record names the GitHub repository; there is no local folder in strict Cloud mode.
-  const track: SessionTrack = { id: randomUUID(), kind: 'cloud', userId, botId, request: goal, folder: { path: repo.url, label: repo.nameWithOwner } };
+  const track: SessionTrack = { id: sessionId || randomUUID(), kind: 'cloud', userId, botId, request: goal, folder: cloudFolder(repo) };
   const startedAt = Date.now();
   beginAgentSession(track, 'claude', startedAt);
   appendRow(botId, 'notice', { type: 'notice', tone: 'info',

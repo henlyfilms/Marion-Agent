@@ -83,11 +83,23 @@ export function subscriptionAvailability() {
   return { codex: Boolean(executable('codex')), gemini: Boolean(executable('gemini')), claude: Boolean(executable('claude')) };
 }
 
-// Inherit only basic process settings. The vendor CLI owns its OAuth credentials.
-export function cliEnvironment() {
+// Inherit only basic process settings. The vendor CLI owns its OAuth credentials. git and gh never stop to prompt
+// (a private repository fails fast instead of hanging a headless run).
+export function cliEnvironment(): Record<string, string | undefined> {
   const keys = ['HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'CODEX_HOME'];
-  return Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  return { ...Object.fromEntries(keys.map(key => [key, process.env[key]])), GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1' };
 }
+
+/**
+ * Public GitHub, for builders on every provider (Claude, Codex, Gemini) working in a folder: git clone/fetch over HTTPS,
+ * gh (repo/issue/PR view, api), the REST API, raw files and source archives. Only these hosts are opened where the CLI
+ * can limit hosts (Claude's sandbox proxy, Antigravity's URL rules); nothing else about the sandbox changes.
+ */
+export const GITHUB_HOSTS = ['github.com', 'api.github.com', 'raw.githubusercontent.com', 'codeload.github.com',
+  'objects.githubusercontent.com', 'gist.github.com', 'gist.githubusercontent.com'] as const;
+/** Told to every builder that has a folder, so it knows public repositories are reachable and how to use them. */
+export const GITHUB_ACCESS_LINE = 'Public GitHub repositories are reachable from here: use git clone/fetch over HTTPS, gh (repo view, issue and pr view/list, api) or HTTPS requests to github.com, api.github.com and raw.githubusercontent.com to read public repositories, files, issues and pull requests (an owner/repo or a GitHub URL is enough). Clone into your working folder only, use the network only for GitHub, and never push unless the owner asked for it.';
+const claudeGitHubFetch = GITHUB_HOSTS.map(host => `WebFetch(domain:${host})`);
 
 export const codexArgs = [
   'app-server', '--listen', 'stdio://',
@@ -130,6 +142,17 @@ export function codexThreadPolicy(folder?: { write: boolean }) {
     ? { sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' } as const
     : { sandbox: 'read-only', approvalPolicy: 'never' } as const;
 }
+/**
+ * Turn sandbox for a Codex builder in a folder: the same file access as its thread (workspace-write or read-only) with
+ * network on, so git/gh/curl reach public GitHub (Codex's sandbox can't limit hosts; the instructions keep it to GitHub).
+ * Plain chat (no folder) has no shell tool and keeps the thread's offline sandbox.
+ */
+export function codexTurnSandbox(folder?: { path: string; write: boolean }) {
+  if (!folder) return undefined;
+  return folder.write
+    ? { type: 'workspaceWrite', writableRoots: [folder.path], networkAccess: true } as const
+    : { type: 'readOnly', networkAccess: true } as const;
+}
 /** Claude Code always launches in auto mode (never dontAsk) unless a caller passes an explicit override. */
 export const CLAUDE_PERMISSION_MODE = 'auto';
 export const claudePermissionArgs = (mode: string = CLAUDE_PERMISSION_MODE) => ['--permission-mode', mode];
@@ -150,13 +173,15 @@ const providerArgs = { codex: codexArgs, gemini: agyArgs, claude: claudeArgs };
 export function folderArgs(provider: 'claude' | 'gemini', folder: { path: string; write: boolean }, photosFolder?: string[]) {
   if (provider === 'claude') {
     const settings = folder.write
-      ? { disableAllHooks: true, sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false } }
+      // Sandboxed shell commands reach public GitHub (git clone, gh) through the sandbox proxy, and only GitHub.
+      ? { disableAllHooks: true, sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, network: { allowedDomains: [...GITHUB_HOSTS] } } }
       : { disableAllHooks: true };
     return [
       ...(folder.write ? [] : ['--restricted']), '--safe-mode', '--setting-sources', '', '--settings', JSON.stringify(settings),
       '--print', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-      '--tools', folder.write ? 'Read,Glob,Grep,Edit,Write,Bash' : 'Read,Glob,Grep',
-      ...(folder.write ? ['--allowedTools', 'Read', 'Glob', 'Grep', 'Edit', 'Write'] : ['--allowedTools', 'Read', 'Glob', 'Grep']),
+      // WebFetch reads public repositories, issues and PRs; it is pre-approved for GitHub hosts only (others stay with auto mode).
+      '--tools', folder.write ? 'Read,Glob,Grep,Edit,Write,Bash,WebFetch' : 'Read,Glob,Grep,WebFetch',
+      '--allowedTools', ...(folder.write ? ['Read', 'Glob', 'Grep', 'Edit', 'Write'] : ['Read', 'Glob', 'Grep']), ...claudeGitHubFetch,
       ...claudePermissionArgs(), '--no-session-persistence', '--disable-slash-commands', '--add-dir', folder.path,
     ];
   }
@@ -165,9 +190,16 @@ export function folderArgs(provider: 'claude' | 'gemini', folder: { path: string
   const inFolder = (tool: string) => `${tool}(${folder.path}/**)`;
   // The user's screenshots and recording frames sit in Marion's own temp folder: reading there is allowed too.
   const photos = (photosFolder ?? []).map(path => `read_file(${path}/**)`);
-  const allowed = folder.write ? [inFolder('read_file'), inFolder('write_file'), 'command(*)', ...photos] : [inFolder('read_file'), ...photos];
-  const open = folder.write ? ['read_file(*)', 'write_file(*)', 'command(*)'] : ['read_file(*)'];
-  const settings = JSON.stringify({ modelProvider: '', allowNonWorkspaceAccess: false, permissions: { allow: allowed, deny: googleDeny.filter(rule => !open.includes(rule)) } });
+  // Public GitHub: URL reads are allowed for GitHub hosts only; read_url(*) leaves the deny list so these rules can apply.
+  const github = GITHUB_HOSTS.map(host => `read_url(${host})`);
+  const allowed = folder.write ? [inFolder('read_file'), inFolder('write_file'), 'command(*)', ...github, ...photos] : [inFolder('read_file'), ...github, ...photos];
+  const open = folder.write ? ['read_file(*)', 'write_file(*)', 'command(*)', 'read_url(*)'] : ['read_file(*)', 'read_url(*)'];
+  const settings = JSON.stringify({
+    modelProvider: '', allowNonWorkspaceAccess: false,
+    // A folder it may change: its sandboxed terminal may reach the network too (git clone/fetch, gh), still confined to the workspace.
+    ...(folder.write ? { sandboxAllowNetwork: true } : {}),
+    permissions: { allow: allowed, deny: googleDeny.filter(rule => !open.includes(rule)) },
+  });
   return [
     '--mode', folder.write ? GEMINI_AUTO_MODE : 'plan', '--sandbox', '--disable-slash-commands', '--settings', settings,
     '--add-dir', folder.path, '--input-format', 'stream-json', '--output-format', 'stream-json',
@@ -435,6 +467,8 @@ async function spawnSubscriptionReply(
   if (!program) throw new Error(`Install ${labels[provider]} and check Settings → Models.`);
   const cwd = await mkdtemp(join(tmpdir(), 'marion-provider-'));
   const folder = options.folder;
+  // Claude and Gemini builders learn about public GitHub access from the task (Codex gets it in its base instructions).
+  if (folder && provider !== 'codex') prompt += `\n\n${GITHUB_ACCESS_LINE}`;
   // No time limit of any kind (wall-clock, silence or idle): a relayed session runs until it finishes, fails or the
   // owner stops it. `signal` is the owner's cancel.
   const stop = signal;
@@ -635,7 +669,7 @@ async function codexReply(
     write({ id: 3, method: 'thread/start', params: {
       cwd, model: model.model, modelProvider: 'openai', ...codexThreadPolicy(options.folder), ephemeral: true, serviceTier: 'default',
       baseInstructions: options.folder
-        ? `You are working inside the user's folder "${options.folder.label}" (${options.folder.path}), your working directory, with ${options.folder.write ? 'read and write' : 'read-only'} access. Do the task there, never touch anything outside it, and finish with a short summary of what you did.`
+        ? `You are working inside the user's folder "${options.folder.label}" (${options.folder.path}), your working directory, with ${options.folder.write ? 'read and write' : 'read-only'} access. Do the task there, never touch anything outside it, and finish with a short summary of what you did. ${GITHUB_ACCESS_LINE}`
         : 'Answer as a chat assistant using the messages and attachments the user provides. Use the response format requested by Marion. Do not use native CLI tools.',
     } });
   };
@@ -677,6 +711,7 @@ async function codexReply(
         write({ id: 4, method: 'turn/start', params: {
           threadId, input: [{ type: 'text', text: prompt, textElements: [] }, ...images],
           ...(actualEffort ? { effort: actualEffort } : {}),
+          ...(options.folder ? { sandboxPolicy: codexTurnSandbox(options.folder) } : {}),
         } });
         break;
     }

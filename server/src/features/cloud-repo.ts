@@ -111,16 +111,40 @@ async function viewRepo(gh: GhRun, full: string): Promise<CloudRepo | null> {
   }
 }
 
+/** Looks up a public repository without the GitHub CLI or a token (null: missing, private, or GitHub unreachable). */
+export type PublicRepoLookup = (fullName: string) => Promise<CloudRepo | null>;
+export const fetchPublicRepo: PublicRepoLookup = async fullName => {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return null;
+  try {
+    const response = await fetch(`https://api.github.com/repos/${fullName}`, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'marion-agent' }, signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) return null;
+    const repo = await response.json() as { full_name?: string; html_url?: string; private?: boolean; pushed_at?: string };
+    return repo.full_name && repo.private === false ? { nameWithOwner: repo.full_name, url: repo.html_url ?? `https://github.com/${repo.full_name}`, isPrivate: false, canPush: false, pushedAt: repo.pushed_at } : null;
+  } catch { return null; }
+};
+
+/**
+ * Public repositories are fine for Cloud work even without write access: the session clones and reads them, and when the
+ * task needs changes it reports the patch instead of pushing (cloudGoal says so). Private read-only ones still need a fork.
+ */
+const usable = (repo: CloudRepo) => repo.canPush !== false || repo.isPrivate === false;
+
 async function login(gh: GhRun) { try { return (await gh(['api', 'user', '--jq', '.login'])).trim(); } catch { return ''; } }
 
 /**
  * Find the GitHub repository for Cloud work. `query` is "owner/repo", a GitHub URL, or a name to fuzzy-match against every
  * repository the signed-in GitHub user can reach. Never consults the local disk.
  */
-export async function resolveCloudRepo(query: string | null | undefined, gh: GhRun = runGh): Promise<CloudResolution> {
+export async function resolveCloudRepo(query: string | null | undefined, gh: GhRun = runGh, publicRepo: PublicRepoLookup = fetchPublicRepo): Promise<CloudResolution> {
+  const wanted = (query ?? '').trim();
+  const exact = exactRepo(wanted);
   let status = '';
   try { status = await gh(['auth', 'status', '--hostname', 'github.com']); }
   catch (error: any) {
+    // A named public repository needs no GitHub CLI or sign-in on this Mac.
+    const open = exact ? await publicRepo(exact).catch(() => null) : null;
+    if (open) return { ok: true, repo: open };
     if (error?.code === 'ENOENT') return blocked('gh-missing', 'The GitHub CLI (gh) is not installed, so Marion cannot look up your GitHub repositories.',
       'Install it right here, then sign in to GitHub; Marion then finds the repository and starts the Cloud session.',
       [{ id: 'gh-install', kind: 'gh-install', label: 'Install GitHub CLI', hint: 'Runs brew install gh on this Mac' }, LOGIN, RETRY]);
@@ -129,15 +153,18 @@ export async function resolveCloudRepo(query: string | null | undefined, gh: GhR
   }
   const scopes = tokenScopes(status);
   const missing = scopes && scopes.length ? GH_SCOPES.filter(scope => !scopes.includes(scope)) : [];
+  // The private-repository scopes don't matter for a named public repository.
+  if (missing.length && exact) {
+    const open = await viewRepo(gh, exact).catch(() => null) ?? await publicRepo(exact).catch(() => null);
+    if (open?.isPrivate === false) return { ok: true, repo: open };
+  }
   if (missing.length) return blocked('gh-scopes', `Your GitHub CLI token is missing the ${missing.join(' and ')} scope${missing.length > 1 ? 's' : ''} needed to reach private and organization repositories.`,
     'Grant the missing scopes from this card (one-time code shown here); Marion then retries automatically.',
     [{ id: 'gh-scopes', kind: 'gh-scopes', label: `Grant ${missing.join(', ')} access`, hint: 'Runs gh auth refresh' }, RETRY]);
 
-  const wanted = (query ?? '').trim();
-  const exact = exactRepo(wanted);
   if (exact) {
     const repo = await viewRepo(gh, exact);
-    if (repo && repo.canPush) return { ok: true, repo };
+    if (repo && usable(repo)) return { ok: true, repo };
     if (repo) return blocked('no-access', `You can read ${repo.nameWithOwner} but cannot push to it, so a Cloud session could not save its branch or pull request.`,
       'Fork it to your account and work there, or ask the owner for write access and check again.',
       [{ id: 'fork:' + repo.nameWithOwner, kind: 'fork', repo: repo.nameWithOwner, label: `Fork ${repo.nameWithOwner} and start`, hint: 'Runs gh repo fork' }, RETRY]);
@@ -150,14 +177,14 @@ export async function resolveCloudRepo(query: string | null | undefined, gh: GhR
   const name = exact ? exact.split('/')[1] : wanted;
   const matches = name ? matchRepos(repos, exact ?? name) : [];
   const fallback = exact && !matches.length ? matchRepos(repos, name) : matches;
-  if (fallback.length === 1 && fallback[0].canPush !== false) return { ok: true, repo: fallback[0] };
+  if (fallback.length === 1 && usable(fallback[0])) return { ok: true, repo: fallback[0] };
   if (fallback.length === 1) return blocked('no-access', `You can read ${fallback[0].nameWithOwner} but cannot push to it.`,
     'Fork it to your account and start the Cloud session there, or get write access and check again.',
     [{ id: 'fork:' + fallback[0].nameWithOwner, kind: 'fork', repo: fallback[0].nameWithOwner, label: `Fork ${fallback[0].nameWithOwner} and start`, hint: 'Runs gh repo fork' }, RETRY]);
   if (fallback.length > 1) {
     const top = fallback.slice(0, 6);
     return blocked('ambiguous', `${fallback.length} of your GitHub repositories match “${wanted}”.`, 'Pick the one to work on; the Cloud session starts right away.',
-      top.map(repo => repoOption(repo, repo.canPush === false ? 'Read-only: Marion will offer a fork' : undefined)), top);
+      top.map(repo => repoOption(repo, repo.canPush !== false ? undefined : repo.isPrivate === false ? 'Public, read-only' : 'Read-only: Marion will offer a fork')), top);
   }
   const user = await login(gh);
   const slug = (exact ? name : wanted).trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100);

@@ -8,7 +8,6 @@ import { Icon } from './Icon';
 import { Menu } from './Menu';
 import { useConfigUI } from '../configStore';
 import { botMenuItems } from './botMenuItems';
-import { BotSessionsButton, BotSessionsDrawer } from './sessions/BotSessionsPanel';
 import { Transcript } from './Transcript';
 import { CallStage } from './CallStage';
 import { VoiceCallBar } from './VoiceCallBar';
@@ -22,8 +21,6 @@ export function ChatView() {
   const transcript = useStore((s) => (bot ? s.transcripts[bot.id] : undefined));
   const live = useStore((s) => (bot ? s.live[bot.id] : undefined));
   const [menu, setMenu] = useState(false);
-  const [sessionsOpen, setSessionsOpen] = useState(false);
-  useEffect(() => setSessionsOpen(false), [bot?.id]);
   const toastTimer = useRef<number>();
   useEffect(() => () => clearTimeout(toastTimer.current), []);
   const [toast, setToast] = useState<string | null>(null);
@@ -73,10 +70,8 @@ export function ChatView() {
             />
           )}
           </span>
-          <BotSessionsButton bot={bot} open={sessionsOpen} onToggle={() => setSessionsOpen(open => !open)} />
         </div>
       </header>
-      <BotSessionsDrawer bot={bot} open={sessionsOpen} onClose={() => setSessionsOpen(false)} />
       <CallStage bot={bot} />
       <ChatSearchBar />
       <Transcript bot={bot} rows={rows} live={live} loaded={!!transcript?.loaded} />

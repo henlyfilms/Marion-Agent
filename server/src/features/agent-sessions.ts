@@ -41,6 +41,8 @@ export function beginAgentSession(track: SessionTrack, provider: RelayProvider, 
         started_at,active_calls,role,agent,group_id,rotated,updated_at)
       VALUES (?,?,?,?,?,?,?,'running',?,?,?,?,1,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET status='running', active_calls=active_calls+1, ended_at=NULL, updated_at=excluded.updated_at,
+        error=CASE WHEN agent_sessions.status='waiting' THEN NULL ELSE agent_sessions.error END,
+        folder_path=COALESCE(excluded.folder_path, agent_sessions.folder_path), folder_label=COALESCE(excluded.folder_label, agent_sessions.folder_label),
         rotated=COALESCE(agent_sessions.rotated, excluded.rotated)`)
       .run(`${track.id}`, userId, track.botId, provider, track.kind, sessionTitle(track.request, track.title), oneLine(track.request, 1500),
         bot.generation ?? null, track.folder?.path ?? null, track.folder?.label ?? null, startedAt,
@@ -49,6 +51,37 @@ export function beginAgentSession(track: SessionTrack, provider: RelayProvider, 
   } catch (error) {
     console.warn('[agent-sessions] could not record a session start', (error as Error).message);
   }
+}
+
+/**
+ * A Cloud request that is waiting on an in-app card (repository, sign-in, access) shows up in Sessions right away as
+ * Waiting, instead of only once Claude Cloud starts. Launching later continues this same record (beginAgentSession).
+ */
+export function recordCloudRequest(track: SessionTrack, note: string, at = Date.now()) {
+  try {
+    const userId = ownerOf(track);
+    const bot = getBotRow(track.botId);
+    if (!userId || !bot) return;
+    db.prepare(`INSERT INTO agent_sessions(id,user_id,bot_id,provider,kind,title,request,status,error,chat_generation,folder_path,folder_label,
+        started_at,active_calls,updated_at)
+      VALUES (?,?,?,'claude','cloud',?,?,'waiting',?,?,?,?,?,0,?)
+      ON CONFLICT(id) DO UPDATE SET error=excluded.error, updated_at=excluded.updated_at WHERE agent_sessions.status='waiting'`)
+      .run(track.id, userId, track.botId, sessionTitle(track.request, track.title), oneLine(track.request, 1500), oneLine(note, 300) || null,
+        bot.generation ?? null, track.folder?.path ?? null, track.folder?.label ?? null, at, now());
+    notifyChange(userId, track.botId);
+  } catch (error) {
+    console.warn('[agent-sessions] could not record a Cloud request', (error as Error).message);
+  }
+}
+
+/** A waiting Cloud request was cancelled or dropped before it started. */
+export function settleCloudRequest(userId: string, id: string, note: string) {
+  const at = now();
+  const row = db.prepare("SELECT bot_id, started_at FROM agent_sessions WHERE id=? AND user_id=? AND status='waiting'").get(id, userId) as { bot_id: string; started_at: number } | undefined;
+  if (!row) return;
+  db.prepare("UPDATE agent_sessions SET status='stopped', error=?, ended_at=?, duration_ms=?, updated_at=? WHERE id=?")
+    .run(oneLine(note, 300), at, Math.max(0, at - row.started_at), at, id);
+  notifyChange(userId, row.bot_id);
 }
 
 export function linkCloudSession(track: SessionTrack, url: string) {
@@ -90,6 +123,9 @@ export function recoverAgentSessions() {
     db.prepare("UPDATE agent_sessions SET status='stopped', active_calls=0, ended_at=?, duration_ms=?, error=COALESCE(error,CASE WHEN kind='cloud' THEN 'Marion disconnected on restart; check Claude for the current status.' ELSE 'Marion Agent restarted before this finished.' END), updated_at=? WHERE id=?")
       .run(at, Math.max(0, at - row.started_at), at, row.id);
   }
+  // Cloud requests nobody answered for a week are closed (their card is long out of sight).
+  db.prepare("UPDATE agent_sessions SET status='stopped', ended_at=?, error=COALESCE(error,'Never started.'), updated_at=? WHERE status='waiting' AND updated_at < ?")
+    .run(at, at, at - 7 * 24 * 3600_000);
   db.prepare('DELETE FROM agent_sessions WHERE status != ? AND updated_at < ?').run('running', at - KEEP_MS);
   return rows.length;
 }
@@ -122,7 +158,7 @@ const toRelay = (row: AgentSessionRow, botName: string): MarionSession => ({
   model: row.model, modelLabel: row.model_label, effort: row.effort,
   tokens: row.tokens_in != null || row.tokens_out != null ? { input: row.tokens_in ?? 0, output: row.tokens_out ?? 0 } : null,
   startedAt: row.started_at, endedAt: row.ended_at, updatedAt: row.ended_at ?? row.updated_at,
-  durationMs: row.status === 'running' ? Math.max(0, Date.now() - row.started_at) : row.duration_ms,
+  durationMs: row.status === 'running' || row.status === 'waiting' ? Math.max(0, Date.now() - row.started_at) : row.duration_ms,
   calls: row.calls, messageCount: null, role: row.role, agent: row.agent, groupId: row.group_id, rotated: row.rotated,
 });
 
@@ -155,17 +191,26 @@ function chatSessions(userId: string, query: SessionQuery, limit: number): Mario
   });
 }
 
+/**
+ * Relayed runs of visible bots, plus runs of their hidden subagent helpers (a helper that starts a Cloud session or asks
+ * Codex still did that work for its parent): those are listed under the parent bot, named "Parent › Helper".
+ */
 function relaySessions(userId: string, query: SessionQuery, limit: number): MarionSession[] {
-  const where = ['s.user_id=?', 'COALESCE(b.hidden,0)=0', 'b.deleted_at IS NULL'];
+  const where = ['s.user_id=?', 'b.deleted_at IS NULL',
+    '(COALESCE(b.hidden,0)=0 OR (b.parent_bot_id IS NOT NULL AND p.id IS NOT NULL AND COALESCE(p.hidden,0)=0 AND p.deleted_at IS NULL))'];
   const args: (string | number)[] = [userId];
-  if (query.botId) { where.push('s.bot_id=?'); args.push(query.botId); }
+  if (query.botId) { where.push('(s.bot_id=? OR (b.parent_bot_id=? AND COALESCE(b.hidden,0)=1))'); args.push(query.botId, query.botId); }
   if (query.type === 'builders') where.push("s.kind != 'subscription_bot'");
   if (query.kind) { where.push('s.kind=?'); args.push(query.kind); }
   if (query.provider) { where.push('s.provider=?'); args.push(query.provider); }
   if (query.status) { where.push('s.status=?'); args.push(query.status); }
-  const rows = db.prepare(`SELECT s.*, b.name bot_name FROM agent_sessions s JOIN bots b ON b.id=s.bot_id
-    WHERE ${where.join(' AND ')} ORDER BY (s.status='running') DESC, s.updated_at DESC LIMIT ?`).all(...args, limit) as (AgentSessionRow & { bot_name: string })[];
-  return rows.map(row => toRelay(row, row.bot_name));
+  const rows = db.prepare(`SELECT s.*, b.name bot_name, COALESCE(b.hidden,0) helper, p.id parent_id, p.name parent_name
+    FROM agent_sessions s JOIN bots b ON b.id=s.bot_id LEFT JOIN bots p ON p.id=b.parent_bot_id
+    WHERE ${where.join(' AND ')} ORDER BY (s.status IN ('running','waiting')) DESC, s.updated_at DESC LIMIT ?`)
+    .all(...args, limit) as (AgentSessionRow & { bot_name: string; helper: number; parent_id: string | null; parent_name: string | null })[];
+  return rows.map(row => row.helper && row.parent_id
+    ? { ...toRelay(row, `${row.parent_name} › ${row.bot_name}`), botId: row.parent_id }
+    : toRelay(row, row.bot_name));
 }
 
 /**
@@ -178,8 +223,9 @@ export function listSessions(userId: string, query: SessionQuery = {}): MarionSe
   const chats = query.type === 'relay' || query.type === 'builders' || relayOnly ? [] : chatSessions(userId, query, limit)
     .filter(session => !query.status || session.status === query.status);
   const relays = query.type === 'chat' || query.status === 'active' || query.status === 'archived' ? [] : relaySessions(userId, query, limit);
+  const live = (s: MarionSession) => Number(s.status === 'running' || s.status === 'waiting');
   return [...chats, ...relays]
-    .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.updatedAt - a.updatedAt)
+    .sort((a, b) => live(b) - live(a) || b.updatedAt - a.updatedAt)
     .slice(0, limit);
 }
 

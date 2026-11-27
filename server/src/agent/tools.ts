@@ -1,6 +1,9 @@
 import { createGitHubRepo } from '../features/github-repos.js';
 import { launchCloudWork } from '../features/cloud-cards.js';
-import { repoHint, wantsCloud } from '../features/cloud-repo.js';
+import { exactRepo, repoHint, wantsCloud } from '../features/cloud-repo.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
 import { isDesktop } from '../lib/desktop-access.js';
 import { grok } from './models.js';
 import { modelLabel, subscriptionReply, subscriptionSelection } from './subscriptions.js';
@@ -120,6 +123,20 @@ export const backgroundScript = (job: string, command: string) => {
 export function cloudRequested(ctx: Pick<ToolCtx, 'turn'>, ...texts: unknown[]) {
   return wantsCloud(ctx.turn?.request) || texts.some(wantsCloud);
 }
+/** "owner/repo" or a GitHub URL from a tool argument; anything else is refused with a clear message. */
+export function githubRepoArg(value: unknown): string | null {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null;
+  const repo = exactRepo(value) ?? (typeof value === 'string' ? repoHint(value) : null);
+  if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Give the GitHub repository as owner/repo or a github.com URL.');
+  return repo;
+}
+
+/** An empty folder of Marion's own for a builder to clone a GitHub repository into; removed when the run ends. */
+export async function repoScratch(repo: string) {
+  const path = await mkdtemp(joinPath(tmpdir(), 'marion-repo-'));
+  return { path, label: `GitHub ${repo}`, write: true };
+}
+
 const LOCAL_IN_CLOUD = 'The owner asked for Cloud work: call start_cloud_session with the GitHub repository (owner/repo or its name) instead. Never use a folder or local copy on this Mac for Cloud work; if the repository can\'t be found or reached, start_cloud_session shows the owner an in-app card with fixes.';
 
 export const TOOLS: ToolDef[] = [
@@ -321,6 +338,7 @@ export const TOOLS: ToolDef[] = [
       provider: { type: 'string', enum: ['claude', 'codex', 'gemini'] },
       prompt: { type: 'string', description: 'The full task. The provider knows nothing else, so include every detail it needs' },
       folder: { type: 'string', description: 'Optional: a folder on this Mac to work in, by name (e.g. "Marion Agent") or full path. It does not need to be shared with you; the owner approves it' },
+      repo: { type: 'string', description: 'Optional: a GitHub repository to inspect or use (owner/repo or a github.com URL; public ones always work). Without a folder, the assistant gets an empty scratch folder to clone it into' },
       title: { type: 'string', description: 'Optional: a mini title of 3-8 words for the work card (e.g. "Fix login redirect"). Derived from the prompt if omitted' },
       new_session: { type: 'boolean', description: 'Optional: true to start this provider from a fresh session. Marion also does that by itself when the folder changes, the topic is clearly different, or the session has grown large' },
     }, ['provider', 'prompt']),
@@ -331,7 +349,10 @@ export const TOOLS: ToolDef[] = [
       if (provider !== 'codex' && provider !== 'claude' && provider !== 'gemini') throw new Error('Choose Codex, Claude Code, or Gemini.');
       if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) throw new Error('Enter a request of up to 20,000 characters.');
       if (cloudRequested(ctx, prompt)) throw new Error(LOCAL_IN_CLOUD);
-      const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : undefined;
+      const repo = githubRepoArg(args.repo);
+      // A named repository without a folder: a fresh scratch folder (nothing of the owner's) to clone it into.
+      const folder = args.folder ? await folderForTask(ctx.botId, args.folder) : repo ? await repoScratch(repo) : undefined;
+      const scratch = !args.folder && folder ? folder.path : undefined;
       const selection = subscriptionSelection(ctx.userId, provider);
       const name = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }[provider as 'claude' | 'codex' | 'gemini'];
       const generation = getBotRow(ctx.botId)?.generation ?? 0;
@@ -343,6 +364,7 @@ export const TOOLS: ToolDef[] = [
         plan.carried,
         prompt,
         media.note,
+        repo ? `GitHub repository: ${repo} (https://github.com/${repo}).${scratch ? ' Clone it into your working folder (git clone --depth 1 is enough to read it) and work from that copy.' : ''}` : '',
         folder ? `Work only inside this folder: ${folder.path} (the owner calls it "${folder.label}"; use full paths). ${folder.write ? 'You can read, create, rename and move files there.' : 'You can only read there.'} Finish with a short summary of what you did.` : '',
         ASK_OWNER_LINE,
         leanLine(ctx.botId, Boolean(folder)),
@@ -383,6 +405,8 @@ export const TOOLS: ToolDef[] = [
         card.step(who, 'error', String((error as Error).message ?? error));
         card.finish(ctx.signal?.aborted ? 'stopped' : 'failed');
         throw error;
+      } finally {
+        if (scratch) await rm(scratch, { recursive: true, force: true }).catch(() => {});
       }
     },
   },

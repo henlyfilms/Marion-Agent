@@ -353,7 +353,8 @@ export interface Toolkit {
 
 export type RelayProvider = 'claude' | 'codex' | 'gemini';
 export type RelayKind = 'ask_subscription' | 'subscription_bot' | 'orchestration' | 'team' | 'cloud' | 'handoff';
-export type RelayStatus = 'running' | 'completed' | 'failed' | 'stopped';
+/** 'waiting': a Cloud request held by an in-app card (pick a repository, sign in, grant access) before it can start. */
+export type RelayStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'stopped';
 
 /**
  * One row of the Sessions views. `type: 'chat'` is one conversation of a bot (a "generation": a new one starts when the

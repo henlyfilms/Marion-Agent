@@ -94,6 +94,34 @@ try {
   S.beginAgentSession({ id: 'live', kind: 'orchestration', userId, botId: 'bot_a', request: 'build it' }, 'codex', t0 - 5000);
   assert.equal(S.listSessions(userId, { type: 'builders' })[0].id, 'relay:live');
 
+  // Cloud runs a hidden subagent helper started (start_cloud_session from a helper) show under the parent bot.
+  db.prepare('INSERT INTO bots(id,user_id,name,label,description,instructions,parent_bot_id,hidden,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)')
+    .run('helper_1', userId, 'Scout', 'Helper', '', '', 'bot_a', now(), now());
+  const helperTrack = { id: 'helper-cloud', kind: 'cloud', userId, botId: 'helper_1', request: 'Review octo/app in the cloud', folder: { path: 'https://github.com/octo/app', label: 'octo/app' } };
+  S.beginAgentSession(helperTrack, 'claude', Date.now() - 1000);
+  const helperRow = S.listSessions(userId, { type: 'builders' }).find(s => s.id === 'relay:helper-cloud');
+  assert.ok(helperRow, 'a helper\'s Cloud run shows under Builders');
+  assert.equal(helperRow.botId, 'bot_a', 'listed under the parent bot (its chat opens)');
+  assert.equal(helperRow.botName, 'Quinn › Scout');
+  assert.ok(S.listSessions(userId, { kind: 'cloud' }).some(s => s.id === 'relay:helper-cloud'), 'and under Cloud');
+  assert.ok(S.listSessions(userId, { botId: 'bot_a', type: 'builders' }).some(s => s.id === 'relay:helper-cloud'), 'and in the parent bot\'s own list');
+  // A deleted parent hides its helpers' runs with it.
+  db.prepare('INSERT INTO bots(id,user_id,name,label,description,instructions,deleted_at,hidden,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)')
+    .run('gone_bot', userId, 'Gone', 'x', '', '', now(), now(), now());
+  db.prepare('INSERT INTO bots(id,user_id,name,label,description,instructions,parent_bot_id,hidden,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)')
+    .run('gone_helper', userId, 'Old', 'x', '', '', 'gone_bot', now(), now());
+  S.beginAgentSession({ id: 'gone-cloud', kind: 'cloud', userId, botId: 'gone_helper', request: 'x' }, 'claude');
+  assert.ok(!S.listSessions(userId, { kind: 'cloud' }).some(s => s.id === 'relay:gone-cloud'));
+
+  // A Cloud request waiting on a card is listed (as Waiting, live, on top) before it ever starts.
+  S.recordCloudRequest({ id: 'cloud-wait', kind: 'cloud', userId, botId: 'bot_a', request: 'Port the CLI', folder: { path: 'https://github.com/octo/cli', label: 'octo/cli' } }, 'Waiting for you: pick a repository');
+  const waitingCloud = S.listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:cloud-wait');
+  assert.equal(waitingCloud.status, 'waiting'); assert.equal(waitingCloud.provider, 'claude'); assert.equal(waitingCloud.folder.name, 'octo/cli');
+  assert.ok(['relay:cloud-wait', 'relay:helper-cloud', 'relay:live'].includes(S.listSessions(userId, { type: 'builders' })[0].id), 'live rows first');
+  S.beginAgentSession({ id: 'cloud-wait', kind: 'cloud', userId, botId: 'bot_a', request: 'Port the CLI', folder: { path: 'https://github.com/octo/cli', label: 'octo/cli' } }, 'claude');
+  const started = S.listSessions(userId, { kind: 'cloud' }).find(s => s.id === 'relay:cloud-wait');
+  assert.equal(started.status, 'running'); assert.equal(started.error, null, 'the waiting note clears once it runs');
+
   console.log('sessions-visible: all checks passed');
 } finally {
   rmSync(work, { recursive: true, force: true });

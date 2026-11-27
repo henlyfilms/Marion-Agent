@@ -10,10 +10,11 @@ import { executable } from '../agent/subscriptions.js';
 import { notify } from './notify.js';
 import { createGitHubRepo } from './github-repos.js';
 import { startCloudSession, type CloudLaunchHooks } from './cloud-sessions.js';
+import { recordCloudRequest, settleCloudRequest } from './agent-sessions.js';
 import type { CloudCardBody } from '../types.js';
 import {
-  ghDeviceAuth, ghLoginArgs, ghScopeArgs, resolveCloudRepo, runGh,
-  type CloudBlocker, type CloudOption, type CloudRepo, type CloudResolution, type DeviceAuth, type GhRun,
+  exactRepo, fetchPublicRepo, ghDeviceAuth, ghLoginArgs, ghScopeArgs, resolveCloudRepo, runGh,
+  type PublicRepoLookup, type CloudBlocker, type CloudOption, type CloudRepo, type CloudResolution, type DeviceAuth, type GhRun,
 } from './cloud-repo.js';
 
 
@@ -24,7 +25,9 @@ export interface CloudDeps {
   installGh: () => Promise<void>;
   createRepo: (fullName: string) => Promise<void>;
   claudeInstalled: () => boolean;
-  launch: (userId: string, botId: string, generation: number, goal: string, repo: CloudRepo, hooks: CloudLaunchHooks) => string;
+  launch: (userId: string, botId: string, generation: number, goal: string, repo: CloudRepo, hooks: CloudLaunchHooks, sessionId?: string) => string;
+  /** Public repositories looked up without the GitHub CLI (owner/repo or a URL). */
+  publicRepo: PublicRepoLookup;
 }
 const defaults: CloudDeps = {
   gh: runGh,
@@ -36,6 +39,7 @@ const defaults: CloudDeps = {
   createRepo: async fullName => { await createGitHubRepo({ name: fullName, visibility: 'private', description: 'Created by Marion Agent for Claude Cloud work' }); },
   claudeInstalled: () => !!executable('claude'),
   launch: startCloudSession,
+  publicRepo: fetchPublicRepo,
 };
 let deps: CloudDeps = { ...defaults };
 /** Tests swap the GitHub CLI and Cloud launcher for fakes. */
@@ -83,15 +87,23 @@ function alert(userId: string, botId: string, body: string) {
 }
 
 function showCard(userId: string, botId: string, generation: number, goal: string, title: string | undefined, query: string,
-  resolution: Extract<CloudResolution, { ok: false }>) {
+  resolution: Extract<CloudResolution, { ok: false }>, sessionId?: string) {
   const card: CloudCardBody = {
     type: 'card', card: 'cloud', id: randomUUID(), mode: 'setup', goal, title, query, generation,
     blocker: resolution.blocker, problem: resolution.problem, solution: resolution.solution, options: resolution.options, status: 'pending',
+    ...(sessionId ? { sessionId } : {}),
   };
   const row = appendRow(botId, 'card', card);
   alert(userId, botId, resolution.problem);
   return row.seq as number;
 }
+
+/** What a waiting Cloud request shows as its repository: the exact one when named, else a GitHub search for the name. */
+const requestedRepo = (query: string) => {
+  const exact = exactRepo(query);
+  return exact ? { path: `https://github.com/${exact}`, label: exact }
+    : { path: `https://github.com/search?type=repositories&q=${encodeURIComponent(query)}`, label: query };
+};
 
 export type CloudLaunchResult =
   | { started: true; repo: CloudRepo; sessionId: string }
@@ -104,19 +116,25 @@ export type CloudLaunchResult =
 export async function launchCloudWork(input: { userId: string; botId: string; generation: number; goal: string; title?: string; query?: string | null }): Promise<CloudLaunchResult> {
   const { userId, botId, generation, goal, title } = input;
   const query = (input.query ?? '').trim();
+  // One Sessions record from the moment Cloud work is asked for: Waiting while a card holds it, then Running in the Cloud.
+  const sessionId = randomUUID();
+  const waiting = (problem: string) => recordCloudRequest({ id: sessionId, kind: 'cloud', userId, botId, request: goal, title,
+    folder: query ? requestedRepo(query) : undefined }, `Waiting for you: ${problem}`);
   if (!deps.claudeInstalled()) {
     const resolution = { ok: false as const, blocker: 'claude-missing' as const, problem: 'Claude Code is not installed on this Mac, so Marion cannot start a Claude Cloud session.',
       solution: 'Install Claude Code and sign in with your Claude account, then check again here.',
       options: [{ id: 'open-claude', kind: 'open' as const, label: 'Get Claude Code', url: 'https://claude.com/claude-code' }, { id: 'retry', kind: 'retry' as const, label: 'Check again' }, { id: 'cancel', kind: 'cancel' as const, label: 'Cancel' }] };
-    const seq = showCard(userId, botId, generation, goal, title, query, resolution);
+    waiting(resolution.problem);
+    const seq = showCard(userId, botId, generation, goal, title, query, resolution, sessionId);
     return { started: false, seq, blocker: resolution.blocker, problem: resolution.problem, solution: resolution.solution, options: resolution.options };
   }
-  const resolution = await resolveCloudRepo(query, deps.gh);
+  const resolution = await resolveCloudRepo(query, deps.gh, deps.publicRepo);
   if (resolution.ok) {
-    const sessionId = deps.launch(userId, botId, generation, goal, resolution.repo, hooksFor(userId, botId, generation, goal, title, resolution.repo));
-    return { started: true, repo: resolution.repo, sessionId };
+    const started = deps.launch(userId, botId, generation, goal, resolution.repo, hooksFor(userId, botId, generation, goal, title, resolution.repo), sessionId);
+    return { started: true, repo: resolution.repo, sessionId: started };
   }
-  const seq = showCard(userId, botId, generation, goal, title, query, resolution);
+  waiting(resolution.problem);
+  const seq = showCard(userId, botId, generation, goal, title, query, resolution, sessionId);
   return { started: false, seq, blocker: resolution.blocker, problem: resolution.problem, solution: resolution.solution, options: resolution.options };
 }
 
@@ -149,10 +167,15 @@ export function actOnCloudCard(userId: string, botId: string, seq: number, optio
   }
   if (option.kind === 'cancel') {
     save({ status: 'cancelled', note: 'Cancelled. Nothing ran on this Mac.' });
+    if (body.sessionId) settleCloudRequest(userId, body.sessionId, 'Cancelled before it started.');
     return { done: Promise.resolve() };
   }
   if (LOCAL_ONLY.has(option.kind) && !opts.local) throw new Error('Approve this in Marion Agent on the Mac: it runs the GitHub CLI there.');
-  if (!current(botId, body.generation)) { save({ status: 'cancelled', note: 'The conversation changed.' }); throw new Error('The conversation changed. Ask again.'); }
+  if (!current(botId, body.generation)) {
+    save({ status: 'cancelled', note: 'The conversation changed.' });
+    if (body.sessionId) settleCloudRequest(userId, body.sessionId, 'The conversation changed before it started.');
+    throw new Error('The conversation changed. Ask again.');
+  }
   save({ status: 'working', note: workingNote(option), device: undefined });
 
   const proceed = async (query: string) => {
@@ -201,8 +224,8 @@ function workingNote(option: CloudOption) {
 async function launchFollowUp(userId: string, botId: string, body: CloudCardBody, query: string): Promise<CloudLaunchResult> {
   if (!deps.claudeInstalled()) return { started: false, seq: -1, blocker: 'claude-missing', problem: 'Claude Code is still not installed on this Mac.',
     solution: 'Install Claude Code, sign in, then check again.', options: body.options };
-  const resolution = await resolveCloudRepo(query, deps.gh);
+  const resolution = await resolveCloudRepo(query, deps.gh, deps.publicRepo);
   if (!resolution.ok) return { started: false, seq: -1, blocker: resolution.blocker, problem: resolution.problem, solution: resolution.solution, options: resolution.options };
-  const sessionId = deps.launch(userId, botId, body.generation, body.goal, resolution.repo, hooksFor(userId, botId, body.generation, body.goal, body.title, resolution.repo));
+  const sessionId = deps.launch(userId, botId, body.generation, body.goal, resolution.repo, hooksFor(userId, botId, body.generation, body.goal, body.title, resolution.repo), body.sessionId);
   return { started: true, repo: resolution.repo, sessionId };
 }

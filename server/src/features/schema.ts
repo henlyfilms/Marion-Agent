@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS life_outbox (
 );
 CREATE INDEX IF NOT EXISTS life_outbox_pending ON life_outbox(user_id, sent_at, next_attempt_at);
 -- Every run Marion relayed to Claude, Codex or Gemini (ask_subscription, subscription-backed bots, orchestrate, team):
--- running, finished, failed or stopped, kept locally so Marion Agent can show them (Sessions view, a bot's Sessions panel).
+-- running, finished, failed or stopped, kept locally so Marion Agent can show them (the Sessions view).
 CREATE TABLE IF NOT EXISTS agent_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

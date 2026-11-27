@@ -233,18 +233,24 @@
 .local-voice { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 auto 8px; padding: 12px; max-width: min(90%, 750px); border: 1px solid var(--color-border); border-radius: 12px; }
 
 .chat { min-width: 0; background: var(--color-bg-pane); --composer-h: 112px; }
-/* No title bar: the conversation runs to the top edge and the bot floats over it as a small glass pill. */
+/* No title bar: the conversation runs to the top edge and the bot floats over it as a glass nametag, centred.
+   Two flexible spacers (::before, ::after) share the free space equally, so the nametag sits in the middle of the chat;
+   the right one never gets narrower than the round Search / Share / panel buttons, so when room runs out the nametag
+   slides left instead of running under them. It shows the bot's full name and only shortens it as a last resort. */
 .chat__header {
   position: absolute; z-index: 7; left: 0; right: 0; top: 0; height: 56px; min-height: 0;
-  display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 calc(22px + var(--conversation-actions-width));
+  display: flex; align-items: center; justify-content: center; gap: 0; padding: 0 14px;
   background: none; border: 0; pointer-events: none;
 }
+.chat__header::before, .chat__header::after { content: ''; flex: 1 1 0; min-width: 0; }
+.chat__header::after { min-width: calc(var(--conversation-actions-width) + 8px); }
 .chat__header > * { pointer-events: auto; }
-.chat__header-main { flex: 0 1 auto; min-width: 0; display: flex; justify-content: center; }
+.chat__header-main { flex: 0 1 auto; min-width: 0; max-width: 100%; display: flex; justify-content: center; }
 .chat__header .sidebar-back { display: none; }
-.chat__pill-anchor { max-width: 100%; }
+.chat__pill-anchor { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .chat__pill {
-  min-height: 36px; padding: 4px 14px 4px 5px; gap: 8px; border-radius: var(--radius-full);
+  min-width: 0; max-width: 100%;
+  min-height: 36px; padding: 4px 18px 4px 5px; gap: 9px; border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--color-bg-elevated) 72%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(1.5); backdrop-filter: blur(18px) saturate(1.5);
   border: 0.5px solid color-mix(in srgb, var(--palette-foreground) 12%, transparent);
@@ -253,7 +259,7 @@
 }
 .chat__pill:is(:hover, [aria-expanded="true"]) { background: color-mix(in srgb, var(--color-bg-elevated-hover) 82%, transparent); }
 .chat__pill > .bot-avatar { flex-shrink: 0; }
-.chat__pill-name { font-size: 14px; font-weight: 600; }
+.chat__pill-name { font-size: 14px; font-weight: 600; min-width: 0; max-width: none; overflow: hidden; text-overflow: ellipsis; }
 .chat .transcript { padding-top: 64px; padding-bottom: calc(var(--composer-h) + 12px); }
 .chat .jump-btn { bottom: calc(var(--composer-h) + 10px); }
 /* The composer floats: messages scroll behind it, and only the pills and the box itself are drawn. */
@@ -336,10 +342,12 @@
 }
 
 @media (max-width: 700px) {
+  /* Phones: back button on the left, the nametag centred in the room between it and the round buttons. */
   .chat__header { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 3px 5px; }
+  .chat__header::before, .chat__header::after { display: none; }
   .chat__header-main { display: contents; }
   .chat__header .sidebar-back { grid-column: 1; grid-row: 1; }
-  .chat__header .chat__pill-anchor { grid-column: 2; grid-row: 1; justify-self: start; align-self: center; }
+  .chat__header .chat__pill-anchor { grid-column: 2; grid-row: 1; justify-self: center; align-self: center; }
   .chat-model__trigger, .chat__header button { -webkit-tap-highlight-color: transparent; }
 }
 
